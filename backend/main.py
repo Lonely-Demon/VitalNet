@@ -24,14 +24,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="VitalNet API", version="0.1.0", lifespan=lifespan)
 
-# CORS — configure before anything else
+# CORS — configure to allow all origins for sprint demo deployment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        os.getenv("FRONTEND_URL", "https://placeholder.vercel.app"),
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -11,8 +11,12 @@ export default function Dashboard() {
     try {
       const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
       const res = await axios.get(`${API_BASE}/api/cases`)
-      setCases(res.data)
-      setError(null)
+      if (Array.isArray(res.data)) {
+        setCases(res.data)
+        setError(null)
+      } else {
+        throw new Error("Invalid response from server. (Check API URL or CORS)")
+      }
     } catch (e) {
       setError("Failed to load cases. Check backend connection.")
     } finally {
