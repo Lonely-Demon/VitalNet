@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+_api_key = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=_api_key) if _api_key else None
 
 # LLM model priority chain — ordered by preference
 # Primary: 70B for best clinical reasoning (1K requests/day free tier limit)
@@ -63,8 +64,12 @@ def generate_briefing(form_data: dict, triage_result: dict) -> dict:
     """
     Call Groq LLM and return parsed briefing JSON.
     Iterates through MODELS list in order — moves to next model on rate limit or connection error.
-    On all models exhausted: returns safe fallback briefing. Never raises. Never crashes the endpoint.
+    On all models exhausted (or if API key is missing): returns safe fallback briefing. Never raises.
     """
+    if not client:
+        print("⚠ GROQ_API_KEY not configured — returning fallback briefing.")
+        return _fallback_briefing(triage_result)
+
     system_prompt = _load_system_prompt()
     patient_context = _build_patient_context(form_data, triage_result)
 
