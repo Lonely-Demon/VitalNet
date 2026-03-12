@@ -6,12 +6,15 @@ ALGORITHM = 'HS256'
 AUDIENCE = 'authenticated'
 
 from database import supabase_anon
+import base64
+import json
+
 
 async def get_current_user(authorization: str = Header(None)) -> dict:
     """
     Extracts and validates the Supabase JWT from the
     Authorization: Bearer <token> header.
-    Returns a dict mimicking the JWT payload (sub, user_metadata).
+    Returns the full JWT payload dictionary.
     Raises HTTP 401 on any failure.
     Uses Supabase's get_user() to support ES256 signatures and instant revocation.
     """
@@ -25,14 +28,15 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
     token = authorization.split(' ', 1)[1]
 
     try:
-        user_response = supabase_anon.auth.get_user(token)
-        user = user_response.user
+        # 1. Validate the token cryptographically and check revocation
+        supabase_anon.auth.get_user(token)
         
-        return {
-            'sub': str(user.id),
-            'user_metadata': user.user_metadata,
-            'role': user.role,
-        }
+        # 2. Extract the payload manually (since get_user() omits custom JWT claims)
+        payload_b64 = token.split('.')[1]
+        payload_b64 += '=' * (-len(payload_b64) % 4)
+        payload_json = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
+        
+        return json.loads(payload_json)
 
     except Exception as e:
         raise HTTPException(
