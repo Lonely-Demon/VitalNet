@@ -1,54 +1,66 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-import json as json_lib
 import os
+import uuid as uuid_lib
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-from database import init_db, get_db, CaseRecord
+from database import supabase, get_supabase_for_user
 from classifier import load_classifier, run_triage
 from llm import generate_briefing
-from schemas import IntakeForm, SubmitResponse, ReviewUpdate
+from auth import get_current_user, require_role
+from schemas import IntakeForm
 
 load_dotenv()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
     load_classifier()
     print("[OK] VitalNet API started")
     yield
 
 
-app = FastAPI(title="VitalNet API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="VitalNet API", version="0.2.0", lifespan=lifespan)
 
-# CORS — configure to allow all origins for sprint demo deployment
+# CORS — restricted to known origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        'http://localhost:5173',
+        os.getenv('FRONTEND_URL', ''),
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=['*'],
+    allow_headers=['*'],
 )
 
 
 # ── Health Check ───────────────────────────────────────────────────────────
 
-@app.get("/api/health")
-def health_check():
+@app.get('/api/health')
+async def health():
+    try:
+        supabase.table('facilities').select('id').limit(1).execute()
+        db_status = 'connected'
+    except Exception as e:
+        db_status = f'error: {str(e)}'
     return {
-        "status": "ok",
-        "classifier": "loaded",
-        "db": "connected"
+        'status': 'ok',
+        'database': db_status,
+        'classifier': 'loaded',
     }
 
 
 # ── Submit Case ────────────────────────────────────────────────────────────
 
-@app.post("/api/submit", response_model=SubmitResponse)
-async def submit_case(form: IntakeForm, db: Session = Depends(get_db)):
+@app.post('/api/submit')
+async def submit_case(
+    form: IntakeForm,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role('asha_worker', 'admin')),
+):
     form_data = form.model_dump()
 
     # Step 1: Classifier + SHAP (always runs — LLM-independent)
@@ -57,96 +69,77 @@ async def submit_case(form: IntakeForm, db: Session = Depends(get_db)):
     # Step 2: LLM briefing (may fail gracefully)
     briefing = generate_briefing(form_data, triage_result)
 
-    # Step 3: Write to SQLite (always runs, even if LLM failed)
-    record = CaseRecord(
-        asha_id=form.asha_id,
-        location=form.location,
-        patient_age=form.patient_age,
-        patient_sex=form.patient_sex,
-        chief_complaint=form.chief_complaint,
-        complaint_duration=form.complaint_duration,
-        bp_systolic=form.bp_systolic,
-        bp_diastolic=form.bp_diastolic,
-        spo2=form.spo2,
-        heart_rate=form.heart_rate,
-        temperature=form.temperature,
-        symptoms_json=json_lib.dumps(form.symptoms),
-        observations=form.observations,
-        known_conditions=form.known_conditions,
-        current_medications=form.current_medications,
-        triage_level=triage_result["triage_level"],
-        confidence_score=triage_result["confidence_score"],
-        risk_driver=triage_result["risk_driver"],
-        briefing_json=json_lib.dumps(briefing),
-    )
+    # Step 3: Write to Supabase via user-scoped client (RLS enforced)
+    raw_token = authorization.split(' ', 1)[1]
+    db = get_supabase_for_user(raw_token)
 
-    db.add(record)
-    db.commit()
-    db.refresh(record)
+    record = {
+        'client_id':           str(form.client_id or uuid_lib.uuid4()),
+        'submitted_by':        user['sub'],
+        'facility_id':         user.get('user_metadata', {}).get('facility_id') or None,
+        'patient_age':         form.patient_age,
+        'patient_sex':         form.patient_sex,
+        'patient_location':    form.location,
+        'bp_systolic':         form.bp_systolic,
+        'bp_diastolic':        form.bp_diastolic,
+        'spo2':                form.spo2,
+        'heart_rate':          form.heart_rate,
+        'temperature':         float(form.temperature) if form.temperature is not None else None,
+        'chief_complaint':     form.chief_complaint,
+        'complaint_duration':  form.complaint_duration,
+        'symptoms':            form.symptoms or [],
+        'observations':        form.observations,
+        'known_conditions':    form.known_conditions,
+        'current_medications': form.current_medications,
+        'triage_level':        triage_result['triage_level'],
+        'triage_confidence':   triage_result['confidence_score'],
+        'risk_driver':         triage_result['risk_driver'],
+        'briefing':            briefing,
+        'llm_model_used':      briefing.get('_model_used', 'unknown'),
+        'created_offline':     False,
+        'client_submitted_at': form.client_submitted_at.isoformat() if form.client_submitted_at else None,
+    }
 
-    return SubmitResponse(
-        case_id=record.id,
-        triage_level=triage_result["triage_level"],
-        confidence_score=triage_result["confidence_score"],
-        risk_driver=triage_result["risk_driver"],
-        briefing=briefing,
-        status="success",
-    )
+    result = db.table('case_records').insert(record).execute()
+    return result.data[0]
 
 
 # ── Get Cases ──────────────────────────────────────────────────────────────
 
-@app.get("/api/cases")
-def get_cases(db: Session = Depends(get_db)):
-    # Sort: EMERGENCY first, then URGENT, then ROUTINE, then by time
-    triage_order = {"EMERGENCY": 0, "URGENT": 1, "ROUTINE": 2}
-    records = db.query(CaseRecord).all()
-    records.sort(key=lambda r: (
-        triage_order.get(r.triage_level, 9),
-        r.created_at
-    ), reverse=False)
+@app.get('/api/cases')
+async def get_cases(
+    authorization: str = Header(None),
+    user: dict = Depends(require_role('doctor', 'admin')),
+):
+    raw_token = authorization.split(' ', 1)[1]
+    db = get_supabase_for_user(raw_token)
 
-    result = []
-    for r in records:
-        briefing = None
-        if r.briefing_json:
-            try:
-                briefing = json_lib.loads(r.briefing_json)
-            except Exception:
-                briefing = None
-
-        result.append({
-            "case_id": r.id,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-            "asha_id": r.asha_id,
-            "location": r.location,
-            "patient_age": r.patient_age,
-            "patient_sex": r.patient_sex,
-            "chief_complaint": r.chief_complaint,
-            "complaint_duration": r.complaint_duration,
-            "triage_level": r.triage_level,
-            "risk_driver": r.risk_driver,
-            "briefing": briefing,
-            "reviewed": r.reviewed,
-        })
-
-    return result
+    result = (
+        db.table('case_records')
+        .select('*')
+        .is_('deleted_at', 'null')
+        .order('created_at', desc=True)
+        .execute()
+    )
+    cases = result.data
+    order = {'EMERGENCY': 0, 'URGENT': 1, 'ROUTINE': 2}
+    cases.sort(key=lambda c: order.get(c.get('triage_level', 'ROUTINE'), 2))
+    return cases
 
 
 # ── Review Case ────────────────────────────────────────────────────────────
 
-@app.patch("/api/cases/{case_id}/review")
-def review_case(
-    case_id: int,
-    update: ReviewUpdate,
-    db: Session = Depends(get_db)
+@app.patch('/api/cases/{case_id}/review')
+async def review_case(
+    case_id: str,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role('doctor', 'admin')),
 ):
-    record = db.query(CaseRecord).filter(CaseRecord.id == case_id).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="Case not found")
+    raw_token = authorization.split(' ', 1)[1]
+    db = get_supabase_for_user(raw_token)
 
-    record.reviewed = update.reviewed
-    record.review_notes = update.review_notes
-    db.commit()
-
-    return {"status": "updated"}
+    db.table('case_records').update({
+        'reviewed_by': user['sub'],
+        'reviewed_at': datetime.now(timezone.utc).isoformat(),
+    }).eq('id', case_id).execute()
+    return {'status': 'reviewed'}

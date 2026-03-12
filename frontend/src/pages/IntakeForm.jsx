@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import axios from 'axios'
+import { submitCase } from '../lib/api'
 
 const COMPLAINTS = [
   "Chest pain / tightness",
@@ -48,7 +48,6 @@ const BADGE_COLORS = {
 }
 
 const emptyForm = {
-  asha_id: "",
   patient_age: "",
   patient_sex: "",
   chief_complaint: "",
@@ -88,7 +87,7 @@ export default function IntakeForm() {
     setError(null)
 
     // Required field validation
-    if (!form.asha_id || !form.patient_age || !form.patient_sex ||
+    if (!form.patient_age || !form.patient_sex ||
         !form.chief_complaint || !form.complaint_duration || !form.location) {
       setError("Please fill all required fields (marked with *)")
       return
@@ -107,12 +106,11 @@ export default function IntakeForm() {
     }
 
     try {
-      const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
-      const res = await axios.post(`${API_BASE}/api/submit`, payload)
-      setResult(res.data)
+      const data = await submitCase(payload)
+      setResult(data)
       setForm(emptyForm)
     } catch (err) {
-      setError(err.response?.data?.detail || "Submission failed. Check connection.")
+      setError(err.message || "Submission failed. Check connection.")
     } finally {
       setLoading(false)
     }
@@ -127,7 +125,7 @@ export default function IntakeForm() {
               {result.triage_level}
             </span>
           </div>
-          <h2 className="text-slate-900 text-xl font-bold tracking-tight mb-2">Case #{result.case_id} Successfully Logged</h2>
+          <h2 className="text-slate-900 text-xl font-bold tracking-tight mb-2">Case Successfully Logged</h2>
           <p className="text-slate-600 leading-relaxed mb-8">{result.risk_driver}</p>
           <button
             onClick={() => setResult(null)}
@@ -150,12 +148,8 @@ export default function IntakeForm() {
         </div>
       )}
 
-      {/* ASHA Identity */}
-      <Section title="ASHA Details">
-        <Field label="ASHA ID *">
-          <input name="asha_id" value={form.asha_id} onChange={handleChange}
-            placeholder="e.g. ASHA-001" className={inputClass} />
-        </Field>
+      {/* Patient Location */}
+      <Section title="Location">
         <Field label="Location / Village *">
           <input name="location" value={form.location} onChange={handleChange}
             placeholder="e.g. Rampur Village" className={inputClass} />

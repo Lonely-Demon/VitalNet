@@ -1,10 +1,10 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
+import uuid
 
 
 class IntakeForm(BaseModel):
-    asha_id: str
     patient_age: int = Field(ge=0, le=120)
     patient_sex: str
     chief_complaint: str
@@ -22,6 +22,10 @@ class IntakeForm(BaseModel):
     known_conditions: Optional[str] = None
     current_medications: Optional[str] = None
 
+    # Phase 6 — offline sync metadata
+    client_id: Optional[uuid.UUID] = None
+    client_submitted_at: Optional[datetime] = None
+
 
 class BriefingOutput(BaseModel):
     triage_level: str
@@ -32,17 +36,3 @@ class BriefingOutput(BaseModel):
     recommended_tests: List[str]
     uncertainty_flags: str
     disclaimer: str
-
-
-class SubmitResponse(BaseModel):
-    case_id: int
-    triage_level: str
-    confidence_score: float
-    risk_driver: str
-    briefing: Optional[dict] = None
-    status: str
-
-
-class ReviewUpdate(BaseModel):
-    reviewed: bool
-    review_notes: Optional[str] = None

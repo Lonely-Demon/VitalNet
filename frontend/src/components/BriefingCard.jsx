@@ -1,20 +1,21 @@
 import { useState } from 'react'
-import axios from 'axios'
+import { reviewCase } from '../lib/api'
 import TriageBadge from './TriageBadge'
 
 export default function BriefingCard({ caseData, onReviewed }) {
   const [expanded, setExpanded] = useState(caseData.triage_level === 'EMERGENCY')
   const [marking, setMarking] = useState(false)
-  const [reviewed, setReviewed] = useState(caseData.reviewed)
+  const [reviewed, setReviewed] = useState(caseData.reviewed_at !== null)
 
+  // briefing is already a JSONB object from Supabase — no JSON.parse needed
   const b = caseData.briefing
 
   const handleMarkReviewed = async () => {
     setMarking(true)
     try {
-      await axios.patch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/cases/${caseData.case_id}/review`, { reviewed: true })
+      await reviewCase(caseData.id)
       setReviewed(true)
-      if (onReviewed) onReviewed(caseData.case_id)
+      if (onReviewed) onReviewed(caseData.id)
     } catch (e) {
       console.error("Review update failed", e)
     } finally {
@@ -49,11 +50,11 @@ export default function BriefingCard({ caseData, onReviewed }) {
           <p className="text-sm font-medium text-gray-800">
             {caseData.patient_age}
             {caseData.patient_sex === 'male' ? 'M' : caseData.patient_sex === 'female' ? 'F' : ''}
-            {" · "}{caseData.location}
+            {" · "}{caseData.patient_location}
           </p>
           <p className="text-sm text-gray-600">{caseData.chief_complaint}</p>
           <p className="text-xs text-gray-400 mt-1">
-            {timeStr} · ASHA {caseData.asha_id}
+            {timeStr}
           </p>
         </div>
         <span className="text-gray-400 ml-2">{expanded ? "▲" : "▼"}</span>

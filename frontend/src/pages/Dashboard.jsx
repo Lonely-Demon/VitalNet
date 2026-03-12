@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import axios from 'axios'
+import { getCases } from '../lib/api'
 import BriefingCard from '../components/BriefingCard'
 
 export default function Dashboard() {
@@ -9,16 +9,15 @@ export default function Dashboard() {
 
   const fetchCases = async () => {
     try {
-      const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
-      const res = await axios.get(`${API_BASE}/api/cases`)
-      if (Array.isArray(res.data)) {
-        setCases(res.data)
+      const data = await getCases()
+      if (Array.isArray(data)) {
+        setCases(data)
         setError(null)
       } else {
         throw new Error("Invalid response from server. (Check API URL or CORS)")
       }
     } catch (e) {
-      setError("Failed to load cases. Check backend connection.")
+      setError(e.message || "Failed to load cases. Check backend connection.")
     } finally {
       setLoading(false)
     }
@@ -73,7 +72,7 @@ export default function Dashboard() {
             Emergency <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded-full">{emergency.length}</span>
           </h2>
           {emergency.map(c => (
-            <BriefingCard key={c.case_id} caseData={c} onReviewed={fetchCases} />
+            <BriefingCard key={c.id} caseData={c} onReviewed={fetchCases} />
           ))}
         </div>
       )}
@@ -84,7 +83,7 @@ export default function Dashboard() {
             Urgent <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">{urgent.length}</span>
           </h2>
           {urgent.map(c => (
-            <BriefingCard key={c.case_id} caseData={c} onReviewed={fetchCases} />
+            <BriefingCard key={c.id} caseData={c} onReviewed={fetchCases} />
           ))}
         </div>
       )}
@@ -95,7 +94,7 @@ export default function Dashboard() {
             Routine <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{routine.length}</span>
           </h2>
           {routine.map(c => (
-            <BriefingCard key={c.case_id} caseData={c} onReviewed={fetchCases} />
+            <BriefingCard key={c.id} caseData={c} onReviewed={fetchCases} />
           ))}
         </div>
       )}
