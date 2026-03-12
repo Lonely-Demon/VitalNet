@@ -52,13 +52,16 @@ def require_role(*roles: str):
     Usage: Depends(require_role('doctor', 'admin'))
     """
     async def role_guard(user: dict = Depends(get_current_user)) -> dict:
+        # Check both user_metadata (custom data) and app_metadata (auth provider data)
         user_role = (
-            user.get('user_metadata', {}).get('role', '')
+            user.get('user_metadata', {}).get('role') or
+            user.get('app_metadata', {}).get('role') or
+            ''
         )
         if user_role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f'Role {user_role!r} is not permitted for this endpoint.',
+                detail=f"Role '{user_role}' is not permitted for this endpoint.",
             )
         return user
     return role_guard

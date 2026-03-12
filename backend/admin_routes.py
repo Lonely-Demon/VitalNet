@@ -59,8 +59,7 @@ async def list_users(
     profiles_by_id = {p['id']: p for p in profiles_result.data}
 
     # Fetch auth users for email + last_sign_in — per_page=1000 avoids pagination gap
-    auth_response = supabase_admin.auth.admin.list_users(page=1, per_page=1000)
-    auth_users = auth_response.users  # iterate .users not the response object
+    auth_users = supabase_admin.auth.admin.list_users(page=1, per_page=1000)
 
     result = []
     for au in auth_users:
