@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from auth import require_role
-from database import supabase_admin, get_supabase_for_user
+from database import supabase_admin
 
 router = APIRouter(prefix='/api/admin', tags=['admin'])
 
@@ -47,11 +47,8 @@ async def list_users(
     Uses admin client for auth.admin.list_users(), then enriches
     with profiles data for role/facility info.
     """
-    raw_token = authorization.split(' ', 1)[1]
-    db = get_supabase_for_user(raw_token)
-
     # Fetch all profiles (admin SELECT policy covers this)
-    profiles_result = db.table('profiles').select(
+    profiles_result = supabase_admin.table('profiles').select(
         'id, full_name, role, facility_id, asha_id, is_active, created_at, '
         'facilities(name, district)'
     ).execute()
@@ -105,9 +102,7 @@ async def create_user(
     new_user_id = str(response.user.id)
 
     # Patch the profile row created by the DB trigger with extra fields
-    raw_token = authorization.split(' ', 1)[1]
-    db = get_supabase_for_user(raw_token)
-    db.table('profiles').update({
+    supabase_admin.table('profiles').update({
         'facility_id': body.facility_id,
         'asha_id':     body.asha_id,
     }).eq('id', new_user_id).execute()
@@ -127,9 +122,6 @@ async def update_user(
     Also updates user_metadata in auth so the JWT hook re-embeds
     the new role on next login.
     """
-    raw_token = authorization.split(' ', 1)[1]
-    db = get_supabase_for_user(raw_token)
-
     profile_update = {}
     meta_update = {}
 
@@ -145,7 +137,7 @@ async def update_user(
         profile_update['is_active'] = body.is_active
 
     if profile_update:
-        db.table('profiles').update(profile_update).eq('id', user_id).execute()
+        supabase_admin.table('profiles').update(profile_update).eq('id', user_id).execute()
 
     if meta_update:
         supabase_admin.auth.admin.update_user_by_id(
@@ -166,9 +158,7 @@ async def deactivate_user(
     Does NOT delete the auth user or their case records.
     Hard deletion is intentionally not exposed via API.
     """
-    raw_token = authorization.split(' ', 1)[1]
-    db = get_supabase_for_user(raw_token)
-    db.table('profiles').update({'is_active': False}).eq('id', user_id).execute()
+    supabase_admin.table('profiles').update({'is_active': False}).eq('id', user_id).execute()
     return {'status': 'deactivated'}
 
 
@@ -178,9 +168,7 @@ async def reactivate_user(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    raw_token = authorization.split(' ', 1)[1]
-    db = get_supabase_for_user(raw_token)
-    db.table('profiles').update({'is_active': True}).eq('id', user_id).execute()
+    supabase_admin.table('profiles').update({'is_active': True}).eq('id', user_id).execute()
     return {'status': 'reactivated'}
 
 
@@ -191,9 +179,7 @@ async def list_facilities(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    raw_token = authorization.split(' ', 1)[1]
-    db = get_supabase_for_user(raw_token)
-    result = db.table('facilities').select('*').order('name').execute()
+    result = supabase_admin.table('facilities').select('*').order('name').execute()
     return result.data
 
 
@@ -203,9 +189,7 @@ async def create_facility(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    raw_token = authorization.split(' ', 1)[1]
-    db = get_supabase_for_user(raw_token)
-    result = db.table('facilities').insert(body.model_dump()).execute()
+    result = supabase_admin.table('facilities').insert(body.model_dump()).execute()
     return result.data[0]
 
 
@@ -215,11 +199,9 @@ async def toggle_facility(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    raw_token = authorization.split(' ', 1)[1]
-    db = get_supabase_for_user(raw_token)
-    current = db.table('facilities').select('is_active').eq('id', facility_id).single().execute()
+    current = supabase_admin.table('facilities').select('is_active').eq('id', facility_id).single().execute()
     new_state = not current.data['is_active']
-    db.table('facilities').update({'is_active': new_state}).eq('id', facility_id).execute()
+    supabase_admin.table('facilities').update({'is_active': new_state}).eq('id', facility_id).execute()
     return {'is_active': new_state}
 
 
@@ -230,11 +212,8 @@ async def get_stats(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    raw_token = authorization.split(' ', 1)[1]
-    db = get_supabase_for_user(raw_token)
-
-    cases = db.table('case_records').select('triage_level').is_('deleted_at', 'null').execute()
-    profiles = db.table('profiles').select('role, is_active').execute()
+    cases = supabase_admin.table('case_records').select('triage_level').is_('deleted_at', 'null').execute()
+    profiles = supabase_admin.table('profiles').select('role, is_active').execute()
 
     triage_counts = {'EMERGENCY': 0, 'URGENT': 0, 'ROUTINE': 0}
     for c in cases.data:
