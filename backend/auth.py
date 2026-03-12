@@ -5,14 +5,15 @@ from config import settings
 ALGORITHM = 'HS256'
 AUDIENCE = 'authenticated'
 
+from database import supabase_anon
 
 async def get_current_user(authorization: str = Header(None)) -> dict:
     """
-    Extracts and locally validates the Supabase JWT from the
+    Extracts and validates the Supabase JWT from the
     Authorization: Bearer <token> header.
-    Returns the decoded payload (user_id, role, facility_id, expiry).
+    Returns a dict mimicking the JWT payload (sub, user_metadata).
     Raises HTTP 401 on any failure.
-    No network call to Supabase is made. Offline-compatible.
+    Uses Supabase's get_user() to support ES256 signatures and instant revocation.
     """
     if not authorization or not authorization.startswith('Bearer '):
         raise HTTPException(
@@ -24,15 +25,16 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
     token = authorization.split(' ', 1)[1]
 
     try:
-        payload = jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=[ALGORITHM],
-            audience=AUDIENCE,
-        )
-        return payload
+        user_response = supabase_anon.auth.get_user(token)
+        user = user_response.user
+        
+        return {
+            'sub': str(user.id),
+            'user_metadata': user.user_metadata,
+            'role': user.role,
+        }
 
-    except JWTError as e:
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f'Invalid or expired token: {str(e)}',
