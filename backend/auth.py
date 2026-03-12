@@ -26,8 +26,9 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
     try:
         payload = jwt.decode(
             token,
-            key="",  # No key needed when skipping signature verification locally
-            options={"verify_signature": False, "verify_aud": False},
+            settings.supabase_jwt_secret,
+            algorithms=[ALGORITHM],
+            audience=AUDIENCE,
         )
         return payload
 

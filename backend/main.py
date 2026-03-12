@@ -6,7 +6,8 @@ import uuid as uuid_lib
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-from database import supabase, get_supabase_for_user
+from database import supabase_anon, get_supabase_for_user
+from admin_routes import router as admin_router
 from classifier import load_classifier, run_triage
 from llm import generate_briefing
 from auth import get_current_user, require_role
@@ -23,6 +24,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="VitalNet API", version="0.2.0", lifespan=lifespan)
+app.include_router(admin_router)
 
 # CORS — restricted to known origins
 app.add_middleware(
@@ -43,7 +45,7 @@ app.add_middleware(
 @app.get('/api/health')
 async def health():
     try:
-        supabase.table('facilities').select('id').limit(1).execute()
+        supabase_anon.table('facilities').select('id').limit(1).execute()
         db_status = 'connected'
     except Exception as e:
         db_status = f'error: {str(e)}'
@@ -144,3 +146,28 @@ async def review_case(
         'reviewed_at': datetime.now(timezone.utc).isoformat(),
     }).eq('id', case_id).execute()
     return {'status': 'reviewed'}
+
+
+# ── ASHA: My Submissions ───────────────────────────────────────────────────
+
+@app.get('/api/cases/mine')
+async def get_my_cases(
+    authorization: str = Header(None),
+    user: dict = Depends(require_role('asha_worker', 'admin')),
+):
+    """
+    Returns only the calling user's own submitted cases.
+    RLS enforces this at DB level; the explicit filter is for clarity.
+    Returns a limited column set — full briefing JSONB is doctor-facing only.
+    """
+    raw_token = authorization.split(' ', 1)[1]
+    db = get_supabase_for_user(raw_token)
+    result = (
+        db.table('case_records')
+        .select('id, chief_complaint, triage_level, created_at, reviewed_at, patient_age, patient_sex')
+        .eq('submitted_by', user['sub'])
+        .is_('deleted_at', 'null')
+        .order('created_at', desc=True)
+        .execute()
+    )
+    return result.data

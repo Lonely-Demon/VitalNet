@@ -1,41 +1,34 @@
 import { AuthProvider, useAuth } from './store/authStore'
 import { RouteGuard } from './components/RouteGuard'
-import IntakeForm from './pages/IntakeForm'
-import Dashboard from './pages/Dashboard'
+import ASHAPanel   from './panels/ASHAPanel'
+import DoctorPanel from './panels/DoctorPanel'
+import AdminPanel  from './panels/AdminPanel'
 
 function AppInner() {
-  const { role, signOut, profile } = useAuth()
+  const { profile, signOut } = useAuth()
 
-  // Role-based view selection
-  const content = (() => {
-    if (role === 'doctor' || role === 'admin') return <Dashboard />
-    if (role === 'asha_worker') return <IntakeForm />
-    return null // RouteGuard handles unauthenticated state
-  })()
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Navigation */}
-      <nav className="bg-blue-700 text-white px-4 py-3 flex items-center justify-between">
-        <div className="flex gap-3 items-center">
-          <span className="font-bold text-lg tracking-tight">VitalNet</span>
-          {role && (
-            <span className="text-xs text-blue-200 bg-blue-800/40 px-2.5 py-1 rounded-full capitalize">
-              {profile?.full_name || role.replace('_', ' ')}
-            </span>
-          )}
+  // Deactivated users see an access denied screen, not the app
+  if (profile && profile.is_active === false) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-slate-700 font-medium">Account deactivated</p>
+          <p className="text-slate-400 text-sm mt-1">Contact your administrator.</p>
+          <button
+            onClick={signOut}
+            className="mt-4 text-sm text-slate-500 hover:text-slate-700"
+          >
+            Sign out
+          </button>
         </div>
-        <button
-          onClick={signOut}
-          className="text-sm text-slate-300 hover:text-white transition-colors cursor-pointer"
-        >
-          Sign out
-        </button>
-      </nav>
+      </div>
+    )
+  }
 
-      {content}
-    </div>
-  )
+  if (profile?.role === 'admin')       return <AdminPanel />
+  if (profile?.role === 'doctor')      return <DoctorPanel />
+  if (profile?.role === 'asha_worker') return <ASHAPanel />
+  return null
 }
 
 export default function App() {

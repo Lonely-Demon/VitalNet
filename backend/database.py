@@ -1,15 +1,17 @@
 """
-Supabase database client — Phase 6 replacement for SQLAlchemy/SQLite.
+Supabase database clients — Phase 7 three-client setup.
 
-Module-level anon client: for unauthenticated / public queries (health check, facilities).
-Per-request JWT client: for all RLS-protected tables (case_records, profiles).
+1. supabase_anon  — anon key, public reads (health check, facilities list).
+2. get_supabase_for_user() — per-request RLS-scoped client for all case/profile data.
+3. supabase_admin — service_role key, used ONLY for auth.admin.* operations.
+                    Never use for case_records or profiles data queries.
 """
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
 from config import settings
 
-# Module-level client — anon key, no user context.
-# Use ONLY for public tables (facilities) and health checks.
-supabase: Client = create_client(
+# 1. Anon client — public reads only.
+supabase_anon: Client = create_client(
     settings.supabase_url,
     settings.supabase_anon_key,
 )
@@ -23,3 +25,12 @@ def get_supabase_for_user(raw_token: str) -> Client:
     client = create_client(settings.supabase_url, settings.supabase_anon_key)
     client.postgrest.auth(raw_token)
     return client
+
+
+# 3. Admin client — service_role key, bypasses RLS entirely.
+# Use EXCLUSIVELY for auth.admin.* calls (create/list/update auth users).
+supabase_admin: Client = create_client(
+    settings.supabase_url,
+    settings.supabase_service_role_key,
+    options=ClientOptions(auto_refresh_token=False, persist_session=False),
+)
