@@ -4,6 +4,14 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // Handle ONNX files as static assets
+  assetsInclude: ['**/*.onnx'],
+
+  // Exclude onnxruntime-web from pre-bundling (uses dynamic WASM loading)
+  optimizeDeps: {
+    exclude: ['onnxruntime-web'],
+  },
+
   plugins: [
     react(),
     tailwindcss(),
@@ -12,7 +20,10 @@ export default defineConfig({
 
       // Precache the entire app shell
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        globPatterns: [
+          '**/*.{js,css,html,ico,png,svg,woff2}',
+          'models/triage_classifier.onnx',
+        ],
 
         // Background Sync for POST /api/submit (in-flight failure recovery)
         runtimeCaching: [{

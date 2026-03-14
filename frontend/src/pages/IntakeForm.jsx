@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { submitCase } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
+import { useLocalTriage } from '../hooks/useLocalTriage'
 
 const COMPLAINTS = [
   "Chest pain / tightness",
@@ -70,7 +71,9 @@ export default function IntakeForm() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [localResult, setLocalResult] = useState(null)
   const { showToast } = useToast()
+  const { classify } = useLocalTriage()
 
   const handleChange = (e) => {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }))
@@ -87,6 +90,7 @@ export default function IntakeForm() {
 
   const handleSubmit = async () => {
     setError(null)
+    setLocalResult(null)
 
     // Required field validation
     if (!form.patient_age || !form.patient_sex ||
@@ -107,10 +111,18 @@ export default function IntakeForm() {
       temperature: form.temperature ? parseFloat(form.temperature) : null,
     }
 
+    // Run local ONNX triage immediately — before any network call
+    const local = await classify(payload)
+    if (local) {
+      setLocalResult(local)
+    }
+
     try {
       const data = await submitCase(payload)
       setResult(data)
       setForm(emptyForm)
+      // Server result available — clear local preliminary result
+      setLocalResult(null)
 
       if (data.queued) {
         showToast('Saved offline \u2014 will sync when connected', 'warning')
@@ -118,6 +130,8 @@ export default function IntakeForm() {
         showToast('Case submitted successfully', 'success')
       }
     } catch (err) {
+      // If offline or network error — local result stays displayed
+      // The Phase 8 queue handles the actual sync
       setError(err.message || "Submission failed. Check connection.")
     } finally {
       setLoading(false)
@@ -285,6 +299,37 @@ export default function IntakeForm() {
       >
         {loading ? <span className="animate-pulse">Analyzing Case...</span> : "Submit Case"}
       </button>
+
+      {/* Preliminary Triage Result Display */}
+      {localResult && (
+        <div className={`mt-4 rounded-lg border p-4 ${
+          localResult.triageLevel === 'EMERGENCY'
+            ? 'border-red-200 bg-red-50'
+            : localResult.triageLevel === 'URGENT'
+            ? 'border-amber-200 bg-amber-50'
+            : 'border-emerald-200 bg-emerald-50'
+        }`}>
+          <div className="flex items-center gap-3">
+            <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-bold tracking-widest uppercase ${
+              localResult.triageLevel === 'EMERGENCY'
+                ? 'bg-red-600 text-white'
+                : localResult.triageLevel === 'URGENT'
+                ? 'bg-amber-500 text-white'
+                : 'bg-emerald-600 text-white'
+            }`}>
+              {localResult.triageLevel}
+            </span>
+            <span className="text-sm font-medium text-slate-700">
+              Preliminary triage
+            </span>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">
+            {navigator.onLine
+              ? 'Sending to server for full analysis…'
+              : 'Offline — queued for sync. Full briefing will appear for the doctor when connectivity returns.'}
+          </p>
+        </div>
+      )}
     </div>
   )
 }
