@@ -205,3 +205,19 @@ export async function getMySubmissions() {
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
+
+// ── Analytics ─────────────────────────────────────────────────────────────────
+
+export async function getAnalyticsSummary() {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE}/api/analytics/summary`, { headers })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function getEmergencyRate() {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE}/api/analytics/emergency-rate`, { headers })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}

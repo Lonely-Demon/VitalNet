@@ -1,11 +1,18 @@
 import { useState, useEffect } from 'react'
 import { getCases } from '../lib/api'
 import BriefingCard from '../components/BriefingCard'
+import { useAuth } from '../store/authStore'
+import { useToast } from '../components/ToastProvider'
+import { useRealtimeCases } from '../hooks/useRealtimeCases'
 
 export default function Dashboard({ filter = 'all' }) {
   const [cases, setCases] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const { profile } = useAuth()
+  const { showToast } = useToast()
+
+  const facilityId = profile?.facility_id
 
   const fetchCases = async () => {
     try {
@@ -25,10 +32,28 @@ export default function Dashboard({ filter = 'all' }) {
 
   useEffect(() => {
     fetchCases()
-    // Poll every 30 seconds — full list regardless of active tab
-    const interval = setInterval(fetchCases, 30000)
-    return () => clearInterval(interval)
   }, [])
+
+  // Replace polling with real-time subscriptions
+  useRealtimeCases({
+    facilityId,
+    onInsert: (newCase) => {
+      setCases((prev) => {
+        // Avoid duplicates (offline sync may have already added it optimistically)
+        if (prev.find((c) => c.id === newCase.id)) return prev
+        return [newCase, ...prev]
+      })
+      // Show toast for EMERGENCY cases
+      if (newCase.triage_level === 'EMERGENCY') {
+        showToast('New EMERGENCY case received', 'error')
+      }
+    },
+    onUpdate: (updatedCase) => {
+      setCases((prev) =>
+        prev.map((c) => (c.id === updatedCase.id ? updatedCase : c))
+      )
+    },
+  })
 
   // Client-side filter: 'pending' shows unreviewed only, 'all' shows everything
   const visibleCases = filter === 'pending'
@@ -80,7 +105,7 @@ export default function Dashboard({ filter = 'all' }) {
           <h2 className="text-xs font-bold text-red-600 uppercase tracking-widest mb-3 flex items-center gap-2">
             Emergency <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded-full">{emergency.length}</span>
           </h2>
-          {emergency.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={fetchCases} />)}
+          {emergency.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={() => {}} />)}
         </div>
       )}
 
@@ -89,7 +114,7 @@ export default function Dashboard({ filter = 'all' }) {
           <h2 className="text-xs font-bold text-amber-600 uppercase tracking-widest mb-3 flex items-center gap-2">
             Urgent <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">{urgent.length}</span>
           </h2>
-          {urgent.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={fetchCases} />)}
+          {urgent.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={() => {}} />)}
         </div>
       )}
 
@@ -98,7 +123,7 @@ export default function Dashboard({ filter = 'all' }) {
           <h2 className="text-xs font-bold text-emerald-700 uppercase tracking-widest mb-3 flex items-center gap-2">
             Routine <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{routine.length}</span>
           </h2>
-          {routine.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={fetchCases} />)}
+          {routine.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={() => {}} />)}
         </div>
       )}
     </div>

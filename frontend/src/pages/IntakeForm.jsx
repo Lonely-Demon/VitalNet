@@ -53,6 +53,7 @@ const emptyForm = {
   patient_age: "",
   patient_sex: "",
   chief_complaint: "",
+  custom_complaint: "",
   complaint_duration: "",
   location: "",
   bp_systolic: "",
@@ -76,7 +77,15 @@ export default function IntakeForm() {
   const { classify } = useLocalTriage()
 
   const handleChange = (e) => {
-    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }))
+    const { name, value } = e.target
+    setForm(prev => {
+      const updated = { ...prev, [name]: value }
+      // Clear custom complaint when changing away from "Other"
+      if (name === 'chief_complaint' && value !== 'Other') {
+        updated.custom_complaint = ''
+      }
+      return updated
+    })
   }
 
   const handleSymptom = (symptomId) => {
@@ -99,10 +108,18 @@ export default function IntakeForm() {
       return
     }
 
+    // Additional validation for "Other" complaint
+    if (form.chief_complaint === "Other" && !form.custom_complaint?.trim()) {
+      setError("Please specify the complaint when selecting 'Other'")
+      return
+    }
+
     setLoading(true)
 
     const payload = {
       ...form,
+      // Use custom complaint when "Other" is selected
+      chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint.trim() : form.chief_complaint,
       patient_age: parseInt(form.patient_age),
       bp_systolic: form.bp_systolic ? parseInt(form.bp_systolic) : null,
       bp_diastolic: form.bp_diastolic ? parseInt(form.bp_diastolic) : null,
@@ -221,6 +238,18 @@ export default function IntakeForm() {
             {COMPLAINTS.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </Field>
+        {form.chief_complaint === "Other" && (
+          <Field label="Please specify the complaint *">
+            <input
+              name="custom_complaint"
+              value={form.custom_complaint}
+              onChange={handleChange}
+              placeholder="e.g. Joint pain, skin rash, vision problems..."
+              className={inputClass}
+              maxLength={200}
+            />
+          </Field>
+        )}
         <Field label="Duration *">
           <select name="complaint_duration" value={form.complaint_duration}
             onChange={handleChange} className={inputClass}>

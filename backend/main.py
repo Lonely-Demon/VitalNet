@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from database import supabase_anon, get_supabase_for_user
 from admin_routes import router as admin_router
+from analytics_routes import router as analytics_router
 from classifier import load_classifier, run_triage
 from llm import generate_briefing
 from auth import get_current_user, require_role
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="VitalNet API", version="0.2.0", lifespan=lifespan)
 app.include_router(admin_router)
+app.include_router(analytics_router)
 
 # CORS — restricted to known origins
 app.add_middleware(

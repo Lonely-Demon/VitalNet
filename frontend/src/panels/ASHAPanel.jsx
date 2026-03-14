@@ -4,6 +4,8 @@ import IntakeForm from '../pages/IntakeForm'
 import OfflineBanner from '../components/OfflineBanner'
 import { getMySubmissions, processQueue } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
+import { useAuth } from '../store/authStore'
+import { useRealtimeCases } from '../hooks/useRealtimeCases'
 
 const TABS = [
   { id: 'new',     label: 'New Case' },
@@ -22,6 +24,9 @@ export default function ASHAPanel() {
   const [loading,     setLoading]     = useState(false)
   const [error,       setError]       = useState(null)
   const { showToast } = useToast()
+  const { session } = useAuth()
+
+  const userId = session?.user?.id
 
   // Process any queued offline submissions on mount and on every 'online' event
   useEffect(() => {
@@ -52,6 +57,21 @@ export default function ASHAPanel() {
   useEffect(() => {
     if (activeTab === 'history') fetchSubmissions()
   }, [activeTab])
+
+  // Real-time sync for submission history when queued cases are processed
+  useRealtimeCases({
+    userId,
+    onUpdate: (updatedCase) => {
+      // Update the submission history when a queued offline case is processed
+      setSubmissions((prev) =>
+        prev.map((c) => (c.id === updatedCase.id ? {
+          ...c,
+          triage_level: updatedCase.triage_level,
+          reviewed_at: updatedCase.reviewed_at,
+        } : c))
+      )
+    },
+  })
 
   async function fetchSubmissions() {
     setLoading(true)
