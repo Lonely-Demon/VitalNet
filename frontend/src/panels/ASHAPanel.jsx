@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
 import NavBar from '../components/NavBar'
 import IntakeForm from '../pages/IntakeForm'
-import { getMySubmissions } from '../lib/api'
+import OfflineBanner from '../components/OfflineBanner'
+import { getMySubmissions, processQueue } from '../lib/api'
+import { useToast } from '../components/ToastProvider'
 
 const TABS = [
   { id: 'new',     label: 'New Case' },
@@ -19,6 +21,33 @@ export default function ASHAPanel() {
   const [submissions, setSubmissions] = useState([])
   const [loading,     setLoading]     = useState(false)
   const [error,       setError]       = useState(null)
+  const { showToast } = useToast()
+
+  // Process any queued offline submissions on mount and on every 'online' event
+  useEffect(() => {
+    processQueue().then(result => {
+      if (result.synced > 0) {
+        showToast(`${result.synced} offline submission${result.synced > 1 ? 's' : ''} synced`, 'success')
+      }
+      if (result.requiresLogin) {
+        showToast('Please sign in again to sync offline submissions', 'warning')
+      }
+    })
+
+    function handleOnline() {
+      processQueue().then(result => {
+        if (result.synced > 0) {
+          showToast(`${result.synced} submission${result.synced > 1 ? 's' : ''} synced`, 'success')
+        }
+        if (result.requiresLogin) {
+          showToast('Re-login required to sync offline submissions', 'warning')
+        }
+      })
+    }
+
+    window.addEventListener('online', handleOnline)
+    return () => window.removeEventListener('online', handleOnline)
+  }, [showToast])
 
   useEffect(() => {
     if (activeTab === 'history') fetchSubmissions()
@@ -40,6 +69,7 @@ export default function ASHAPanel() {
   return (
     <div className="min-h-screen bg-slate-50">
       <NavBar tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
+      <OfflineBanner />
 
       <main className="max-w-2xl mx-auto px-4 py-6">
         {activeTab === 'new' && <IntakeForm />}

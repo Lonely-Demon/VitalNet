@@ -1,5 +1,6 @@
 import { AuthProvider, useAuth } from './store/authStore'
 import { RouteGuard } from './components/RouteGuard'
+import ToastProvider from './components/ToastProvider'
 import ASHAPanel   from './panels/ASHAPanel'
 import DoctorPanel from './panels/DoctorPanel'
 import AdminPanel  from './panels/AdminPanel'
@@ -34,9 +35,11 @@ function AppInner() {
 export default function App() {
   return (
     <AuthProvider>
-      <RouteGuard>
-        <AppInner />
-      </RouteGuard>
+      <ToastProvider>
+        <RouteGuard>
+          <AppInner />
+        </RouteGuard>
+      </ToastProvider>
     </AuthProvider>
   )
 }

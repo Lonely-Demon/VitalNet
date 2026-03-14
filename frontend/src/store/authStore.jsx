@@ -26,12 +26,17 @@ export function AuthProvider({ children }) {
   }, [])
 
   async function fetchProfile(userId) {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
-    setProfile(data)
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single()
+      if (data) setProfile(data)
+    } catch {
+      // Offline or network error — keep existing profile (don't blank the page)
+      console.warn('[VitalNet] Profile fetch failed (offline?), keeping cached state')
+    }
   }
 
   const value = {

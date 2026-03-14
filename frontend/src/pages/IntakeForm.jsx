@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { submitCase } from '../lib/api'
+import { useToast } from '../components/ToastProvider'
 
 const COMPLAINTS = [
   "Chest pain / tightness",
@@ -69,6 +70,7 @@ export default function IntakeForm() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const { showToast } = useToast()
 
   const handleChange = (e) => {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }))
@@ -109,6 +111,12 @@ export default function IntakeForm() {
       const data = await submitCase(payload)
       setResult(data)
       setForm(emptyForm)
+
+      if (data.queued) {
+        showToast('Saved offline \u2014 will sync when connected', 'warning')
+      } else {
+        showToast('Case submitted successfully', 'success')
+      }
     } catch (err) {
       setError(err.message || "Submission failed. Check connection.")
     } finally {
@@ -117,16 +125,31 @@ export default function IntakeForm() {
   }
 
   if (result) {
+    const isQueued = result.queued
     return (
       <div className="max-w-lg mx-auto p-4 mt-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center ring-4 ring-slate-50">
-          <div className="mb-6">
-            <span className={`inline-block px-5 py-2 rounded-full font-bold text-lg tracking-wide shadow-sm ${BADGE_COLORS[result.triage_level]}`}>
-              {result.triage_level}
-            </span>
-          </div>
-          <h2 className="text-slate-900 text-xl font-bold tracking-tight mb-2">Case Successfully Logged</h2>
-          <p className="text-slate-600 leading-relaxed mb-8">{result.risk_driver}</p>
+          {isQueued ? (
+            <>
+              <div className="mb-6">
+                <span className="inline-block px-5 py-2 rounded-full font-bold text-lg tracking-wide shadow-sm bg-amber-100 text-amber-800 border border-amber-200">
+                  SAVED OFFLINE
+                </span>
+              </div>
+              <h2 className="text-slate-900 text-xl font-bold tracking-tight mb-2">Case Saved Locally</h2>
+              <p className="text-slate-600 leading-relaxed mb-8">It will be submitted automatically when connectivity is restored.</p>
+            </>
+          ) : (
+            <>
+              <div className="mb-6">
+                <span className={`inline-block px-5 py-2 rounded-full font-bold text-lg tracking-wide shadow-sm ${BADGE_COLORS[result.triage_level]}`}>
+                  {result.triage_level}
+                </span>
+              </div>
+              <h2 className="text-slate-900 text-xl font-bold tracking-tight mb-2">Case Successfully Logged</h2>
+              <p className="text-slate-600 leading-relaxed mb-8">{result.risk_driver}</p>
+            </>
+          )}
           <button
             onClick={() => setResult(null)}
             className="bg-slate-900 text-white px-8 py-3 rounded-xl font-medium cursor-pointer shadow-sm hover:shadow-md transition-all active:bg-slate-800 focus:ring-4 focus:ring-slate-100"
