@@ -78,7 +78,7 @@ function buildFeatureVector(formData) {
 
   const raw = {
     age: formData.patient_age ?? -1,
-    sex: formData.patient_sex === 'male' ? 1 : formData.patient_sex === 'female' ? 0 : -1,
+    sex: formData.patient_sex === 'male' ? 1 : 0, // matches training: male=1, everything else=0
     bp_systolic: formData.bp_systolic ?? -1,
     bp_diastolic: formData.bp_diastolic ?? -1,
     spo2: formData.spo2 ?? -1,
