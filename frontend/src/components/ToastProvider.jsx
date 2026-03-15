@@ -9,10 +9,10 @@ export function useToast() {
 }
 
 const TYPE_STYLES = {
-  success: 'bg-emerald-600 text-white',
-  warning: 'bg-amber-500 text-gray-900',
-  error:   'bg-red-600 text-white',
-  info:    'bg-blue-600 text-white',
+  success: 'bg-routine text-white',
+  warning: 'bg-urgent text-white',
+  error:   'bg-emergency text-white',
+  info:    'bg-forest text-white',
 }
 
 export default function ToastProvider({ children }) {
@@ -34,7 +34,7 @@ export default function ToastProvider({ children }) {
         {toasts.map(t => (
           <div
             key={t.id}
-            className={`px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${TYPE_STYLES[t.type] || TYPE_STYLES.info}`}
+            className={`px-4 py-3 rounded-lg shadow-card-hover text-sm font-medium animate-fade-up ${TYPE_STYLES[t.type] || TYPE_STYLES.info}`}
           >
             {t.message}
           </div>

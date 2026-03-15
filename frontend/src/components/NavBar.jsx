@@ -7,20 +7,20 @@ const ROLE_LABELS = {
 }
 
 const ROLE_COLORS = {
-  asha_worker: 'bg-emerald-100 text-emerald-800',
-  doctor:      'bg-blue-100 text-blue-800',
-  admin:       'bg-slate-100 text-slate-700',
+  asha_worker: 'bg-leaf text-forest',
+  doctor:      'bg-sand text-forest',
+  admin:       'bg-surface3 text-text',
 }
 
 export default function NavBar({ tabs, activeTab, onTabChange }) {
   const { profile, signOut } = useAuth()
 
   return (
-    <nav className="sticky top-0 z-10 bg-white border-b border-slate-200 shadow-sm">
+    <nav className="sticky top-0 z-10 bg-surface/80 backdrop-blur-md border-b border-leaf/60 shadow-card">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-6">
 
         {/* Wordmark */}
-        <span className="font-semibold text-slate-800 text-sm tracking-tight shrink-0">
+        <span className="font-display italic text-forest text-lg tracking-tight shrink-0">
           VitalNet
         </span>
 
@@ -30,10 +30,10 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
             <button
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              className={`px-3 py-1.5 rounded-pill text-sm font-medium transition-all duration-200 ${
                 activeTab === tab.id
-                  ? 'bg-slate-100 text-slate-900'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                  ? 'bg-forest text-white shadow-btn'
+                  : 'text-text2 hover:text-forest hover:bg-leaf/40'
               }`}
             >
               {tab.label}
@@ -43,17 +43,17 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
 
         {/* User identity */}
         <div className="flex items-center gap-3 shrink-0">
-          <span className="text-sm text-slate-600 hidden sm:block">
+          <span className="text-sm text-text2 hidden sm:block font-body">
             {profile?.full_name || profile?.id?.slice(0, 8)}
           </span>
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+          <span className={`text-xs font-mono px-2 py-0.5 rounded-pill font-medium ${
             ROLE_COLORS[profile?.role] || ROLE_COLORS.admin
           }`}>
             {ROLE_LABELS[profile?.role] || profile?.role}
           </span>
           <button
             onClick={signOut}
-            className="text-sm text-slate-400 hover:text-slate-600 transition-colors"
+            className="text-sm text-text3 hover:text-terra transition-colors"
           >
             Sign out
           </button>

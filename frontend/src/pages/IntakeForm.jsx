@@ -44,9 +44,9 @@ const SYMPTOM_OPTIONS = [
 ]
 
 const BADGE_COLORS = {
-  EMERGENCY: "bg-red-600 text-white border border-red-700/20",
-  URGENT: "bg-amber-500 text-gray-900 border border-amber-600/20",
-  ROUTINE: "bg-emerald-600 text-white border border-emerald-700/20",
+  EMERGENCY: "bg-emergency/10 text-emergency border border-emergency/30",
+  URGENT: "bg-urgent/10 text-urgent border border-urgent/30",
+  ROUTINE: "bg-routine/10 text-routine border border-routine/30",
 }
 
 const emptyForm = {
@@ -182,29 +182,29 @@ export default function IntakeForm() {
     const isQueued = result.queued
     const offlineTriage = result.localTriage
     return (
-      <div className="max-w-lg mx-auto p-4 mt-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center ring-4 ring-slate-50">
+      <div className="max-w-lg mx-auto p-4 mt-8 animate-fade-up">
+        <div className="bg-surface rounded-xl shadow-card border border-leaf/40 p-8 text-center hover:shadow-card-hover transition-shadow duration-300">
           {isQueued ? (
             <>
               {offlineTriage && (
                 <div className="mb-4">
-                  <span className={`inline-block px-5 py-2 rounded-full font-bold text-lg tracking-wide shadow-sm ${BADGE_COLORS[offlineTriage.triageLevel]}`}>
+                  <span className={`inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono ${BADGE_COLORS[offlineTriage.triageLevel]}`}>
                     {offlineTriage.triageLevel}
                   </span>
                   {offlineTriage.confidence != null && (
-                    <p className="text-xs text-slate-500 mt-2">
+                    <p className="text-xs text-text3 mt-2 font-mono">
                       Confidence: {(offlineTriage.confidence * 100).toFixed(0)}%
                     </p>
                   )}
                 </div>
               )}
               <div className="mb-6">
-                <span className="inline-block px-5 py-2 rounded-full font-bold text-lg tracking-wide shadow-sm bg-amber-100 text-amber-800 border border-amber-200">
+                <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide shadow-sm bg-sand text-urgent border border-urgent/20 font-mono">
                   SAVED OFFLINE
                 </span>
               </div>
-              <h2 className="text-slate-900 text-xl font-bold tracking-tight mb-2">Case Saved Locally</h2>
-              <p className="text-slate-600 leading-relaxed mb-8">
+              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">Case Saved Locally</h2>
+              <p className="text-text2 leading-relaxed mb-8">
                 {offlineTriage
                   ? 'Preliminary AI triage shown above. Full analysis will be available when connectivity is restored.'
                   : 'It will be submitted automatically when connectivity is restored.'}
@@ -213,17 +213,17 @@ export default function IntakeForm() {
           ) : (
             <>
               <div className="mb-6">
-                <span className={`inline-block px-5 py-2 rounded-full font-bold text-lg tracking-wide shadow-sm ${BADGE_COLORS[result.triage_level]}`}>
+                <span className={`inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono ${BADGE_COLORS[result.triage_level]}`}>
                   {result.triage_level}
                 </span>
               </div>
-              <h2 className="text-slate-900 text-xl font-bold tracking-tight mb-2">Case Successfully Logged</h2>
-              <p className="text-slate-600 leading-relaxed mb-8">{result.risk_driver}</p>
+              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">Case Successfully Logged</h2>
+              <p className="text-text2 leading-relaxed mb-8">{result.risk_driver}</p>
             </>
           )}
           <button
             onClick={() => setResult(null)}
-            className="bg-slate-900 text-white px-8 py-3 rounded-xl font-medium cursor-pointer shadow-sm hover:shadow-md transition-all active:bg-slate-800 focus:ring-4 focus:ring-slate-100"
+            className="bg-forest text-white px-8 py-3 rounded-pill font-medium cursor-pointer shadow-btn hover:shadow-card-hover transition-all active:scale-[0.98]"
           >
             Submit Another Case
           </button>
@@ -233,11 +233,11 @@ export default function IntakeForm() {
   }
 
   return (
-    <div className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-white shadow-sm border border-gray-200 rounded-xl">
-      <h1 className="text-2xl font-bold text-slate-900 tracking-tight mb-8 text-center">Patient Intake Form</h1>
+    <div className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300">
+      <h1 className="text-2xl font-display italic text-forest tracking-tight mb-8 text-center">Patient Intake Form</h1>
 
       {error && (
-        <div className="bg-red-50 border border-red-300 text-red-700 px-4 py-3 rounded mb-4 text-sm">
+        <div className="bg-emergency/10 border border-emergency/30 text-emergency px-4 py-3 rounded-md mb-4 text-sm">
           {error}
         </div>
       )}
@@ -259,10 +259,11 @@ export default function IntakeForm() {
         <Field label="Sex *">
           <div className="flex gap-4 mt-1">
             {["male", "female", "other"].map(s => (
-              <label key={s} className="flex items-center gap-2 cursor-pointer">
+              <label key={s} className="flex items-center gap-2 cursor-pointer group">
                 <input type="radio" name="patient_sex" value={s}
-                  checked={form.patient_sex === s} onChange={handleChange} />
-                <span className="capitalize text-sm">{s}</span>
+                  checked={form.patient_sex === s} onChange={handleChange}
+                  className="accent-forest" />
+                <span className="capitalize text-sm text-text2 group-hover:text-forest transition-colors">{s}</span>
               </label>
             ))}
           </div>
@@ -328,11 +329,18 @@ export default function IntakeForm() {
       {/* Symptoms */}
       <Section title="Symptoms (select all that apply)">
         <div className="grid grid-cols-2 gap-3">
-          {SYMPTOM_OPTIONS.map(s => {
+          {SYMPTOM_OPTIONS.map((s, idx) => {
             const isSelected = form.symptoms.includes(s.id);
             return (
-              <label key={s.id} className={`flex items-center justify-center p-3 rounded-xl border text-sm transition-all duration-200 cursor-pointer shadow-sm
-                ${isSelected ? 'bg-blue-50 border-blue-500 text-blue-700 ring-2 ring-blue-100 font-medium tracking-tight' : 'bg-white border-gray-200 text-slate-600 hover:border-blue-400 hover:shadow-md'}`}>
+              <label
+                key={s.id}
+                style={{ animationDelay: `${idx * 40}ms` }}
+                className={`flex items-center justify-center p-3 rounded-lg border text-sm transition-all duration-200 cursor-pointer animate-fade-up
+                ${isSelected
+                  ? 'bg-forest text-white border-forest shadow-btn font-medium tracking-tight'
+                  : 'bg-surface2 border-surface3 text-text2 hover:border-sage hover:shadow-card'
+                }`}
+              >
                 <input type="checkbox" checked={isSelected}
                   onChange={() => handleSymptom(s.id)}
                   className="sr-only" />
@@ -364,35 +372,35 @@ export default function IntakeForm() {
       <button
         onClick={handleSubmit}
         disabled={loading}
-        className="w-full bg-blue-700 text-white py-4 rounded-xl font-bold text-lg mt-6 shadow-sm hover:shadow-md disabled:opacity-75 disabled:cursor-wait transition-all duration-200 active:bg-blue-800 focus:ring-4 focus:ring-blue-100 cursor-pointer flex justify-center items-center"
+        className="w-full bg-forest text-white py-4 rounded-pill font-bold text-lg mt-6 shadow-btn hover:shadow-card-hover disabled:opacity-75 disabled:cursor-wait transition-all duration-200 active:scale-[0.98] cursor-pointer flex justify-center items-center"
       >
         {loading ? <span className="animate-pulse">Analyzing Case...</span> : "Submit Case"}
       </button>
 
       {/* Preliminary Triage Result Display */}
       {localResult && (
-        <div className={`mt-4 rounded-lg border p-4 ${
+        <div className={`mt-4 rounded-lg border p-4 animate-fade-up ${
           localResult.triageLevel === 'EMERGENCY'
-            ? 'border-red-200 bg-red-50'
+            ? 'border-emergency/30 bg-emergency/5'
             : localResult.triageLevel === 'URGENT'
-            ? 'border-amber-200 bg-amber-50'
-            : 'border-emerald-200 bg-emerald-50'
+            ? 'border-urgent/30 bg-urgent/5'
+            : 'border-routine/30 bg-routine/5'
         }`}>
           <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-bold tracking-widest uppercase ${
+            <span className={`inline-flex items-center rounded-pill px-3 py-1 text-xs font-bold tracking-widest uppercase font-mono ${
               localResult.triageLevel === 'EMERGENCY'
-                ? 'bg-red-600 text-white'
+                ? 'bg-emergency/10 text-emergency'
                 : localResult.triageLevel === 'URGENT'
-                ? 'bg-amber-500 text-white'
-                : 'bg-emerald-600 text-white'
+                ? 'bg-urgent/10 text-urgent'
+                : 'bg-routine/10 text-routine'
             }`}>
               {localResult.triageLevel}
             </span>
-            <span className="text-sm font-medium text-slate-700">
+            <span className="text-sm font-medium text-text2">
               Preliminary triage
             </span>
           </div>
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-text3">
             {navigator.onLine
               ? 'Sending to server for full analysis…'
               : 'Offline — queued for sync. Full briefing will appear for the doctor when connectivity returns.'}
@@ -404,14 +412,14 @@ export default function IntakeForm() {
 }
 
 // Utility components
-const inputClass = "w-full border border-gray-200 rounded-lg px-4 py-3 text-sm text-slate-800 shadow-sm transition-all duration-200 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 hover:border-blue-400 bg-white"
+const inputClass = "w-full border border-surface3 rounded-md px-4 py-3 text-sm text-text bg-surface2 shadow-sm transition-all duration-200 outline-none focus:ring-2 focus:ring-leaf focus:border-sage hover:border-sage"
 
 function Section({ title, children }) {
   return (
     <div className="mb-8">
-      <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-3">
+      <h2 className="text-xs font-mono font-bold text-text3 uppercase tracking-widest mb-4 flex items-center gap-3">
         {title}
-        <div className="h-px bg-gray-100 flex-1"></div>
+        <div className="h-px bg-leaf/60 flex-1"></div>
       </h2>
       <div className="space-y-4">{children}</div>
     </div>
@@ -421,7 +429,7 @@ function Section({ title, children }) {
 function Field({ label, children }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-slate-700 mb-2 ml-1">{label}</label>
+      <label className="block text-sm font-medium text-text2 mb-2 ml-1">{label}</label>
       {children}
     </div>
   )

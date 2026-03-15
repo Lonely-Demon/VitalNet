@@ -6,10 +6,10 @@ export function RouteGuard({ children, requiredRole = null }) {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-bg flex items-center justify-center">
         <div className="text-center">
-          <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-sm text-slate-500">Loading...</p>
+          <div className="w-8 h-8 border-3 border-forest border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-sm text-text3">Loading...</p>
         </div>
       </div>
     )
@@ -19,11 +19,11 @@ export function RouteGuard({ children, requiredRole = null }) {
 
   if (requiredRole && role !== requiredRole && role !== 'admin') {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center max-w-sm ring-4 ring-slate-50">
+      <div className="min-h-screen bg-bg flex items-center justify-center px-4">
+        <div className="bg-surface rounded-xl shadow-card border border-leaf/40 p-8 text-center max-w-sm">
           <div className="text-4xl mb-3">🚫</div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight mb-2">Access Denied</h2>
-          <p className="text-sm text-slate-600">Your account role does not have access to this view.</p>
+          <h2 className="text-xl font-bold text-text tracking-tight mb-2 font-display">Access Denied</h2>
+          <p className="text-sm text-text2">Your account role does not have access to this view.</p>
         </div>
       </div>
     )

@@ -11,13 +11,13 @@ function AppInner() {
   // Deactivated users see an access denied screen, not the app
   if (profile && profile.is_active === false) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-slate-700 font-medium">Account deactivated</p>
-          <p className="text-slate-400 text-sm mt-1">Contact your administrator.</p>
+      <div className="min-h-screen bg-bg flex items-center justify-center">
+        <div className="text-center animate-fade-up">
+          <p className="text-text font-medium">Account deactivated</p>
+          <p className="text-text3 text-sm mt-1">Contact your administrator.</p>
           <button
             onClick={signOut}
-            className="mt-4 text-sm text-slate-500 hover:text-slate-700"
+            className="mt-4 text-sm text-text2 hover:text-terra transition-colors"
           >
             Sign out
           </button>

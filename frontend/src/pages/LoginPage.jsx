@@ -23,49 +23,49 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen bg-bg flex items-center justify-center px-4">
+      <div className="w-full max-w-sm animate-fade-up">
         {/* Brand */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 tracking-tight">VitalNet</h1>
-          <p className="text-sm text-slate-500 mt-2">Clinical Triage Platform</p>
+          <h1 className="font-display italic text-4xl text-forest tracking-tight animate-shimmer">VitalNet</h1>
+          <p className="text-sm text-text2 mt-2 font-body">Clinical Triage Platform</p>
         </div>
 
         {/* Login Card */}
         <form
           onSubmit={handleSubmit}
-          className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 ring-4 ring-slate-50"
+          className="bg-surface rounded-xl shadow-card border border-leaf/40 p-8 hover:shadow-card-hover transition-shadow duration-300"
         >
-          <h2 className="text-lg font-bold text-slate-800 tracking-tight mb-6 text-center">Sign In</h2>
+          <h2 className="text-lg font-bold text-text tracking-tight mb-6 text-center font-body">Sign In</h2>
 
           {error && (
-            <div className="bg-red-50 border border-red-300 text-red-700 px-4 py-3 rounded-lg mb-5 text-sm">
+            <div className="bg-emergency/10 border border-emergency/30 text-emergency px-4 py-3 rounded-md mb-5 text-sm">
               {error}
             </div>
           )}
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2 ml-1">Email</label>
+              <label className="block text-sm font-medium text-text2 mb-2 ml-1 font-mono text-xs uppercase tracking-wider">Email</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 required
-                className="w-full border border-gray-200 rounded-lg px-4 py-3 text-sm text-slate-800 shadow-sm transition-all duration-200 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 hover:border-blue-400 bg-white"
+                className="w-full border border-surface3 rounded-md px-4 py-3 text-sm text-text bg-surface2 shadow-sm transition-all duration-200 outline-none focus:ring-2 focus:ring-leaf focus:border-sage hover:border-sage"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2 ml-1">Password</label>
+              <label className="block text-sm font-medium text-text2 mb-2 ml-1 font-mono text-xs uppercase tracking-wider">Password</label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 required
-                className="w-full border border-gray-200 rounded-lg px-4 py-3 text-sm text-slate-800 shadow-sm transition-all duration-200 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 hover:border-blue-400 bg-white"
+                className="w-full border border-surface3 rounded-md px-4 py-3 text-sm text-text bg-surface2 shadow-sm transition-all duration-200 outline-none focus:ring-2 focus:ring-leaf focus:border-sage hover:border-sage"
               />
             </div>
           </div>
@@ -73,13 +73,13 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-700 text-white py-3 rounded-xl font-bold text-sm mt-6 shadow-sm hover:shadow-md disabled:opacity-75 disabled:cursor-wait transition-all duration-200 active:bg-blue-800 focus:ring-4 focus:ring-blue-100 cursor-pointer"
+            className="w-full bg-forest text-white py-3 rounded-pill font-bold text-sm mt-6 shadow-btn hover:shadow-card-hover disabled:opacity-75 disabled:cursor-wait transition-all duration-200 active:scale-[0.98] cursor-pointer"
           >
             {loading ? <span className="animate-pulse">Signing in...</span> : 'Sign In'}
           </button>
         </form>
 
-        <p className="text-xs text-slate-400 text-center mt-6">
+        <p className="text-xs text-text3 text-center mt-6 font-mono">
           For authorised healthcare workers only
         </p>
       </div>

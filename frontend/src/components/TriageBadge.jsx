@@ -1,12 +1,12 @@
 const COLORS = {
-  EMERGENCY: "bg-red-600 text-white shadow-sm border border-red-700/30",
-  URGENT: "bg-amber-500 text-gray-900 shadow-sm border border-amber-600/30",
-  ROUTINE: "bg-emerald-600 text-white shadow-sm border border-emerald-700/30",
+  EMERGENCY: "bg-emergency/10 text-emergency border border-emergency/30 font-mono",
+  URGENT: "bg-urgent/10 text-urgent border border-urgent/30 font-mono",
+  ROUTINE: "bg-routine/10 text-routine border border-routine/30 font-mono",
 }
 
 export default function TriageBadge({ level }) {
   return (
-    <span className={`inline-block px-3 py-1 rounded-full text-sm font-bold tracking-wide ${COLORS[level] || "bg-gray-200 text-gray-700"}`}>
+    <span className={`inline-block px-3 py-1 rounded-pill text-sm font-bold tracking-wide ${COLORS[level] || "bg-surface3 text-text2"}`}>
       {level}
     </span>
   )

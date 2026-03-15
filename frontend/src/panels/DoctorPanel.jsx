@@ -11,7 +11,7 @@ export default function DoctorPanel() {
   const [activeTab, setActiveTab] = useState('pending')
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-bg">
       <NavBar tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
       {/*
         Pass activeTab to Dashboard so it can filter:

@@ -13,9 +13,9 @@ const TABS = [
 ]
 
 const TRIAGE_STYLES = {
-  EMERGENCY: 'bg-red-100 text-red-700 border-red-200',
-  URGENT:    'bg-amber-100 text-amber-700 border-amber-200',
-  ROUTINE:   'bg-emerald-100 text-emerald-700 border-emerald-200',
+  EMERGENCY: 'bg-emergency/10 text-emergency border-emergency/30',
+  URGENT:    'bg-urgent/10 text-urgent border-urgent/30',
+  ROUTINE:   'bg-routine/10 text-routine border-routine/30',
 }
 
 export default function ASHAPanel() {
@@ -87,7 +87,7 @@ export default function ASHAPanel() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-bg">
       <NavBar tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
       <OfflineBanner />
 
@@ -96,20 +96,20 @@ export default function ASHAPanel() {
 
         {activeTab === 'history' && (
           <div>
-            <h2 className="text-base font-semibold text-slate-800 mb-4">My Submissions</h2>
+            <h2 className="text-base font-semibold text-text mb-4 font-display italic">My Submissions</h2>
 
             {loading && (
-              <div className="text-center py-12 text-slate-400 text-sm">Loading...</div>
+              <div className="text-center py-12 text-text3 text-sm">Loading...</div>
             )}
 
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-700 text-sm">
+              <div className="bg-emergency/10 border border-emergency/30 rounded-lg px-4 py-3 text-emergency text-sm">
                 {error}
               </div>
             )}
 
             {!loading && !error && submissions.length === 0 && (
-              <div className="text-center py-12 text-slate-400 text-sm">
+              <div className="text-center py-12 text-text3 text-sm">
                 No submissions yet.
               </div>
             )}
@@ -117,14 +117,14 @@ export default function ASHAPanel() {
             {!loading && submissions.map(s => (
               <div
                 key={s.id}
-                className="bg-white rounded-lg border border-slate-200 shadow-sm px-4 py-3 mb-3"
+                className="bg-surface rounded-lg border border-leaf/40 shadow-card px-4 py-3 mb-3 hover:shadow-card-hover transition-shadow duration-200 animate-fade-up"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-slate-800 truncate">
+                    <p className="text-sm font-medium text-text truncate">
                       {s.chief_complaint}
                     </p>
-                    <p className="text-xs text-slate-400 mt-0.5">
+                    <p className="text-xs text-text3 mt-0.5 font-mono">
                       {s.patient_age ? `${s.patient_age}y` : '—'}
                       {s.patient_sex ? ` · ${s.patient_sex}` : ''}
                       {' · '}
@@ -134,11 +134,11 @@ export default function ASHAPanel() {
                     </p>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className={`text-xs px-2 py-0.5 rounded border font-medium ${TRIAGE_STYLES[s.triage_level]}`}>
+                    <span className={`text-xs font-mono px-2 py-0.5 rounded-pill border font-medium ${TRIAGE_STYLES[s.triage_level]}`}>
                       {s.triage_level}
                     </span>
                     {s.reviewed_at && (
-                      <span className="text-xs text-emerald-600">✓ Reviewed</span>
+                      <span className="text-xs text-routine font-mono">✓ Reviewed</span>
                     )}
                   </div>
                 </div>

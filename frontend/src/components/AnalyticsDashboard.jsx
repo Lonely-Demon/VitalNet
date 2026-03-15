@@ -5,9 +5,9 @@ import { useRealtimeCases } from '../hooks/useRealtimeCases'
 import { getAnalyticsSummary } from '../lib/api'
 
 const TRIAGE_COLORS = {
-  EMERGENCY: 'bg-red-600',
-  URGENT: 'bg-amber-500',
-  ROUTINE: 'bg-emerald-600',
+  EMERGENCY: 'bg-emergency',
+  URGENT: 'bg-urgent',
+  ROUTINE: 'bg-routine',
 }
 
 export default function AnalyticsDashboard() {
@@ -40,7 +40,6 @@ export default function AnalyticsDashboard() {
     onInsert: () => {
       setLiveCount((n) => n + 1)
       // Re-fetch full stats every 5 new cases to keep chart accurate
-      // (avoids a fetch on every single submission in busy periods)
       if ((liveCount + 1) % 5 === 0) fetchStats()
     },
   })
@@ -48,15 +47,15 @@ export default function AnalyticsDashboard() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <p className="text-sm text-slate-500">Loading analytics…</p>
+        <p className="text-sm text-text3">Loading analytics…</p>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-        <p className="text-sm text-red-700">Failed to load analytics: {error}</p>
+      <div className="rounded-lg border border-emergency/30 bg-emergency/5 p-4">
+        <p className="text-sm text-emergency">Failed to load analytics: {error}</p>
       </div>
     )
   }
@@ -73,8 +72,8 @@ export default function AnalyticsDashboard() {
 
       {/* Live indicator */}
       {liveCount > 0 && (
-        <div className="flex items-center gap-2 text-xs text-emerald-700">
-          <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+        <div className="flex items-center gap-2 text-xs text-routine font-mono">
+          <span className="inline-block h-2 w-2 rounded-full bg-routine animate-pulse" />
           {liveCount} new case{liveCount > 1 ? 's' : ''} since page load
         </div>
       )}
@@ -87,19 +86,19 @@ export default function AnalyticsDashboard() {
           { label: 'Pending Review', value: unreviewed_count },
           { label: 'Emergency', value: triage_distribution.EMERGENCY },
         ].map(({ label, value }) => (
-          <div key={label} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-            <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
+          <div key={label} className="rounded-lg border border-leaf/40 bg-surface p-4 shadow-card hover:shadow-card-hover transition-shadow duration-200">
+            <p className="text-xs font-mono font-medium uppercase tracking-wide text-text3">{label}</p>
+            <p className="mt-1 text-2xl font-bold text-text">{value}</p>
           </div>
         ))}
       </div>
 
       {/* Triage distribution bar */}
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+      <div className="rounded-lg border border-leaf/40 bg-surface p-4 shadow-card">
+        <p className="mb-3 text-xs font-mono font-semibold uppercase tracking-wide text-text3">
           Triage Distribution
         </p>
-        <div className="flex h-5 w-full overflow-hidden rounded-full">
+        <div className="flex h-5 w-full overflow-hidden rounded-pill">
           {['EMERGENCY', 'URGENT', 'ROUTINE'].map((level) => {
             const pct = totalTriage > 0
               ? (triage_distribution[level] / totalTriage) * 100
@@ -118,7 +117,7 @@ export default function AnalyticsDashboard() {
           {['EMERGENCY', 'URGENT', 'ROUTINE'].map((level) => (
             <div key={level} className="flex items-center gap-1.5">
               <span className={`inline-block h-2.5 w-2.5 rounded-sm ${TRIAGE_COLORS[level]}`} />
-              <span className="text-xs text-slate-600">
+              <span className="text-xs text-text2 font-mono">
                 {level} — {triage_distribution[level]}
               </span>
             </div>
@@ -127,23 +126,23 @@ export default function AnalyticsDashboard() {
       </div>
 
       {/* Daily volume chart (last 7 days) */}
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <p className="mb-4 text-xs font-semibold uppercase tracking-wide text-slate-500">
+      <div className="rounded-lg border border-leaf/40 bg-surface p-4 shadow-card">
+        <p className="mb-4 text-xs font-mono font-semibold uppercase tracking-wide text-text3">
           Daily Volume — Last 7 Days
         </p>
         {sortedDays.length === 0 ? (
-          <p className="text-sm text-slate-400">No data yet.</p>
+          <p className="text-sm text-text3">No data yet.</p>
         ) : (
           <div className="flex items-end gap-2 h-24">
             {sortedDays.map(([day, count]) => (
               <div key={day} className="flex flex-1 flex-col items-center gap-1">
-                <span className="text-xs font-medium text-slate-700">{count}</span>
+                <span className="text-xs font-medium text-text2 font-mono">{count}</span>
                 <div
-                  className="w-full rounded-t bg-blue-500 transition-all duration-500"
+                  className="w-full rounded-t bg-sage transition-all duration-500"
                   style={{ height: `${(count / maxDaily) * 80}px`, minHeight: '4px' }}
                   title={`${day}: ${count} cases`}
                 />
-                <span className="text-[10px] text-slate-400">
+                <span className="text-[10px] text-text3 font-mono">
                   {day.slice(5)} {/* MM-DD */}
                 </span>
               </div>
@@ -154,16 +153,16 @@ export default function AnalyticsDashboard() {
 
       {/* Top ASHA workers */}
       {top_asha_workers.length > 0 && (
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <div className="rounded-lg border border-leaf/40 bg-surface p-4 shadow-card">
+          <p className="mb-3 text-xs font-mono font-semibold uppercase tracking-wide text-text3">
             Top Submitters — Last 30 Days
           </p>
           <div className="space-y-2">
             {top_asha_workers.map(({ name, count }, i) => (
               <div key={name} className="flex items-center gap-3">
-                <span className="w-4 text-xs font-bold text-slate-400">{i + 1}</span>
-                <span className="flex-1 text-sm text-slate-700 truncate">{name}</span>
-                <span className="text-xs font-semibold text-slate-500">{count}</span>
+                <span className="w-4 text-xs font-bold text-text3 font-mono">{i + 1}</span>
+                <span className="flex-1 text-sm text-text2 truncate">{name}</span>
+                <span className="text-xs font-semibold text-text3 font-mono">{count}</span>
               </div>
             ))}
           </div>
