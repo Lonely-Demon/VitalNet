@@ -7,10 +7,14 @@ import pickle
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, Optional
+from clinical_features import ClinicalFeatureEngineer
 
 # Model paths
 LEGACY_PKL_PATH = Path(__file__).parent / "models" / "triage_classifier.pkl"
 ENHANCED_PKL_PATH = Path(__file__).parent / "models" / "enhanced_triage_classifier.pkl"
+
+# Feature engineer for legacy classifier (45-feature pipeline)
+_feature_engineer = ClinicalFeatureEngineer()
 
 # Global classifier state
 _classifier = None
@@ -43,9 +47,15 @@ def load_classifier():
             _classifier_type = "enhanced"
             _model_info = _classifier.get_model_info()
 
-            print(f"[OK] Enhanced classifier loaded - version: {_model_info['model_version']}")
-            print(f"[OK] Model accuracy: {_model_info['performance_metrics'].get('accuracy', 'N/A'):.4f}")
-            print(f"[OK] Emergency recall: {_model_info['performance_metrics'].get('emergency_recall', 'N/A'):.4f}")
+            print(
+                f"[OK] Enhanced classifier loaded - version: {_model_info['model_version']}"
+            )
+            print(
+                f"[OK] Model accuracy: {_model_info['performance_metrics'].get('accuracy', 'N/A'):.4f}"
+            )
+            print(
+                f"[OK] Emergency recall: {_model_info['performance_metrics'].get('emergency_recall', 'N/A'):.4f}"
+            )
 
             return True
 
@@ -71,13 +81,15 @@ def load_classifier():
 
             _classifier_type = "legacy"
             _model_info = {
-                'model_version': '1.0.0',
-                'classifier_type': 'HistGradientBoostingClassifier',
-                'accuracy': _accuracy,
-                'emergency_fn': _emergency_fn
+                "model_version": "1.0.0",
+                "classifier_type": "HistGradientBoostingClassifier",
+                "accuracy": _accuracy,
+                "emergency_fn": _emergency_fn,
             }
 
-            print(f"[OK] Legacy classifier loaded - accuracy: {_accuracy:.4f}, emergency_fn: {_emergency_fn}")
+            print(
+                f"[OK] Legacy classifier loaded - accuracy: {_accuracy:.4f}, emergency_fn: {_emergency_fn}"
+            )
             return True
 
         except Exception as e:
@@ -113,22 +125,20 @@ def _predict_enhanced(form_data: Dict[str, Any]) -> Dict[str, Any]:
         result = _classifier.predict(form_data)
 
         # Extract risk driver from clinical features
-        clinical_features = result.get('clinical_features', {})
+        clinical_features = result.get("clinical_features", {})
         risk_driver = _generate_risk_explanation(
-            result['triage_level'],
-            clinical_features,
-            form_data
+            result["triage_level"], clinical_features, form_data
         )
 
         return {
-            "triage_level": result['triage_level'],
-            "confidence_score": result['confidence'],
+            "triage_level": result["triage_level"],
+            "confidence_score": result["confidence"],
             "risk_driver": risk_driver,
-            "model_version": result.get('model_version', 'N/A'),
-            "processing_time": result.get('processing_time', 'standard'),
-            "uncertainty": result.get('uncertainty', {}),
-            "probabilities": result.get('probabilities', {}),
-            "fast_path": result.get('fast_path', False)
+            "model_version": result.get("model_version", "N/A"),
+            "processing_time": result.get("processing_time", "standard"),
+            "uncertainty": result.get("uncertainty", {}),
+            "probabilities": result.get("probabilities", {}),
+            "fast_path": result.get("fast_path", False),
         }
 
     except Exception as e:
@@ -142,31 +152,14 @@ def _predict_enhanced(form_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _predict_legacy(form_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Run prediction using the legacy classifier"""
+    """Run prediction using the legacy classifier with 45-feature pipeline"""
     if _clf is None:
         raise RuntimeError("Legacy classifier not loaded")
 
-    symptoms = form_data.get("symptoms", [])
-
-    features = np.array([[
-        form_data.get("patient_age", -1),
-        1 if form_data.get("patient_sex", "").lower() == "male" else 0,
-        _safe_vital(form_data.get("bp_systolic")),
-        _safe_vital(form_data.get("bp_diastolic")),
-        _safe_vital(form_data.get("spo2")),
-        _safe_vital(form_data.get("heart_rate")),
-        _safe_vital(form_data.get("temperature")),
-        len([s for s in symptoms if s in [
-            'chest_pain', 'breathlessness', 'altered_consciousness',
-            'severe_bleeding', 'seizure', 'high_fever'
-        ]]),
-        1 if "chest_pain" in symptoms else 0,
-        1 if "breathlessness" in symptoms else 0,
-        1 if "altered_consciousness" in symptoms else 0,
-        1 if "severe_bleeding" in symptoms else 0,
-        1 if "seizure" in symptoms else 0,
-        1 if "high_fever" in symptoms else 0,
-    ]], dtype=np.float32)
+    # Use ClinicalFeatureEngineer to build the 45-feature vector
+    feat_dict = _feature_engineer.engineer_features(form_data)
+    feature_vector = [feat_dict[name] for name in _feature_names]
+    features = np.array([feature_vector], dtype=np.float32)
 
     pred = _clf.predict(features)[0]
     triage_level = _label_map[pred]
@@ -180,12 +173,13 @@ def _predict_legacy(form_data: Dict[str, Any]) -> Dict[str, Any]:
         "risk_driver": risk_driver,
         "model_version": "1.0.0-legacy",
         "processing_time": "legacy",
-        "fast_path": False
+        "fast_path": False,
     }
 
 
-def _generate_risk_explanation(triage_level: str, clinical_features: Dict[str, float],
-                             form_data: Dict[str, Any]) -> str:
+def _generate_risk_explanation(
+    triage_level: str, clinical_features: Dict[str, float], form_data: Dict[str, Any]
+) -> str:
     """
     Generate a human-readable risk explanation from enhanced classifier features
     """
@@ -194,20 +188,24 @@ def _generate_risk_explanation(triage_level: str, clinical_features: Dict[str, f
         high_risk_features = {}
 
         # Check vital sign abnormalities
-        if clinical_features.get('cardiac_risk_score', 0) >= 3.0:
-            high_risk_features['Cardiac risk'] = clinical_features['cardiac_risk_score']
-        if clinical_features.get('respiratory_distress_score', 0) >= 2.0:
-            high_risk_features['Respiratory distress'] = clinical_features['respiratory_distress_score']
-        if clinical_features.get('hemodynamic_instability', 0) >= 2.0:
-            high_risk_features['Hemodynamic instability'] = clinical_features['hemodynamic_instability']
-        if clinical_features.get('sepsis_risk_score', 0) >= 2.0:
-            high_risk_features['Sepsis risk'] = clinical_features['sepsis_risk_score']
+        if clinical_features.get("cardiac_risk_score", 0) >= 3.0:
+            high_risk_features["Cardiac risk"] = clinical_features["cardiac_risk_score"]
+        if clinical_features.get("respiratory_distress_score", 0) >= 2.0:
+            high_risk_features["Respiratory distress"] = clinical_features[
+                "respiratory_distress_score"
+            ]
+        if clinical_features.get("hemodynamic_instability", 0) >= 2.0:
+            high_risk_features["Hemodynamic instability"] = clinical_features[
+                "hemodynamic_instability"
+            ]
+        if clinical_features.get("sepsis_risk_score", 0) >= 2.0:
+            high_risk_features["Sepsis risk"] = clinical_features["sepsis_risk_score"]
 
         # Check specific vitals
-        spo2 = form_data.get('spo2', 97)
-        hr = form_data.get('heart_rate', 75)
-        bp_sys = form_data.get('bp_systolic', 120)
-        temp = form_data.get('temperature', 37.0)
+        spo2 = form_data.get("spo2", 97)
+        hr = form_data.get("heart_rate", 75)
+        bp_sys = form_data.get("bp_systolic", 120)
+        temp = form_data.get("temperature", 37.0)
 
         vital_explanations = []
         if spo2 and spo2 < 90:
@@ -231,39 +229,49 @@ def _generate_risk_explanation(triage_level: str, clinical_features: Dict[str, f
             vital_explanations.append(f"dangerously low temperature ({temp}°C)")
 
         # Check symptom combinations
-        symptoms = form_data.get('symptoms', [])
+        symptoms = form_data.get("symptoms", [])
         symptom_explanations = []
 
-        if 'altered_consciousness' in symptoms:
+        if "altered_consciousness" in symptoms:
             symptom_explanations.append("altered consciousness")
-        if 'severe_bleeding' in symptoms:
+        if "severe_bleeding" in symptoms:
             symptom_explanations.append("severe bleeding")
-        if 'seizure' in symptoms:
+        if "seizure" in symptoms:
             symptom_explanations.append("seizure activity")
-        if 'chest_pain' in symptoms and 'breathlessness' in symptoms:
+        if "chest_pain" in symptoms and "breathlessness" in symptoms:
             symptom_explanations.append("chest pain with difficulty breathing")
-        elif 'chest_pain' in symptoms:
+        elif "chest_pain" in symptoms:
             symptom_explanations.append("chest pain")
-        elif 'breathlessness' in symptoms:
+        elif "breathlessness" in symptoms:
             symptom_explanations.append("difficulty breathing")
 
         # Build explanation
         explanation_parts = []
 
         if vital_explanations:
-            explanation_parts.append("vital signs showed " + ", ".join(vital_explanations[:2]))
+            explanation_parts.append(
+                "vital signs showed " + ", ".join(vital_explanations[:2])
+            )
 
         if symptom_explanations:
-            explanation_parts.append("patient presented with " + ", ".join(symptom_explanations[:2]))
+            explanation_parts.append(
+                "patient presented with " + ", ".join(symptom_explanations[:2])
+            )
 
         if high_risk_features:
             top_risk = max(high_risk_features.items(), key=lambda x: x[1])
-            explanation_parts.append(f"{top_risk[0].lower()} was significantly elevated")
+            explanation_parts.append(
+                f"{top_risk[0].lower()} was significantly elevated"
+            )
 
         if explanation_parts:
-            base_explanation = "Primary risk factors: " + "; ".join(explanation_parts[:3])
+            base_explanation = "Primary risk factors: " + "; ".join(
+                explanation_parts[:3]
+            )
         else:
-            base_explanation = "Multiple clinical indicators contributed to this triage decision"
+            base_explanation = (
+                "Multiple clinical indicators contributed to this triage decision"
+            )
 
         return f"{base_explanation}. Classified as {triage_level}."
 
@@ -286,8 +294,12 @@ def _get_legacy_risk_driver(features: np.ndarray, triage_level: str) -> str:
 
         # Format value with appropriate unit
         units = {
-            "spo2": "%", "heart_rate": " bpm", "temperature": "°C",
-            "bp_systolic": " mmHg", "bp_diastolic": " mmHg", "age": " yrs"
+            "spo2": "%",
+            "heart_rate": " bpm",
+            "temperature": "°C",
+            "bp_systolic": " mmHg",
+            "bp_diastolic": " mmHg",
+            "age": " yrs",
         }
         unit = units.get(top_feat, "")
         val_str = f"{top_val:.1f}{unit}" if top_val != -1 else "not recorded"
@@ -311,7 +323,7 @@ def get_classifier_info() -> Dict[str, Any]:
     return {
         "classifier_type": _classifier_type,
         "model_info": _model_info,
-        "is_enhanced": _classifier_type == "enhanced"
+        "is_enhanced": _classifier_type == "enhanced",
     }
 
 

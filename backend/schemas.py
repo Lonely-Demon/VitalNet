@@ -11,11 +11,11 @@ class IntakeForm(BaseModel):
     complaint_duration: str
     location: str
 
-    bp_systolic: Optional[int] = Field(None, ge=50, le=250)
-    bp_diastolic: Optional[int] = Field(None, ge=30, le=150)
-    spo2: Optional[int] = Field(None, ge=70, le=100)
-    heart_rate: Optional[int] = Field(None, ge=20, le=220)
-    temperature: Optional[float] = Field(None, ge=30.0, le=45.0)
+    bp_systolic: Optional[int] = Field(None, ge=30, le=300)
+    bp_diastolic: Optional[int] = Field(None, ge=10, le=200)
+    spo2: Optional[int] = Field(None, ge=50, le=100)
+    heart_rate: Optional[int] = Field(None, ge=10, le=250)
+    temperature: Optional[float] = Field(None, ge=25.0, le=45.0)
 
     symptoms: List[str] = []
     observations: Optional[str] = Field(None, max_length=500)

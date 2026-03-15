@@ -86,7 +86,14 @@ export async function processQueue() {
         // Conflict = already inserted (duplicate from retry)
         await dequeue(item.client_id)
         synced++
+      } else if (res.status === 422) {
+        // Permanent validation error — payload will never pass.
+        // Dequeue to stop infinite retry loop, log for debugging.
+        console.warn('[VitalNet] Dequeuing invalid offline case', item.client_id, await res.text())
+        await dequeue(item.client_id)
+        failed++
       } else {
+        // Transient error (500, 503, etc.) — leave in queue for next attempt
         failed++
       }
     } catch {

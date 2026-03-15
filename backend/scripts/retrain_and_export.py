@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-Retrain the VitalNet triage classifier with clinically realistic synthetic data.
+Retrain the VitalNet triage classifier with clinically realistic synthetic data
+using the full 45-feature ClinicalFeatureEngineer pipeline.
 
-Fixes the original model's problem: uniform-random vitals over extreme ranges
-caused 76.7% of patients to be labeled EMERGENCY, and class_weight={2:10}
-made the model always predict EMERGENCY.
+This ensures the exported ONNX model expects the same 45-feature vector that
+the frontend (triageClassifier.js) builds at inference time.
+
+Fixes the previous model's problem: the old script trained on 14 raw features
+but the frontend sends 45 engineered features, causing a shape mismatch and
+silent ONNX inference failure during offline mode.
 
 This version:
-  - Generates patients per triage category for balanced classes
-  - Uses normal distributions centered on clinically plausible vitals
-  - Applies moderate class weights (EMERGENCY=3x, not 10x)
-  - Saves the .pkl in the same format expected by backend/classifier.py
-  - Also re-exports the ONNX model for frontend inference
+  - Generates patients per triage category with realistic profiles
+  - Runs each synthetic patient through ClinicalFeatureEngineer (45 features)
+  - Trains a HistGradientBoostingClassifier on the 45-feature vectors
+  - Saves the .pkl in the format expected by backend/classifier.py
+  - Exports the ONNX model (45-feature input) for frontend inference
 
 Usage:
     pip install scikit-learn shap skl2onnx onnxruntime numpy
@@ -19,6 +23,7 @@ Usage:
 """
 
 import os
+import sys
 import pickle
 import warnings
 import numpy as np
@@ -28,12 +33,20 @@ from sklearn.metrics import classification_report, accuracy_score, confusion_mat
 
 warnings.filterwarnings("ignore")
 
+# Add backend directory to path so we can import ClinicalFeatureEngineer
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-PKL_PATH = os.path.join(PROJECT_ROOT, "backend", "models", "triage_classifier.pkl")
+BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
+sys.path.insert(0, BACKEND_DIR)
+
+from clinical_features import ClinicalFeatureEngineer
+
+PKL_PATH = os.path.join(BACKEND_DIR, "models", "triage_classifier.pkl")
 ONNX_DIR = os.path.join(PROJECT_ROOT, "frontend", "public", "models")
 ONNX_PATH = os.path.join(ONNX_DIR, "triage_classifier.onnx")
 
+# 45 feature names matching the ClinicalFeatureEngineer output order
 FEATURE_NAMES = [
+    # Basic (14)
     "age",
     "sex",
     "bp_systolic",
@@ -48,73 +61,209 @@ FEATURE_NAMES = [
     "severe_bleeding",
     "seizure",
     "high_fever",
+    # Vital-derived (12)
+    "pulse_pressure",
+    "mean_arterial_pressure",
+    "shock_index",
+    "spo2_age_ratio",
+    "temp_deviation",
+    "cardiac_risk_score",
+    "respiratory_distress_score",
+    "hemodynamic_instability",
+    "sepsis_risk_score",
+    "pediatric_adjustment",
+    "geriatric_adjustment",
+    "pregnancy_adjustment",
+    # Symptom interaction (8)
+    "cardiopulmonary_cluster",
+    "neurological_cluster",
+    "hemorrhagic_cluster",
+    "infectious_cluster",
+    "symptom_severity_score",
+    "symptom_duration_risk",
+    "chief_complaint_risk",
+    "comorbidity_multiplier",
+    # Age-specific (6)
+    "pediatric_fever_risk",
+    "elderly_fall_risk",
+    "adult_cardiac_risk",
+    "obstetric_emergency_risk",
+    "trauma_severity_score",
+    "mental_health_crisis",
+    # Contextual (5)
+    "time_of_day_risk",
+    "seasonal_risk",
+    "geographic_risk",
+    "epidemic_alert_level",
+    "healthcare_accessibility",
 ]
+
+NUM_FEATURES = len(FEATURE_NAMES)  # 45
+
 LABEL_MAP = {0: "ROUTINE", 1: "URGENT", 2: "EMERGENCY"}
 
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
+# Feature engineer instance
+engineer = ClinicalFeatureEngineer()
 
-# ---------------------------------------------------------------------------
-# Synthetic data generation — per-category with realistic distributions
-# ---------------------------------------------------------------------------
+CRITICAL_SYMPTOMS = [
+    "chest_pain",
+    "breathlessness",
+    "altered_consciousness",
+    "severe_bleeding",
+    "seizure",
+    "high_fever",
+]
+
+COMPLAINTS_ROUTINE = [
+    "Headache / dizziness",
+    "Nausea / vomiting",
+    "Weakness / fatigue",
+    "Fever",
+    "Other",
+]
+COMPLAINTS_URGENT = [
+    "Chest pain / tightness",
+    "Breathlessness / difficulty breathing",
+    "Fever",
+    "Abdominal pain",
+    "Baby / child unwell",
+    "Pregnancy complication",
+]
+COMPLAINTS_EMERGENCY = [
+    "Chest pain / tightness",
+    "Breathlessness / difficulty breathing",
+    "Altered consciousness / confusion",
+    "Seizure",
+    "Severe bleeding",
+    "Injury / trauma",
+]
+
+DURATIONS = [
+    "Less than 1 hour",
+    "1\u20136 hours",
+    "6\u201324 hours",
+    "1\u20133 days",
+    "More than 3 days",
+]
+
+LOCATIONS = [
+    "Rampur Village",
+    "Kothagudem Town",
+    "Mumbai City",
+    "Remote Tribal Area",
+    "Rural District",
+    "Metro Urban",
+]
 
 
 def clip(val, lo, hi):
     return max(lo, min(hi, val))
 
 
+def random_symptoms(prob_map):
+    """Pick symptoms according to individual probabilities."""
+    selected = []
+    for sym, prob in prob_map.items():
+        if np.random.random() < prob:
+            selected.append(sym)
+    return selected
+
+
+def _form_data(
+    age,
+    sex,
+    bp_sys,
+    bp_dia,
+    spo2,
+    hr,
+    temp,
+    symptoms,
+    complaint,
+    duration,
+    location,
+    conditions="",
+):
+    """Build a form_data dict matching what ClinicalFeatureEngineer expects."""
+    return {
+        "patient_age": age,
+        "patient_sex": sex,
+        "bp_systolic": bp_sys,
+        "bp_diastolic": bp_dia,
+        "spo2": spo2,
+        "heart_rate": hr,
+        "temperature": temp,
+        "symptoms": symptoms,
+        "chief_complaint": complaint,
+        "complaint_duration": duration,
+        "location": location,
+        "known_conditions": conditions,
+        "observations": "",
+        "current_medications": "",
+    }
+
+
+def form_to_feature_vector(form_data):
+    """Run ClinicalFeatureEngineer and return a 45-element list in correct order."""
+    feat_dict = engineer.engineer_features(form_data)
+    return [feat_dict[name] for name in FEATURE_NAMES]
+
+
+# ---------------------------------------------------------------------------
+# Synthetic data generation -- per-category with realistic distributions
+# ---------------------------------------------------------------------------
+
+
 def generate_routine(n):
     """Healthy patients: normal vitals, few/no alarming symptoms."""
-    patients = []
+    records = []
     for _ in range(n):
         age = clip(int(np.random.normal(40, 18)), 1, 84)
-        sex = np.random.randint(0, 2)
+        sex = np.random.choice(["male", "female"])
         bp_sys = clip(int(np.random.normal(120, 10)), 90, 140)
         bp_dia = clip(int(np.random.normal(78, 8)), 55, 90)
         spo2 = clip(int(np.random.normal(97, 1.5)), 95, 100)
         hr = clip(int(np.random.normal(75, 10)), 55, 100)
         temp = clip(round(np.random.normal(37.0, 0.4), 1), 36.0, 37.8)
-        # Routine patients: no critical symptoms
-        chest_pain = 0
-        breathlessness = 0
-        alt_conscious = 0
-        sev_bleeding = 0
-        seizure = 0
-        high_fever = 0
-        symptom_count = 0
-        patients.append(
-            [
-                age,
-                sex,
-                bp_sys,
-                bp_dia,
-                spo2,
-                hr,
-                temp,
-                symptom_count,
-                chest_pain,
-                breathlessness,
-                alt_conscious,
-                sev_bleeding,
-                seizure,
-                high_fever,
-            ]
+        symptoms = []  # Routine patients: no critical symptoms
+        complaint = np.random.choice(COMPLAINTS_ROUTINE)
+        duration = np.random.choice(
+            ["1\u20133 days", "More than 3 days", "6\u201324 hours"]
         )
-    return patients
+        location = np.random.choice(LOCATIONS)
+        conditions = np.random.choice(
+            ["", "", "", "diabetes", "hypertension"], p=[0.5, 0.2, 0.1, 0.1, 0.1]
+        )
+
+        fd = _form_data(
+            age,
+            sex,
+            bp_sys,
+            bp_dia,
+            spo2,
+            hr,
+            temp,
+            symptoms,
+            complaint,
+            duration,
+            location,
+            conditions,
+        )
+        records.append(form_to_feature_vector(fd))
+    return records
 
 
 def generate_urgent(n):
     """Patients with borderline vitals or concerning but non-critical symptoms."""
-    patients = []
+    records = []
     for _ in range(n):
         age = clip(int(np.random.normal(50, 18)), 1, 84)
-        sex = np.random.randint(0, 2)
+        sex = np.random.choice(["male", "female"])
 
-        # Pick 1-2 abnormal vital signs (borderline, not extreme)
         pattern = np.random.choice(["bp_high", "hr_high", "spo2_low", "fever", "multi"])
 
-        # Start with normal-ish baselines
         bp_sys = clip(int(np.random.normal(130, 12)), 100, 175)
         bp_dia = clip(int(np.random.normal(85, 10)), 60, 100)
         spo2 = clip(int(np.random.normal(95, 2)), 90, 99)
@@ -134,50 +283,49 @@ def generate_urgent(n):
             hr = clip(int(np.random.normal(110, 8)), 100, 125)
 
         # May have some concerning symptoms (not the most critical)
-        high_fever = 1 if temp >= 38.9 else np.random.choice([0, 1], p=[0.6, 0.4])
-        chest_pain = np.random.choice([0, 1], p=[0.65, 0.35])
-        breathlessness = np.random.choice([0, 1], p=[0.6, 0.4])
-        alt_conscious = 0
-        sev_bleeding = 0
-        seizure = 0
-        symptom_count = sum(
-            [
-                chest_pain,
-                breathlessness,
-                alt_conscious,
-                sev_bleeding,
-                seizure,
-                high_fever,
-            ]
+        symptom_probs = {
+            "high_fever": 0.4 if temp >= 38.9 else 0.2,
+            "chest_pain": 0.35,
+            "breathlessness": 0.4,
+            "altered_consciousness": 0.0,
+            "severe_bleeding": 0.0,
+            "seizure": 0.0,
+        }
+        symptoms = random_symptoms(symptom_probs)
+
+        complaint = np.random.choice(COMPLAINTS_URGENT)
+        duration = np.random.choice(
+            ["Less than 1 hour", "1\u20136 hours", "6\u201324 hours"]
+        )
+        location = np.random.choice(LOCATIONS)
+        conditions = np.random.choice(
+            ["", "diabetes", "hypertension", "asthma", ""], p=[0.3, 0.2, 0.2, 0.1, 0.2]
         )
 
-        patients.append(
-            [
-                age,
-                sex,
-                bp_sys,
-                bp_dia,
-                spo2,
-                hr,
-                temp,
-                symptom_count,
-                chest_pain,
-                breathlessness,
-                alt_conscious,
-                sev_bleeding,
-                seizure,
-                high_fever,
-            ]
+        fd = _form_data(
+            age,
+            sex,
+            bp_sys,
+            bp_dia,
+            spo2,
+            hr,
+            temp,
+            symptoms,
+            complaint,
+            duration,
+            location,
+            conditions,
         )
-    return patients
+        records.append(form_to_feature_vector(fd))
+    return records
 
 
 def generate_emergency(n):
     """Patients with critical vitals or alarming symptoms."""
-    patients = []
+    records = []
     for _ in range(n):
         age = clip(int(np.random.normal(55, 20)), 1, 84)
-        sex = np.random.randint(0, 2)
+        sex = np.random.choice(["male", "female"])
 
         pattern = np.random.choice(
             [
@@ -195,7 +343,6 @@ def generate_emergency(n):
             ]
         )
 
-        # Baselines that will be overridden
         bp_sys = clip(int(np.random.normal(120, 15)), 85, 170)
         bp_dia = clip(int(np.random.normal(75, 10)), 45, 100)
         spo2 = clip(int(np.random.normal(94, 4)), 80, 99)
@@ -233,45 +380,54 @@ def generate_emergency(n):
             hr = clip(int(np.random.normal(135, 10)), 120, 160)
             bp_sys = clip(int(np.random.normal(75, 8)), 55, 85)
 
-        chest_pain = np.random.choice([0, 1], p=[0.4, 0.6])
-        breathlessness = np.random.choice([0, 1], p=[0.35, 0.65])
-        high_fever = 1 if temp >= 38.9 else np.random.choice([0, 1], p=[0.5, 0.5])
-        symptom_count = sum(
-            [
-                chest_pain,
-                breathlessness,
-                alt_conscious,
-                sev_bleeding,
-                seizure_flag,
-                high_fever,
-            ]
+        # Emergency patients tend to have alarming symptoms
+        symptom_probs = {
+            "chest_pain": 0.6,
+            "breathlessness": 0.65,
+            "high_fever": 0.5 if temp >= 38.9 else 0.3,
+            "altered_consciousness": 0.0,
+            "severe_bleeding": 0.0,
+            "seizure": 0.0,
+        }
+        symptoms = random_symptoms(symptom_probs)
+        # Add pattern-specific critical symptoms
+        if alt_conscious:
+            symptoms.append("altered_consciousness")
+        if sev_bleeding:
+            symptoms.append("severe_bleeding")
+        if seizure_flag:
+            symptoms.append("seizure")
+
+        complaint = np.random.choice(COMPLAINTS_EMERGENCY)
+        duration = np.random.choice(["Less than 1 hour", "1\u20136 hours"])
+        location = np.random.choice(LOCATIONS)
+        conditions = np.random.choice(
+            ["", "diabetes", "heart disease", "copd", "kidney disease"],
+            p=[0.2, 0.2, 0.2, 0.2, 0.2],
         )
 
-        patients.append(
-            [
-                age,
-                sex,
-                bp_sys,
-                bp_dia,
-                spo2,
-                hr,
-                temp,
-                symptom_count,
-                chest_pain,
-                breathlessness,
-                alt_conscious,
-                sev_bleeding,
-                seizure_flag,
-                high_fever,
-            ]
+        fd = _form_data(
+            age,
+            sex,
+            bp_sys,
+            bp_dia,
+            spo2,
+            hr,
+            temp,
+            symptoms,
+            complaint,
+            duration,
+            location,
+            conditions,
         )
-    return patients
+        records.append(form_to_feature_vector(fd))
+    return records
 
 
 # ---------------------------------------------------------------------------
 # Generate balanced dataset
 # ---------------------------------------------------------------------------
-print("[1/6] Generating balanced synthetic data ...")
+print(f"[1/6] Generating balanced synthetic data ({NUM_FEATURES} features) ...")
 
 N_PER_CLASS = 2000  # 6000 total
 
@@ -284,6 +440,8 @@ labels = [0] * N_PER_CLASS + [1] * N_PER_CLASS + [2] * N_PER_CLASS
 
 X = np.array(data, dtype=np.float32)
 y = np.array(labels)
+
+assert X.shape[1] == NUM_FEATURES, f"Expected {NUM_FEATURES} features, got {X.shape[1]}"
 
 unique, counts = np.unique(y, return_counts=True)
 for lbl, cnt in zip(unique, counts):
@@ -358,7 +516,7 @@ from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 from onnx import helper as onnx_helper
 
-# Monkey-patch to fix bool→int bug in skl2onnx 1.20
+# Monkey-patch to fix bool->int bug in skl2onnx 1.20
 _orig = onnx_helper.make_attribute
 
 
@@ -372,7 +530,7 @@ def _patched(key, value):
 
 onnx_helper.make_attribute = _patched
 try:
-    initial_type = [("float_input", FloatTensorType([None, 14]))]
+    initial_type = [("float_input", FloatTensorType([None, NUM_FEATURES]))]
     onnx_model = convert_sklearn(
         clf,
         initial_types=initial_type,
@@ -395,29 +553,140 @@ print(f"       ONNX model: {os.path.getsize(ONNX_PATH) / 1024:.1f} KB")
 # ---------------------------------------------------------------------------
 # Sanity check
 # ---------------------------------------------------------------------------
-print("[6/6] Sanity check ...")
+print("[6/6] Sanity check with full 45-feature pipeline ...")
 
 import onnxruntime as onnxrt
 
 sess = onnxrt.InferenceSession(onnx_model.SerializeToString())
 
 test_cases = [
-    ("Healthy 30M", [30, 1, 120, 78, 98, 72, 37.0, 0, 0, 0, 0, 0, 0, 0], "ROUTINE"),
-    ("Healthy 25F", [25, 0, 115, 72, 99, 68, 36.8, 0, 0, 0, 0, 0, 0, 0], "ROUTINE"),
-    ("High BP + fever", [55, 1, 168, 95, 93, 115, 39.5, 3, 1, 1, 0, 0, 0, 1], "URGENT"),
-    ("Tachycardia", [45, 0, 140, 88, 94, 122, 38.5, 2, 0, 1, 0, 0, 0, 0], "URGENT"),
-    ("Hypoxic", [70, 1, 90, 60, 84, 110, 38.0, 2, 1, 1, 0, 0, 0, 0], "EMERGENCY"),
     (
-        "Altered mental",
-        [60, 0, 100, 65, 92, 100, 37.5, 1, 0, 0, 1, 0, 0, 0],
+        "Healthy 30M",
+        _form_data(
+            30,
+            "male",
+            120,
+            78,
+            98,
+            72,
+            37.0,
+            [],
+            "Headache / dizziness",
+            "1\u20133 days",
+            "Mumbai City",
+        ),
+        "ROUTINE",
+    ),
+    (
+        "Healthy 25F",
+        _form_data(
+            25,
+            "female",
+            115,
+            72,
+            99,
+            68,
+            36.8,
+            [],
+            "Nausea / vomiting",
+            "More than 3 days",
+            "Kothagudem Town",
+        ),
+        "ROUTINE",
+    ),
+    (
+        "High BP + fever",
+        _form_data(
+            55,
+            "male",
+            168,
+            95,
+            93,
+            115,
+            39.5,
+            ["chest_pain", "breathlessness", "high_fever"],
+            "Chest pain / tightness",
+            "1\u20136 hours",
+            "Rampur Village",
+            "hypertension",
+        ),
+        "URGENT",
+    ),
+    (
+        "Tachycardia",
+        _form_data(
+            45,
+            "female",
+            140,
+            88,
+            94,
+            122,
+            38.5,
+            ["breathlessness"],
+            "Breathlessness / difficulty breathing",
+            "6\u201324 hours",
+            "Remote Tribal Area",
+        ),
+        "URGENT",
+    ),
+    (
+        "Hypoxic + chest",
+        _form_data(
+            70,
+            "male",
+            90,
+            60,
+            84,
+            110,
+            38.0,
+            ["chest_pain", "breathlessness"],
+            "Chest pain / tightness",
+            "Less than 1 hour",
+            "Rural District",
+            "heart disease",
+        ),
         "EMERGENCY",
     ),
-    ("Seizure", [8, 1, 100, 65, 96, 140, 40.5, 2, 0, 0, 0, 0, 1, 1], "EMERGENCY"),
+    (
+        "Altered mental",
+        _form_data(
+            60,
+            "female",
+            100,
+            65,
+            92,
+            100,
+            37.5,
+            ["altered_consciousness"],
+            "Altered consciousness / confusion",
+            "Less than 1 hour",
+            "Rampur Village",
+        ),
+        "EMERGENCY",
+    ),
+    (
+        "Seizure child",
+        _form_data(
+            8,
+            "male",
+            100,
+            65,
+            96,
+            140,
+            40.5,
+            ["seizure", "high_fever"],
+            "Seizure",
+            "Less than 1 hour",
+            "Remote Tribal Area",
+        ),
+        "EMERGENCY",
+    ),
 ]
 
 all_pass = True
-for name, feats, expected in test_cases:
-    x = np.array([feats], dtype=np.float32)
+for name, fd, expected in test_cases:
+    feature_vector = form_to_feature_vector(fd)
+    x = np.array([feature_vector], dtype=np.float32)
     out = sess.run(None, {"float_input": x})
     pred_idx = int(out[0][0])
     pred_label = LABEL_MAP[pred_idx]
@@ -431,8 +700,9 @@ if all_pass:
     print("\n       All sanity checks passed!")
 else:
     print(
-        "\n       Some predictions didn't match expected — review the mismatches above."
+        "\n       Some predictions didn't match expected -- review the mismatches above."
     )
     print("       (Minor mismatches may be acceptable for borderline cases.)")
 
-print(f"\nDone. Frontend model at: {ONNX_PATH}")
+print(f"\nDone. Frontend ONNX model at: {ONNX_PATH}")
+print(f"     Features: {NUM_FEATURES} (matches frontend triageClassifier.js)")

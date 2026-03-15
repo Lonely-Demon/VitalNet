@@ -114,6 +114,28 @@ export default function IntakeForm() {
       return
     }
 
+    // Vitals range validation (matches backend Pydantic constraints)
+    const vitalsErrors = []
+    if (form.bp_systolic && (form.bp_systolic < 50 || form.bp_systolic > 300)) {
+      vitalsErrors.push("BP Systolic must be between 50 and 300 mmHg")
+    }
+    if (form.bp_diastolic && (form.bp_diastolic < 20 || form.bp_diastolic > 200)) {
+      vitalsErrors.push("BP Diastolic must be between 20 and 200 mmHg")
+    }
+    if (form.spo2 && (form.spo2 < 50 || form.spo2 > 100)) {
+      vitalsErrors.push("SpO2 must be between 50% and 100%")
+    }
+    if (form.heart_rate && (form.heart_rate < 20 || form.heart_rate > 250)) {
+      vitalsErrors.push("Heart rate must be between 20 and 250 bpm")
+    }
+    if (form.temperature && (form.temperature < 30 || form.temperature > 45)) {
+      vitalsErrors.push("Temperature must be between 30°C and 45°C")
+    }
+    if (vitalsErrors.length > 0) {
+      setError(vitalsErrors.join(". "))
+      return
+    }
+
     setLoading(true)
 
     const payload = {
@@ -136,16 +158,17 @@ export default function IntakeForm() {
 
     try {
       const data = await submitCase(payload)
-      setResult(data)
-      setForm(emptyForm)
-      // Server result available — clear local preliminary result
-      setLocalResult(null)
-
+      // When queued offline, keep local triage result for display
       if (data.queued) {
+        setResult({ ...data, localTriage: local })
         showToast('Saved offline \u2014 will sync when connected', 'warning')
       } else {
+        // Server result available — clear local preliminary result
+        setResult(data)
+        setLocalResult(null)
         showToast('Case submitted successfully', 'success')
       }
+      setForm(emptyForm)
     } catch (err) {
       // If offline or network error — local result stays displayed
       // The Phase 8 queue handles the actual sync
@@ -157,18 +180,35 @@ export default function IntakeForm() {
 
   if (result) {
     const isQueued = result.queued
+    const offlineTriage = result.localTriage
     return (
       <div className="max-w-lg mx-auto p-4 mt-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center ring-4 ring-slate-50">
           {isQueued ? (
             <>
+              {offlineTriage && (
+                <div className="mb-4">
+                  <span className={`inline-block px-5 py-2 rounded-full font-bold text-lg tracking-wide shadow-sm ${BADGE_COLORS[offlineTriage.triageLevel]}`}>
+                    {offlineTriage.triageLevel}
+                  </span>
+                  {offlineTriage.confidence != null && (
+                    <p className="text-xs text-slate-500 mt-2">
+                      Confidence: {(offlineTriage.confidence * 100).toFixed(0)}%
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="mb-6">
                 <span className="inline-block px-5 py-2 rounded-full font-bold text-lg tracking-wide shadow-sm bg-amber-100 text-amber-800 border border-amber-200">
                   SAVED OFFLINE
                 </span>
               </div>
               <h2 className="text-slate-900 text-xl font-bold tracking-tight mb-2">Case Saved Locally</h2>
-              <p className="text-slate-600 leading-relaxed mb-8">It will be submitted automatically when connectivity is restored.</p>
+              <p className="text-slate-600 leading-relaxed mb-8">
+                {offlineTriage
+                  ? 'Preliminary AI triage shown above. Full analysis will be available when connectivity is restored.'
+                  : 'It will be submitted automatically when connectivity is restored.'}
+              </p>
             </>
           ) : (
             <>

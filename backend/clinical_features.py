@@ -42,22 +42,24 @@ class ClinicalFeatureEngineer:
         Returns:
             Dictionary of engineered features
         """
+        # Sanitize None values so .get(key, default) correctly falls back to default
+        safe_data = {k: v for k, v in raw_data.items() if v is not None}
         features = {}
 
         # Extract basic features (14 original)
-        features.update(self._extract_basic_features(raw_data))
+        features.update(self._extract_basic_features(safe_data))
 
         # Vital sign ratios and derivatives (12 features)
-        features.update(self._engineer_vital_features(raw_data))
+        features.update(self._engineer_vital_features(safe_data))
 
         # Symptom interaction features (8 features)
-        features.update(self._engineer_symptom_features(raw_data))
+        features.update(self._engineer_symptom_features(safe_data))
 
         # Age-specific clinical rules (6 features)
-        features.update(self._engineer_age_specific_features(raw_data))
+        features.update(self._engineer_age_specific_features(safe_data))
 
         # Contextual features (5 features)
-        features.update(self._engineer_contextual_features(raw_data))
+        features.update(self._engineer_contextual_features(safe_data))
 
         return features
 
