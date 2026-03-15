@@ -50,6 +50,7 @@ const BADGE_COLORS = {
 }
 
 const emptyForm = {
+  patient_name: "",
   patient_age: "",
   patient_sex: "",
   chief_complaint: "",
@@ -102,7 +103,7 @@ export default function IntakeForm() {
     setLocalResult(null)
 
     // Required field validation
-    if (!form.patient_age || !form.patient_sex ||
+    if (!form.patient_name?.trim() || !form.patient_age || !form.patient_sex ||
         !form.chief_complaint || !form.complaint_duration || !form.location) {
       setError("Please fill all required fields (marked with *)")
       return
@@ -142,6 +143,7 @@ export default function IntakeForm() {
       ...form,
       // Use custom complaint when "Other" is selected
       chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint.trim() : form.chief_complaint,
+      patient_name: form.patient_name.trim(),
       patient_age: parseInt(form.patient_age),
       bp_systolic: form.bp_systolic ? parseInt(form.bp_systolic) : null,
       bp_diastolic: form.bp_diastolic ? parseInt(form.bp_diastolic) : null,
@@ -252,6 +254,10 @@ export default function IntakeForm() {
 
       {/* Patient */}
       <Section title="Patient Details">
+        <Field label="Patient Name *">
+          <input name="patient_name" value={form.patient_name} onChange={handleChange}
+            placeholder="e.g. Priya Sharma" className={inputClass} maxLength={100} />
+        </Field>
         <Field label="Age (years) *">
           <input name="patient_age" type="number" value={form.patient_age}
             onChange={handleChange} placeholder="e.g. 45" className={inputClass} />

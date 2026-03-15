@@ -32,41 +32,43 @@ app.include_router(analytics_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        'http://localhost:5173',
-        'http://127.0.0.1:5173',
-        'http://localhost:4173',
-        'http://127.0.0.1:4173',
-        os.getenv('FRONTEND_URL', '').rstrip('/'),
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+        os.getenv("FRONTEND_URL", "").rstrip("/"),
     ],
     allow_credentials=True,
-    allow_methods=['*'],
-    allow_headers=['*'],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
 # ── Health Check ───────────────────────────────────────────────────────────
 
-@app.get('/api/health')
+
+@app.get("/api/health")
 async def health():
     try:
-        supabase_anon.table('facilities').select('id').limit(1).execute()
-        db_status = 'connected'
+        supabase_anon.table("facilities").select("id").limit(1).execute()
+        db_status = "connected"
     except Exception as e:
-        db_status = f'error: {str(e)}'
+        db_status = f"error: {str(e)}"
     return {
-        'status': 'ok',
-        'database': db_status,
-        'classifier': 'loaded',
+        "status": "ok",
+        "database": db_status,
+        "classifier": "loaded",
     }
 
 
 # ── Submit Case ────────────────────────────────────────────────────────────
 
-@app.post('/api/submit')
+
+@app.post("/api/submit")
 async def submit_case(
     form: IntakeForm,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('asha_worker', 'admin')),
+    user: dict = Depends(require_role("asha_worker", "admin")),
 ):
     form_data = form.model_dump()
 
@@ -77,101 +79,113 @@ async def submit_case(
     briefing = generate_briefing(form_data, triage_result)
 
     # Step 3: Write to Supabase via user-scoped client (RLS enforced)
-    raw_token = authorization.split(' ', 1)[1]
+    raw_token = authorization.split(" ", 1)[1]
     db = get_supabase_for_user(raw_token)
 
     record = {
-        'client_id':           str(form.client_id or uuid_lib.uuid4()),
-        'submitted_by':        user['sub'],
-        'facility_id':         user.get('user_metadata', {}).get('facility_id') or None,
-        'patient_age':         form.patient_age,
-        'patient_sex':         form.patient_sex,
-        'patient_location':    form.location,
-        'bp_systolic':         form.bp_systolic,
-        'bp_diastolic':        form.bp_diastolic,
-        'spo2':                form.spo2,
-        'heart_rate':          form.heart_rate,
-        'temperature':         float(form.temperature) if form.temperature is not None else None,
-        'chief_complaint':     form.chief_complaint,
-        'complaint_duration':  form.complaint_duration,
-        'symptoms':            form.symptoms or [],
-        'observations':        form.observations,
-        'known_conditions':    form.known_conditions,
-        'current_medications': form.current_medications,
-        'triage_level':        triage_result['triage_level'],
-        'triage_confidence':   triage_result['confidence_score'],
-        'risk_driver':         triage_result['risk_driver'],
-        'briefing':            briefing,
-        'llm_model_used':      briefing.get('_model_used', 'unknown'),
-        'created_offline':     False,
-        'client_submitted_at': form.client_submitted_at.isoformat() if form.client_submitted_at else None,
+        "client_id": str(form.client_id or uuid_lib.uuid4()),
+        "submitted_by": user["sub"],
+        "facility_id": user.get("user_metadata", {}).get("facility_id") or None,
+        "patient_name": form.patient_name,
+        "patient_age": form.patient_age,
+        "patient_sex": form.patient_sex,
+        "patient_location": form.location,
+        "bp_systolic": form.bp_systolic,
+        "bp_diastolic": form.bp_diastolic,
+        "spo2": form.spo2,
+        "heart_rate": form.heart_rate,
+        "temperature": float(form.temperature)
+        if form.temperature is not None
+        else None,
+        "chief_complaint": form.chief_complaint,
+        "complaint_duration": form.complaint_duration,
+        "symptoms": form.symptoms or [],
+        "observations": form.observations,
+        "known_conditions": form.known_conditions,
+        "current_medications": form.current_medications,
+        "triage_level": triage_result["triage_level"],
+        "triage_confidence": triage_result["confidence_score"],
+        "risk_driver": triage_result["risk_driver"],
+        "briefing": briefing,
+        "llm_model_used": briefing.get("_model_used", "unknown"),
+        "created_offline": False,
+        "client_submitted_at": form.client_submitted_at.isoformat()
+        if form.client_submitted_at
+        else None,
     }
 
-    result = db.table('case_records').insert(record).execute()
+    result = db.table("case_records").insert(record).execute()
     return result.data[0]
 
 
 # ── Get Cases ──────────────────────────────────────────────────────────────
 
-@app.get('/api/cases')
+
+@app.get("/api/cases")
 async def get_cases(
     authorization: str = Header(None),
-    user: dict = Depends(require_role('doctor', 'admin')),
+    user: dict = Depends(require_role("doctor", "admin")),
 ):
-    raw_token = authorization.split(' ', 1)[1]
+    raw_token = authorization.split(" ", 1)[1]
     db = get_supabase_for_user(raw_token)
 
     result = (
-        db.table('case_records')
-        .select('*')
-        .is_('deleted_at', 'null')
-        .order('created_at', desc=True)
+        db.table("case_records")
+        .select("*")
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True)
         .execute()
     )
     cases = result.data
-    order = {'EMERGENCY': 0, 'URGENT': 1, 'ROUTINE': 2}
-    cases.sort(key=lambda c: order.get(c.get('triage_level', 'ROUTINE'), 2))
+    order = {"EMERGENCY": 0, "URGENT": 1, "ROUTINE": 2}
+    cases.sort(key=lambda c: order.get(c.get("triage_level", "ROUTINE"), 2))
     return cases
 
 
 # ── Review Case ────────────────────────────────────────────────────────────
 
-@app.patch('/api/cases/{case_id}/review')
+
+@app.patch("/api/cases/{case_id}/review")
 async def review_case(
     case_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('doctor', 'admin')),
+    user: dict = Depends(require_role("doctor", "admin")),
 ):
-    raw_token = authorization.split(' ', 1)[1]
+    raw_token = authorization.split(" ", 1)[1]
     db = get_supabase_for_user(raw_token)
 
-    db.table('case_records').update({
-        'reviewed_by': user['sub'],
-        'reviewed_at': datetime.now(timezone.utc).isoformat(),
-    }).eq('id', case_id).execute()
-    return {'status': 'reviewed'}
+    db.table("case_records").update(
+        {
+            "reviewed_by": user["sub"],
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", case_id).execute()
+    return {"status": "reviewed"}
 
 
 # ── ASHA: My Submissions ───────────────────────────────────────────────────
 
-@app.get('/api/cases/mine')
+
+@app.get("/api/cases/mine")
 async def get_my_cases(
     authorization: str = Header(None),
-    user: dict = Depends(require_role('asha_worker', 'admin')),
+    user: dict = Depends(require_role("asha_worker", "admin")),
 ):
     """
     Returns only the calling user's own submitted cases.
     RLS enforces this at DB level; the explicit filter is for clarity.
     Returns a limited column set — full briefing JSONB is doctor-facing only.
     """
-    raw_token = authorization.split(' ', 1)[1]
+    raw_token = authorization.split(" ", 1)[1]
     db = get_supabase_for_user(raw_token)
     result = (
-        db.table('case_records')
-        .select('id, chief_complaint, triage_level, created_at, reviewed_at, patient_age, patient_sex')
-        .eq('submitted_by', user['sub'])
-        .is_('deleted_at', 'null')
-        .order('created_at', desc=True)
+        db.table("case_records")
+        .select(
+            "id, chief_complaint, triage_level, created_at, reviewed_at, patient_age, patient_sex"
+        )
+        .eq("submitted_by", user["sub"])
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True)
         .execute()
     )
     return result.data

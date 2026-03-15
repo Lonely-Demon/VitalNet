@@ -5,6 +5,7 @@ import uuid
 
 
 class IntakeForm(BaseModel):
+    patient_name: str = Field(min_length=1, max_length=100)
     patient_age: int = Field(ge=0, le=120)
     patient_sex: str
     chief_complaint: str

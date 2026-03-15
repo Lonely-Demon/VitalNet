@@ -54,6 +54,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
             )}
           </div>
           <p className="text-sm font-medium text-text">
+            {caseData.patient_name && <>{caseData.patient_name} · </>}
             {caseData.patient_age}
             {caseData.patient_sex === 'male' ? 'M' : caseData.patient_sex === 'female' ? 'F' : ''}
             {" · "}{caseData.patient_location}

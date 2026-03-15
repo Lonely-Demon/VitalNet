@@ -122,7 +122,10 @@ export default function ASHAPanel() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-text truncate">
-                      {s.chief_complaint}
+                      {s.patient_name || s.chief_complaint}
+                    </p>
+                    <p className="text-xs text-text2 truncate">
+                      {s.patient_name ? s.chief_complaint : ''}
                     </p>
                     <p className="text-xs text-text3 mt-0.5 font-mono">
                       {s.patient_age ? `${s.patient_age}y` : '—'}
