@@ -73,53 +73,58 @@ async def submit_case(
     form_data = form.model_dump()
 
     # Step 1: Classifier + SHAP (always runs — LLM-independent)
-    triage_result = run_triage(form_data)
+    try:
+        triage_result = run_triage(form_data)
+        briefing = await generate_briefing(form_data, triage_result)
+        raw_token = (authorization or "").split(" ", 1)[-1]
+        db = get_supabase_for_user(raw_token)
+        
+        record = {
+            "client_id": str(form.client_id or uuid_lib.uuid4()),
+            "submitted_by": user["sub"],
+            "facility_id": user.get("user_metadata", {}).get("facility_id") or None,
+            "patient_name": form.patient_name,
+            "patient_age": form.patient_age,
+            "patient_sex": form.patient_sex,
+            "patient_location": form.location,
+            "bp_systolic": form.bp_systolic,
+            "bp_diastolic": form.bp_diastolic,
+            "spo2": form.spo2,
+            "heart_rate": form.heart_rate,
+            "temperature": float(form.temperature)
+            if form.temperature is not None
+            else None,
+            "chief_complaint": form.chief_complaint,
+            "complaint_duration": form.complaint_duration,
+            "symptoms": form.symptoms or [],
+            "observations": form.observations,
+            "known_conditions": form.known_conditions,
+            "current_medications": form.current_medications,
+            "triage_level": triage_result["triage_level"],
+            "triage_confidence": triage_result["confidence_score"],
+            "risk_driver": triage_result["risk_driver"],
+            "briefing": briefing,
+            "llm_model_used": briefing.get("_model_used", "unknown"),
+            "created_offline": form.created_offline,
+            "client_submitted_at": form.client_submitted_at.isoformat()
+            if form.client_submitted_at
+            else None,
+        }
 
-    # Step 2: LLM briefing (may fail gracefully)
-    briefing = await generate_briefing(form_data, triage_result)
-
-    # Step 3: Write to Supabase via user-scoped client (RLS enforced)
-    raw_token = (authorization or "").split(" ", 1)[-1]
-    db = get_supabase_for_user(raw_token)
-
-    record = {
-        "client_id": str(form.client_id or uuid_lib.uuid4()),
-        "submitted_by": user["sub"],
-        "facility_id": user.get("user_metadata", {}).get("facility_id") or None,
-        "patient_name": form.patient_name,
-        "patient_age": form.patient_age,
-        "patient_sex": form.patient_sex,
-        "patient_location": form.location,
-        "bp_systolic": form.bp_systolic,
-        "bp_diastolic": form.bp_diastolic,
-        "spo2": form.spo2,
-        "heart_rate": form.heart_rate,
-        "temperature": float(form.temperature)
-        if form.temperature is not None
-        else None,
-        "chief_complaint": form.chief_complaint,
-        "complaint_duration": form.complaint_duration,
-        "symptoms": form.symptoms or [],
-        "observations": form.observations,
-        "known_conditions": form.known_conditions,
-        "current_medications": form.current_medications,
-        "triage_level": triage_result["triage_level"],
-        "triage_confidence": triage_result["confidence_score"],
-        "risk_driver": triage_result["risk_driver"],
-        "briefing": briefing,
-        "llm_model_used": briefing.get("_model_used", "unknown"),
-        "created_offline": form.created_offline,
-        "client_submitted_at": form.client_submitted_at.isoformat()
-        if form.client_submitted_at
-        else None,
-    }
-
-    result = (
-        db.table("case_records")
-        .upsert(record, on_conflict="client_id", ignore_duplicates=True)
-        .execute()
-    )
-    return result.data[0]
+        result = (
+            db.table("case_records")
+            .upsert(record, on_conflict="client_id", ignore_duplicates=True)
+            .execute()
+        )
+        if not result.data:
+            # Upsert ignored the duplicate; fetch the existing row to return to client
+            existing = db.table("case_records").select("*").eq("client_id", record["client_id"]).execute()
+            return existing.data[0] if existing.data else record
+        return result.data[0]
+    except Exception as e:
+        import traceback
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # ── Get Cases ──────────────────────────────────────────────────────────────

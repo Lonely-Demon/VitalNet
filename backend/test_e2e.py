@@ -16,6 +16,7 @@ def run_tests():
 
     print("\n2. Testing unauthed endpoints (expecting 401)...")
     test_case = {
+        "patient_name": "Test Patient Unauthed",
         "patient_age": 45,
         "patient_sex": "male",
         "location": "Test Village",
@@ -58,6 +59,8 @@ def run_tests():
 
     print("\n4. Testing ASHA Case Submission...")
     test_case = {
+        "client_id": "7829ca47-1941-4c74-a035-188e9cfec120",
+        "patient_name": "Test Patient ASHA",
         "patient_age": 45,
         "patient_sex": "male",
         "location": "Test Village",
@@ -94,7 +97,8 @@ def run_tests():
     )
     print(f"Doctor Get Cases: {r_doc_cases.status_code}")
     assert r_doc_cases.status_code == 200, "Doctor failed to get cases"
-    cases = r_doc_cases.json()
+    response_data = r_doc_cases.json()
+    cases = response_data.get("cases", [])
     print(f"Doctor retrieved {len(cases)} cases")
     
     # Check if our submitted case is in the list
