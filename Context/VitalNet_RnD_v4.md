@@ -631,3 +631,48 @@ LOCK: VitalNet's honest claim: it creates one structured clinical record where z
 - ASHABot — Khushi Baby + Microsoft Research India (2024), 869 ASHAs onboarded in Udaipur district, 24,000+ messages | khushibaby.org
 - ClinicalPath India / DIISHA — Elsevier + NITI Aayog (2024), Bahraich, UP pilot | elsevier.com/clinicalpath, niti.gov.in
 - AiSteth AsMAP — Ai Health Highway (2023), 19 rural PHCs in Maharashtra, 38,000+ patients screened | aihealthhighway.com
+
+---
+
+# 9. Phase 10 Rebuild Addendum — Architecture Status Update (March 2026)
+
+This addendum records the architectural changes applied during the Phase 10 rebuild, updating sections of this document that reflect the pre-rebuild prototype state.
+
+## 9.1 Sections Updated by Rebuild
+
+| Section in this Document | Pre-Rebuild State | Post-Rebuild State |
+|---|---|---|
+| §5.2 Database | SQLite (prototype), Supabase as Phase 2 target | **Supabase/PostgreSQL is now live** — SQLite fully replaced. `case_records` table with RLS, `client_id UNIQUE` constraint, `created_offline` column, and 4 performance indexes. |
+| §5.3 LLM Fallback | "Three-tier fallback" (described conceptually) | **4-tier async fallback fully implemented** in `llm.py`: Groq Llama-3.3-70B → Groq Llama-3.1-8B → Gemini 2.5 Flash → Gemini 2.5 Flash-Lite. Uses `generate_content_async()` natively. |
+| §5.6 Frontend | React form + Doctor Dashboard | **Offline-first auth** (JWT `app_metadata` role read), **ONNX lazy-load** (only when offline or server-unreachable), **50-item offline queue cap**, **cursor-based pagination** with Load More in Doctor Dashboard. |
+| §6.5 Offline Handling | Form data cached, triage classifier fires on reconnection | **Idempotent sync via `client_id` upsert** — duplicate submissions on reconnection are silently ignored. 4xx permanent errors dead-lettered from queue to prevent head-of-line blocking. |
+| §2.3 Slice Selection — DB writes | "SQLite insert via SQLAlchemy" | Now: `supabase-py` async upsert on `client_id`. RLS policies enforce per-user row access. |
+
+## 9.2 New Capabilities Added
+
+| Capability | Implementation |
+|---|---|
+| Cursor-based pagination | `GET /api/cases?before=<ISO>&limit=25` — Realtime-safe, no offset drift |
+| `GET /api/cases/{case_id}` detail endpoint | Returns full briefing JSON for a single case |
+| `created_offline` metadata | Tracked on every case record — enables audit of offline submissions |
+| `triage_priority` computed column | PostgreSQL generated column: EMERGENCY=0, URGENT=1, ROUTINE=2 — enables DB-level ordering |
+| ONNX local classifier | ONNX model lazy-loaded only when `navigator.onLine === false` or server returns `TypeError` — dispatches `vitalnet-server-unreachable` CustomEvent to trigger warmup |
+
+## 9.3 Architectural Documents Updated
+
+- `REBUILD_INSTRUCTIONS.md` — definitive rebuild guide (v1.1), peer-reviewed
+- `backend/CLASSIFIER_CHANGELOG.md` — classifier evolution v1 → v4
+- `backend/.env.local` — `GEMINI_API_KEY` and `FRONTEND_URL` added
+- `backend/requirements.txt` — `google-generativeai>=0.8.0` added
+
+## 9.4 Items Unchanged by Rebuild
+
+The following architectural elements from this document remain accurate and unchanged:
+- §4.1 General-purpose LLM rationale (still correct)
+- §4.2 Triage classifier design (GradientBoosting + SHAP, still correct)
+- §4.3 Prompt engineering strategy (temperature, JSON schema, triage locked from classifier — still correct)
+- §4.5 Guardrails architecture (all 5 guardrails intact)
+- §5.1 FastAPI rationale (unchanged)
+- §5.4 Bio_ClinicalBERT extraction rationale (unchanged)
+- §6.1 Feature status table — update: SQLite persistence is now Supabase; Doctor auth/JWT now active
+
