@@ -42,7 +42,7 @@ export function AuthProvider({ children }) {
   const value = {
     session,
     profile,
-    role:      profile?.role ?? null,
+    role:      session?.user?.app_metadata?.role ?? profile?.role ?? null,
     isLoading: session === undefined,
     signIn:    (email, password) =>
                  supabase.auth.signInWithPassword({ email, password }),

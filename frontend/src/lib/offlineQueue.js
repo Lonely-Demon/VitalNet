@@ -18,9 +18,19 @@ function notifyQueueChange() {
   window.dispatchEvent(new CustomEvent('offline-queue-changed'))
 }
 
+const MAX_QUEUE_SIZE = 50
+
 /** Queue a submission for later sync. No token stored — fresh token fetched at sync time. */
 export async function enqueue(clientId, payload) {
   const db = await getQueueDB()
+
+  // Guard: refuse to queue if at capacity
+  const count = await db.count(STORE_NAME)
+  if (count >= MAX_QUEUE_SIZE) {
+    console.warn(`[VitalNet] Offline queue is full (${MAX_QUEUE_SIZE} items). Cannot queue more.`)
+    throw new Error(`Offline queue is full (${MAX_QUEUE_SIZE} items). Please sync before submitting more cases.`)
+  }
+
   await db.put(STORE_NAME, {
     client_id:  clientId,
     payload,

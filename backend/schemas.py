@@ -26,6 +26,7 @@ class IntakeForm(BaseModel):
     # Phase 6 — offline sync metadata
     client_id: Optional[uuid.UUID] = None
     client_submitted_at: Optional[datetime] = None
+    created_offline: bool = False   # True when submitted via offline queue sync
 
 
 class BriefingOutput(BaseModel):

@@ -1,22 +1,22 @@
-import os
+"""
+VitalNet LLM Briefing Generator — async, 4-tier fallback
+Tier 1: Groq Llama-3.3-70B (primary, ~2s)
+Tier 2: Groq Llama-3.1-8B  (on Groq rate limit)
+Tier 3: Gemini 2.5 Flash    (on both Groq models exhausted)
+Tier 4: Gemini 2.5 Flash-Lite (on Gemini Flash rate limit)
+All tiers share the same output schema enforcement.
+The triage_level from the ML classifier is locked — no LLM can override it.
+"""
 import json
-import groq
+import asyncio
 from pathlib import Path
-from groq import Groq
-from dotenv import load_dotenv
 
-load_dotenv()
+import groq
+from groq import AsyncGroq  # Use async client — non-blocking event loop
 
-_api_key = os.getenv("GROQ_API_KEY")
-client = Groq(api_key=_api_key) if _api_key else None
+from config import settings
 
-# LLM model priority chain — ordered by preference
-# Primary: 70B for best clinical reasoning (1K requests/day free tier limit)
-# Fallback: 8B instant — activates automatically on RateLimitError (14.4K req/day)
-MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-]
+# ─── Module-level constants ──────────────────────────────────────────────────
 
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "clinical_system_prompt.txt"
 
@@ -26,11 +26,39 @@ FIXED_DISCLAIMER = (
     "before any clinical action."
 )
 
+REQUIRED_FIELDS = [
+    "triage_level", "primary_risk_driver", "differential_diagnoses",
+    "red_flags", "recommended_immediate_actions", "recommended_tests",
+    "uncertainty_flags", "disclaimer",
+]
 
-def _load_system_prompt() -> str:
-    with open(SYSTEM_PROMPT_PATH, "r") as f:
-        return f.read()
+LIST_FIELDS = {
+    "differential_diagnoses", "red_flags",
+    "recommended_immediate_actions", "recommended_tests",
+}
 
+# ─── Clients — initialized once at module load ───────────────────────────────
+
+_groq_client: AsyncGroq | None = None
+_gemini_configured: bool = False
+
+if settings.groq_api_key:
+    _groq_client = AsyncGroq(api_key=settings.groq_api_key)
+
+if settings.gemini_api_key:
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=settings.gemini_api_key)
+        _gemini_configured = True
+    except ImportError:
+        print("[WARN] google-generativeai not installed — Gemini fallback disabled")
+
+# ─── System prompt — cached at module load, never re-read from disk ──────────
+
+_SYSTEM_PROMPT: str = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+# ─── Patient context builder ──────────────────────────────────────────────────
 
 def _build_patient_context(form_data: dict, triage_result: dict) -> str:
     def fmt(val, unit=""):
@@ -60,92 +88,131 @@ Confidence: {triage_result['confidence_score']:.2f}
 Primary signal: {triage_result['risk_driver']}"""
 
 
-def generate_briefing(form_data: dict, triage_result: dict) -> dict:
+# ─── Schema enforcement ───────────────────────────────────────────────────────
+
+def _enforce_schema(briefing: dict, triage_result: dict) -> dict:
     """
-    Call Groq LLM and return parsed briefing JSON.
-    Iterates through MODELS list in order — moves to next model on rate limit or connection error.
-    On all models exhausted (or if API key is missing): returns safe fallback briefing. Never raises.
+    Hard-lock the triage level and disclaimer, ensure all required fields exist.
+    This runs on every LLM output regardless of which tier produced it.
     """
-    if not client:
-        print("⚠ GROQ_API_KEY not configured — returning fallback briefing.")
+    briefing["triage_level"] = triage_result["triage_level"]  # SAFETY: LLM cannot override
+    briefing["disclaimer"] = FIXED_DISCLAIMER
+    for field in REQUIRED_FIELDS:
+        if field not in briefing:
+            briefing[field] = [] if field in LIST_FIELDS else "Not available"
+    return briefing
+
+
+# ─── Groq async call ─────────────────────────────────────────────────────────
+
+async def _call_groq(model: str, patient_context: str) -> dict:
+    """Attempt one Groq model call. Raises on failure — caller handles retry."""
+    response = await _groq_client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user",   "content": patient_context},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.1,
+        max_tokens=1000,
+        timeout=8,
+    )
+    return json.loads(response.choices[0].message.content)
+
+
+# ─── Gemini async call ────────────────────────────────────────────────────────
+
+async def _call_gemini(model_name: str, patient_context: str) -> dict:
+    """
+    Attempt a Gemini model call using the native async API.
+    Uses generate_content_async() — NOT asyncio.to_thread().
+    The google-generativeai SDK natively supports async; wrapping with
+    asyncio.to_thread() would waste a thread pool worker unnecessarily.
+    Raises on failure — caller handles retry.
+    """
+    import google.generativeai as genai
+    model = genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction=_SYSTEM_PROMPT,
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.1,
+            max_output_tokens=1000,
+        ),
+    )
+    # Use native async method — avoids thread pool overhead
+    response = await model.generate_content_async(patient_context)
+    return json.loads(response.text)
+
+
+# ─── Main entry point — fully async ─────────────────────────────────────────
+
+async def generate_briefing(form_data: dict, triage_result: dict) -> dict:
+    """
+    Generate a clinical briefing using the 4-tier fallback chain.
+    Never raises — always returns a usable briefing dict.
+    Triage level from classifier is enforced on every output path.
+    """
+    if not _groq_client and not _gemini_configured:
+        print("⚠ No LLM API keys configured — returning fallback briefing.")
         return _fallback_briefing(triage_result)
 
-    system_prompt = _load_system_prompt()
     patient_context = _build_patient_context(form_data, triage_result)
 
-    for model in MODELS:
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": patient_context},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.1,
-                max_tokens=1000,
-                timeout=8,
-            )
+    # ── Tier 1 & 2: Groq models ───────────────────────────────────────────────
+    if _groq_client:
+        for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+            try:
+                briefing = await _call_groq(model, patient_context)
+                print(f"✓ Briefing generated via Groq/{model}")
+                return _enforce_schema(briefing, triage_result)
+            except groq.RateLimitError:
+                print(f"Rate limit on Groq/{model} — trying next tier")
+                await asyncio.sleep(0.5)   # Brief pause before next attempt
+                continue
+            except (groq.APIConnectionError, groq.InternalServerError):
+                print(f"Connection/server error on Groq/{model} — trying next tier")
+                continue
+            except json.JSONDecodeError:
+                print(f"JSON parse error on Groq/{model} — trying next tier")
+                continue
+            except Exception as e:
+                print(f"Unexpected error on Groq/{model}: {e} — trying next tier")
+                continue
 
-            briefing = json.loads(response.choices[0].message.content)
+    # ── Tier 3 & 4: Gemini models ─────────────────────────────────────────────
+    if _gemini_configured:
+        for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
+            try:
+                briefing = await _call_gemini(model, patient_context)
+                print(f"✓ Briefing generated via Gemini/{model}")
+                return _enforce_schema(briefing, triage_result)
+            except json.JSONDecodeError:
+                print(f"JSON parse error on Gemini/{model} — trying next tier")
+                continue
+            except Exception as e:
+                # Catches Gemini quota errors, connection errors, etc.
+                print(f"Error on Gemini/{model}: {e} — trying next tier")
+                await asyncio.sleep(0.5)
+                continue
 
-            # Safety enforcement — classifier triage level is locked, LLM cannot override
-            briefing["triage_level"] = triage_result["triage_level"]
-            briefing["disclaimer"] = FIXED_DISCLAIMER
-
-            # Ensure all required schema fields exist
-            required_fields = [
-                "triage_level", "primary_risk_driver", "differential_diagnoses",
-                "red_flags", "recommended_immediate_actions", "recommended_tests",
-                "uncertainty_flags", "disclaimer"
-            ]
-            for field in required_fields:
-                if field not in briefing:
-                    briefing[field] = [] if field in (
-                        "differential_diagnoses", "red_flags",
-                        "recommended_immediate_actions", "recommended_tests"
-                    ) else "Not available"
-
-            print(f"✓ Briefing generated via {model}")
-            return briefing
-
-        except groq.RateLimitError:
-            print(f"Rate limit (429) on {model} — trying next model in chain")
-            continue
-
-        except groq.APIConnectionError as e:
-            print(f"Connection error on {model}: {e.__cause__} — trying next model")
-            continue
-
-        except groq.InternalServerError as e:
-            print(f"Server error ({e.status_code}) on {model} — trying next model")
-            continue
-
-        except json.JSONDecodeError as e:
-            print(f"JSON parse error on {model}: {e} — trying next model")
-            continue
-
-        except Exception as e:
-            print(f"Unexpected error on {model}: {e} — trying next model")
-            continue
-
-    # All models in chain exhausted
-    print("⚠ All models exhausted — returning fallback briefing. Triage badge intact.")
+    # ── All tiers exhausted ───────────────────────────────────────────────────
+    print("⚠ All LLM tiers exhausted — returning fallback briefing. Triage badge intact.")
     return _fallback_briefing(triage_result)
 
 
+# ─── Fallback briefing ────────────────────────────────────────────────────────
+
 def _fallback_briefing(triage_result: dict) -> dict:
-    """
-    Safe fallback when all LLM models are unavailable.
-    Triage level and risk driver from classifier are still valid and displayed.
-    """
     return {
-        "triage_level": triage_result["triage_level"],
-        "primary_risk_driver": triage_result["risk_driver"],
-        "differential_diagnoses": ["LLM briefing unavailable — triage classification from ML classifier is intact"],
-        "red_flags": [],
+        "triage_level":                 triage_result["triage_level"],
+        "primary_risk_driver":          triage_result["risk_driver"],
+        "differential_diagnoses":       ["LLM briefing unavailable — triage from ML classifier is intact"],
+        "red_flags":                    [],
         "recommended_immediate_actions": ["Refer patient to PHC doctor for in-person evaluation"],
-        "recommended_tests": [],
-        "uncertainty_flags": "LLM briefing could not be generated. Triage level and risk driver are from the ML classifier and remain valid.",
-        "disclaimer": FIXED_DISCLAIMER,
+        "recommended_tests":            [],
+        "uncertainty_flags":            "LLM briefing could not be generated. Triage level and risk driver from ML classifier remain valid.",
+        "disclaimer":                   FIXED_DISCLAIMER,
+        "_model_used":                  "fallback",
     }

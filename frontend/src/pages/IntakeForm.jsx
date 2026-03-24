@@ -174,7 +174,9 @@ export default function IntakeForm() {
     } catch (err) {
       // If offline or network error — local result stays displayed
       // The Phase 8 queue handles the actual sync
-      setError(err.message || "Submission failed. Check connection.")
+      setError(err.message?.includes('queue is full')
+        ? 'Offline queue is full (50 cases). Connect to internet to sync before submitting more cases.'
+        : (err.message || "Submission failed. Check connection."))
     } finally {
       setLoading(false)
     }

@@ -282,7 +282,9 @@ def _generate_risk_explanation(
 
 def _get_legacy_risk_driver(features: np.ndarray, triage_level: str) -> str:
     """
-    Legacy SHAP-based risk driver explanation
+    Legacy SHAP-based risk driver explanation.
+    NOTE: SHAP computation runs on every legacy inference. If latency is a concern,
+    migrate to the enhanced classifier which uses a cheaper rule-based explanation.
     """
     try:
         class_idx = {v: k for k, v in _label_map.items()}[triage_level]
@@ -309,13 +311,6 @@ def _get_legacy_risk_driver(features: np.ndarray, triage_level: str) -> str:
     except Exception as e:
         print(f"[WARN] SHAP risk driver failed: {e} - using fallback")
         return f"Triage level {triage_level} assigned by ML classifier."
-
-
-def _safe_vital(val):
-    """Return the value if valid, -1 if missing or sentinel."""
-    if val is None or val == -1:
-        return -1
-    return val
 
 
 def get_classifier_info() -> Dict[str, Any]:

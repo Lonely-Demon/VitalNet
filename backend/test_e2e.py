@@ -40,7 +40,7 @@ def run_tests():
             "password": "TestASHA2026!"
         })
         asha_jwt = asha_res.session.access_token
-        print("✓ Logged in as ASHA")
+        print("Logged in as ASHA")
     except Exception as e:
         print(f"Failed to log in as ASHA: {e}")
         return
@@ -51,7 +51,7 @@ def run_tests():
             "password": "TestDoctor2026!"
         })
         doc_jwt = doc_res.session.access_token
-        print("✓ Logged in as Doctor")
+        print("Logged in as Doctor")
     except Exception as e:
         print(f"Failed to log in as Doctor: {e}")
         return
@@ -76,7 +76,7 @@ def run_tests():
     assert r_submit.status_code == 200, "ASHA submission failed"
     submitted_case = r_submit.json()
     case_id = submitted_case["id"]
-    print(f"✓ Case submitted successfully (ID: {case_id})")
+    print(f"Case submitted successfully (ID: {case_id})")
 
     print("\n5. Testing ASHA getting cases (expecting 403)...")
     r_asha_cases = requests.get(
@@ -85,7 +85,7 @@ def run_tests():
     )
     print(f"ASHA Get Cases: {r_asha_cases.status_code}")
     assert r_asha_cases.status_code == 403, "ASHA should not access GET /cases"
-    print("✓ ASHA correctly denied access to global cases")
+    print("ASHA correctly denied access to global cases")
 
     print("\n6. Testing Doctor Access and Case Review...")
     r_doc_cases = requests.get(
@@ -95,12 +95,12 @@ def run_tests():
     print(f"Doctor Get Cases: {r_doc_cases.status_code}")
     assert r_doc_cases.status_code == 200, "Doctor failed to get cases"
     cases = r_doc_cases.json()
-    print(f"✓ Doctor retrieved {len(cases)} cases")
+    print(f"Doctor retrieved {len(cases)} cases")
     
     # Check if our submitted case is in the list
     found = any(c["id"] == case_id for c in cases)
     assert found, "Submitted case not found in Doctor's queue"
-    print("✓ Submitted case verified in Doctor's queue")
+    print("Submitted case verified in Doctor's queue")
 
     print("\n7. Testing Doctor Review Action...")
     r_review = requests.patch(
@@ -109,7 +109,7 @@ def run_tests():
     )
     print(f"Doctor Review Status: {r_review.status_code}")
     assert r_review.status_code == 200, "Doctor review failed"
-    print("✓ Doctor successfully marked case as reviewed")
+    print("Doctor successfully marked case as reviewed")
 
     print("\n--- ALL TESTS PASSED SUCCESSFULLY! ---")
 

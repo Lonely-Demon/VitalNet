@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { getCases } from '../lib/api'
 import BriefingCard from '../components/BriefingCard'
 import { useAuth } from '../store/authStore'
@@ -6,44 +6,68 @@ import { useToast } from '../components/ToastProvider'
 import { useRealtimeCases } from '../hooks/useRealtimeCases'
 
 export default function Dashboard({ filter = 'all' }) {
-  const [cases, setCases] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [cases, setCases]         = useState([])
+  const [loading, setLoading]     = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore]     = useState(false)
+  const [nextCursor, setNextCursor] = useState(null)
+  const [error, setError]         = useState(null)
   const { profile } = useAuth()
   const { showToast } = useToast()
 
   const facilityId = profile?.facility_id
 
-  const fetchCases = async () => {
+  // Initial load — resets pagination state
+  const fetchCases = useCallback(async () => {
+    setLoading(true)
+    setError(null)
     try {
       const data = await getCases()
-      if (Array.isArray(data)) {
-        setCases(data)
-        setError(null)
-      } else {
-        throw new Error("Invalid response from server. (Check API URL or CORS)")
+      if (!data || !Array.isArray(data.cases)) {
+        throw new Error('Invalid response from server. (Check API URL or CORS)')
       }
+      setCases(data.cases)
+      setHasMore(data.hasMore)
+      setNextCursor(data.nextCursor)
     } catch (e) {
-      setError(e.message || "Failed to load cases. Check backend connection.")
+      setError(e.message || 'Failed to load cases. Check backend connection.')
     } finally {
       setLoading(false)
     }
-  }
-
-  useEffect(() => {
-    fetchCases()
   }, [])
 
-  // Replace polling with real-time subscriptions
+  // Load next page — appends to existing list without replacing real-time inserts
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const data = await getCases({ before: nextCursor })
+      if (!data || !Array.isArray(data.cases)) return
+      // Deduplicate in case realtime already inserted a row
+      setCases(prev => {
+        const existingIds = new Set(prev.map(c => c.id))
+        const fresh = data.cases.filter(c => !existingIds.has(c.id))
+        return [...prev, ...fresh]
+      })
+      setHasMore(data.hasMore)
+      setNextCursor(data.nextCursor)
+    } catch (e) {
+      showToast('Failed to load more cases', 'error')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  useEffect(() => { fetchCases() }, [fetchCases])
+
+  // Real-time: prepend new inserts; update reviewed cases in place
   useRealtimeCases({
     facilityId,
     onInsert: (newCase) => {
       setCases((prev) => {
-        // Avoid duplicates (offline sync may have already added it optimistically)
         if (prev.find((c) => c.id === newCase.id)) return prev
         return [newCase, ...prev]
       })
-      // Show toast for EMERGENCY cases
       if (newCase.triage_level === 'EMERGENCY') {
         showToast('New EMERGENCY case received', 'error')
       }
@@ -55,7 +79,7 @@ export default function Dashboard({ filter = 'all' }) {
     },
   })
 
-  // Client-side filter: 'pending' shows unreviewed only, 'all' shows everything
+  // Client-side filter
   const visibleCases = filter === 'pending'
     ? cases.filter(c => !c.reviewed_at)
     : cases
@@ -124,6 +148,19 @@ export default function Dashboard({ filter = 'all' }) {
             Routine <span className="bg-routine/10 text-routine px-2 py-0.5 rounded-pill">{routine.length}</span>
           </h2>
           {routine.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={() => {}} />)}
+        </div>
+      )}
+
+      {/* Cursor-based Load More — does not affect real-time inserts at top */}
+      {hasMore && (
+        <div className="flex justify-center mt-4 mb-8">
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="text-sm font-medium text-forest bg-leaf/40 px-6 py-2.5 rounded-pill hover:bg-leaf/70 transition-colors shadow-card cursor-pointer disabled:opacity-60 disabled:cursor-wait"
+          >
+            {loadingMore ? 'Loading…' : 'Load More Cases'}
+          </button>
         </div>
       )}
     </div>

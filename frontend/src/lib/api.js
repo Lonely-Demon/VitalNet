@@ -19,8 +19,11 @@ export async function submitCase(formData) {
   const payload  = { ...formData, client_id: clientId, client_submitted_at: new Date().toISOString() }
 
   if (!navigator.onLine) {
-    // Offline path: store in IndexedDB queue (no token stored)
-    await enqueue(clientId, payload)
+    // Offline path: store in IndexedDB queue with offline flag (no token stored)
+    const offlinePayload = { ...payload, created_offline: true }
+    await enqueue(clientId, offlinePayload)
+    // Signal useLocalTriage to begin ONNX warmup for offline use
+    window.dispatchEvent(new CustomEvent('vitalnet-server-unreachable'))
     return { queued: true, client_id: clientId }
   }
 
@@ -40,7 +43,10 @@ export async function submitCase(formData) {
   } catch (err) {
     // Network error (TypeError: Failed to fetch) → silently queue
     if (err instanceof TypeError) {
-      await enqueue(clientId, payload)
+      const offlinePayload = { ...payload, created_offline: true }
+      await enqueue(clientId, offlinePayload)
+      // Server appeared online but connection failed — trigger ONNX warmup
+      window.dispatchEvent(new CustomEvent('vitalnet-server-unreachable'))
       return { queued: true, client_id: clientId }
     }
     // Non-network error (4xx/5xx from above) → rethrow to UI
@@ -86,10 +92,14 @@ export async function processQueue() {
         // Conflict = already inserted (duplicate from retry)
         await dequeue(item.client_id)
         synced++
-      } else if (res.status === 422) {
-        // Permanent validation error — payload will never pass.
-        // Dequeue to stop infinite retry loop, log for debugging.
-        console.warn('[VitalNet] Dequeuing invalid offline case', item.client_id, await res.text())
+      } else if (res.status >= 400 && res.status < 500) {
+        // Any 4xx = permanent client error — this payload will NEVER succeed.
+        // Dequeue immediately to unblock subsequent queue items.
+        // Covers 422 (schema mismatch), 400 (bad request), 403 (auth expired), etc.
+        console.warn(
+          '[VitalNet] Permanent error — dequeuing case to prevent head-of-line blocking.',
+          item.client_id, res.status, await res.text()
+        )
         await dequeue(item.client_id)
         failed++
       } else {
@@ -107,11 +117,14 @@ export async function processQueue() {
 
 // ─── Unchanged functions below ───────────────────────────────────────────────
 
-export async function getCases() {
+export async function getCases({ before } = {}) {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/cases`, { headers })
+  const url = new URL(`${BASE}/api/cases`)
+  if (before) url.searchParams.set('before', before)
+  url.searchParams.set('limit', '25')
+  const res = await fetch(url.toString(), { headers })
   if (!res.ok) throw new Error(await res.text())
-  return res.json()
+  return res.json()   // Returns { cases, hasMore, nextCursor }
 }
 
 export async function reviewCase(caseId) {

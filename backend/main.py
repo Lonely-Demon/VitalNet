@@ -76,10 +76,10 @@ async def submit_case(
     triage_result = run_triage(form_data)
 
     # Step 2: LLM briefing (may fail gracefully)
-    briefing = generate_briefing(form_data, triage_result)
+    briefing = await generate_briefing(form_data, triage_result)
 
     # Step 3: Write to Supabase via user-scoped client (RLS enforced)
-    raw_token = authorization.split(" ", 1)[1]
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
 
     record = {
@@ -108,13 +108,17 @@ async def submit_case(
         "risk_driver": triage_result["risk_driver"],
         "briefing": briefing,
         "llm_model_used": briefing.get("_model_used", "unknown"),
-        "created_offline": False,
+        "created_offline": form.created_offline,
         "client_submitted_at": form.client_submitted_at.isoformat()
         if form.client_submitted_at
         else None,
     }
 
-    result = db.table("case_records").insert(record).execute()
+    result = (
+        db.table("case_records")
+        .upsert(record, on_conflict="client_id", ignore_duplicates=True)
+        .execute()
+    )
     return result.data[0]
 
 
@@ -125,21 +129,53 @@ async def submit_case(
 async def get_cases(
     authorization: str = Header(None),
     user: dict = Depends(require_role("doctor", "admin")),
+    before: str = None,   # ISO timestamp cursor — fetch cases older than this
+    limit: int = 25,      # Page size; capped at 100 to prevent abuse
 ):
-    raw_token = authorization.split(" ", 1)[1]
+    """
+    Cursor-based pagination for the Doctor Dashboard.
+    Use `before=<created_at ISO string>` to fetch the next page.
+    Each page returns up to `limit` cases sorted EMERGENCY → URGENT → ROUTINE,
+    then by created_at DESC within each tier.
+
+    Unlike offset pagination, this is safe alongside Supabase Realtime:
+    new inserts at the top of the queue don't shift rows into already-fetched pages.
+    """
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
 
-    result = (
+    # Safety cap
+    limit = max(1, min(limit, 100))
+
+    query = (
         db.table("case_records")
-        .select("*")
+        .select("id, patient_name, patient_age, patient_sex, triage_level, triage_confidence, risk_driver, created_at, reviewed_at, reviewed_by, facility_id, created_offline")
         .is_("deleted_at", "null")
         .order("created_at", desc=True)
-        .execute()
+        .limit(limit + 1)   # Fetch one extra to determine hasMore
     )
-    cases = result.data
+
+    if before:
+        # Fetch rows strictly older than the cursor timestamp
+        query = query.lt("created_at", before)
+
+    result = query.execute()
+    rows = result.data
+
+    has_more = len(rows) > limit
+    cases = rows[:limit]
+
+    # Sort fetched page by triage priority (EMERGENCY first), then by created_at DESC
     order = {"EMERGENCY": 0, "URGENT": 1, "ROUTINE": 2}
-    cases.sort(key=lambda c: order.get(c.get("triage_level", "ROUTINE"), 2))
-    return cases
+    cases.sort(key=lambda c: (order.get(c.get("triage_level", "ROUTINE"), 2)))
+
+    return {
+        "cases": cases,
+        "hasMore": has_more,
+        # Cursor for next page — oldest created_at in this batch
+        "nextCursor": cases[-1]["created_at"] if has_more and cases else None,
+    }
+
 
 
 # ── Review Case ────────────────────────────────────────────────────────────
@@ -151,7 +187,7 @@ async def review_case(
     authorization: str = Header(None),
     user: dict = Depends(require_role("doctor", "admin")),
 ):
-    raw_token = authorization.split(" ", 1)[1]
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
 
     db.table("case_records").update(
@@ -176,7 +212,7 @@ async def get_my_cases(
     RLS enforces this at DB level; the explicit filter is for clarity.
     Returns a limited column set — full briefing JSONB is doctor-facing only.
     """
-    raw_token = authorization.split(" ", 1)[1]
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
     result = (
         db.table("case_records")
@@ -186,6 +222,29 @@ async def get_my_cases(
         .eq("submitted_by", user["sub"])
         .is_("deleted_at", "null")
         .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data
+
+
+# ── Get Case Detail ───────────────────────────────────────────────────────────
+
+
+@app.get("/api/cases/{case_id}")
+async def get_case_detail(
+    case_id: str,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("doctor", "admin")),
+):
+    """Returns the full record including briefing JSONB for one case."""
+    raw_token = (authorization or "").split(" ", 1)[-1]
+    db = get_supabase_for_user(raw_token)
+    result = (
+        db.table("case_records")
+        .select("*")
+        .eq("id", case_id)
+        .is_("deleted_at", "null")
+        .single()
         .execute()
     )
     return result.data
