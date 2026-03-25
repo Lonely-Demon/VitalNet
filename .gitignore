@@ -7,3 +7,6 @@ dist/
 vitalnet.db
 *.log
 .env.local
+test-results/
+playwright-report/
+blob-report/

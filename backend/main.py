@@ -1,30 +1,65 @@
+import base64
+import json as _json
+import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, Header
+from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import uuid as uuid_lib
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
 from database import supabase_anon, get_supabase_for_user
 from admin_routes import router as admin_router
 from analytics_routes import router as analytics_router
 from classifier import load_classifier, run_triage
 from llm import generate_briefing
-from auth import get_current_user, require_role
+from auth import require_role
 from schemas import IntakeForm
 
 load_dotenv()
+
+# ── Logging — named logger avoids conflicts with uvicorn's root logger ─────────
+logger = logging.getLogger("vitalnet")
+
+
+# ── Per-user rate limiter ──────────────────────────────────────────────────────
+
+def _get_user_id(request: Request) -> str:
+    """
+    Extract the Supabase user ID (sub) from the Bearer JWT for rate limiting.
+    Falls back to client IP if the token is absent or malformed —
+    this prevents unauthenticated callers from bypassing the limiter.
+    """
+    try:
+        auth_header = request.headers.get("authorization", "")
+        token = auth_header.split(" ", 1)[-1]
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
+        return payload.get("sub") or request.client.host
+    except Exception:
+        return request.client.host  # fallback: IP-based limiting for bad tokens
+
+
+limiter = Limiter(key_func=_get_user_id)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_classifier()
-    print("[OK] VitalNet API started")
+    logger.info("[OK] VitalNet API started")
     yield
 
 
 app = FastAPI(title="VitalNet API", version="0.2.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 app.include_router(admin_router)
 app.include_router(analytics_router)
 
@@ -44,28 +79,44 @@ app.add_middleware(
 )
 
 
-# ── Health Check ───────────────────────────────────────────────────────────
+# ── Health Check ───────────────────────────────────────────────────────────────
 
 
 @app.get("/api/health")
 async def health():
+    from classifier import get_classifier_info
+
+    # Database connectivity check
     try:
         supabase_anon.table("facilities").select("id").limit(1).execute()
         db_status = "connected"
     except Exception as e:
-        db_status = f"error: {str(e)}"
+        db_status = f"error: {str(e)[:80]}"  # Truncate — never expose full errors
+
+    # Classifier state — use public API, not private _classifier_type variable
+    info = get_classifier_info()
+    classifier_loaded = bool(info["classifier_type"])
+    classifier_status = (
+        f"loaded — {info['classifier_type']} v{info['model_info'].get('model_version', 'N/A')}"
+        if classifier_loaded
+        else "NOT LOADED"
+    )
+
     return {
-        "status": "ok",
+        "status": "ok" if db_status == "connected" and classifier_loaded else "degraded",
         "database": db_status,
-        "classifier": "loaded",
+        "classifier": classifier_status,
+        "version": "0.2.0",
     }
 
 
-# ── Submit Case ────────────────────────────────────────────────────────────
+# ── Submit Case ────────────────────────────────────────────────────────────────
 
 
 @app.post("/api/submit")
+@limiter.limit("20/minute")   # 20 per authenticated user per minute
 async def submit_case(
+    request: Request,       # required first positional param for slowapi
     form: IntakeForm,
     authorization: str = Header(None),
     user: dict = Depends(require_role("asha_worker", "admin")),
@@ -78,7 +129,7 @@ async def submit_case(
         briefing = await generate_briefing(form_data, triage_result)
         raw_token = (authorization or "").split(" ", 1)[-1]
         db = get_supabase_for_user(raw_token)
-        
+
         record = {
             "client_id": str(form.client_id or uuid_lib.uuid4()),
             "submitted_by": user["sub"],
@@ -122,29 +173,38 @@ async def submit_case(
             return existing.data[0] if existing.data else record
         return result.data[0]
     except Exception as e:
-        import traceback
-        from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": traceback.format_exc()})
+        logger.error(
+            "submit_case failed for client_id=%s: %s",
+            form.client_id, e,
+            exc_info=True,   # attaches full traceback to the log record
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="An internal server error occurred. The case was not saved. Please retry.",
+        )
 
 
-# ── Get Cases ──────────────────────────────────────────────────────────────
+# ── Get Cases ──────────────────────────────────────────────────────────────────
 
 
 @app.get("/api/cases")
 async def get_cases(
     authorization: str = Header(None),
     user: dict = Depends(require_role("doctor", "admin")),
-    before: str = None,   # ISO timestamp cursor — fetch cases older than this
-    limit: int = 25,      # Page size; capped at 100 to prevent abuse
+    before_time: str = None,       # ISO timestamp of the last seen case
+    before_priority: int = None,   # triage_priority of the last seen case (0/1/2)
+    limit: int = 25,
 ):
     """
-    Cursor-based pagination for the Doctor Dashboard.
-    Use `before=<created_at ISO string>` to fetch the next page.
-    Each page returns up to `limit` cases sorted EMERGENCY → URGENT → ROUTINE,
+    Cursor-based pagination with composite keyset for the Doctor Dashboard.
+
+    Sort order: EMERGENCY (0) → URGENT (1) → ROUTINE (2) first,
     then by created_at DESC within each tier.
 
-    Unlike offset pagination, this is safe alongside Supabase Realtime:
-    new inserts at the top of the queue don't shift rows into already-fetched pages.
+    Use before_time + before_priority from the previous page's
+    nextCursor / nextTriagePriority to fetch the next page.
+    The composite cursor correctly handles cases at tier boundaries
+    without silent data loss.
     """
     raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
@@ -154,36 +214,45 @@ async def get_cases(
 
     query = (
         db.table("case_records")
-        .select("id, patient_name, patient_age, patient_sex, triage_level, triage_confidence, risk_driver, created_at, reviewed_at, reviewed_by, facility_id, created_offline")
+        .select(
+            "id, patient_name, patient_age, patient_sex, "
+            "triage_level, triage_priority, triage_confidence, risk_driver, "
+            "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
+        )
         .is_("deleted_at", "null")
-        .order("created_at", desc=True)
-        .limit(limit + 1)   # Fetch one extra to determine hasMore
+        .order("triage_priority", desc=False)   # EMERGENCY (0) first
+        .order("created_at", desc=True)          # Newest within each tier
+        .limit(limit + 1)                        # Fetch one extra to determine hasMore
     )
 
-    if before:
-        # Fetch rows strictly older than the cursor timestamp
-        query = query.lt("created_at", before)
+    if before_time is not None and before_priority is not None:
+        # Composite keyset cursor — correct two-column keyset pagination.
+        # Fetch cases AFTER the last seen case in (priority ASC, created_at DESC) order:
+        # either (a) lower priority tier (higher integer), OR
+        # (b) same priority tier but older created_at.
+        # PostgREST v11+ supports nested and() inside or() — safe on Supabase Platform.
+        query = query.or_(
+            f"triage_priority.gt.{before_priority},"
+            f"and(triage_priority.eq.{before_priority},created_at.lt.{before_time})"
+        )
 
     result = query.execute()
     rows = result.data
 
     has_more = len(rows) > limit
     cases = rows[:limit]
-
-    # Sort fetched page by triage priority (EMERGENCY first), then by created_at DESC
-    order = {"EMERGENCY": 0, "URGENT": 1, "ROUTINE": 2}
-    cases.sort(key=lambda c: (order.get(c.get("triage_level", "ROUTINE"), 2)))
+    # No Python-side sort needed — DB handles ordering via triage_priority column
 
     return {
         "cases": cases,
         "hasMore": has_more,
-        # Cursor for next page — oldest created_at in this batch
+        # Return both cursor components for the next page request
         "nextCursor": cases[-1]["created_at"] if has_more and cases else None,
+        "nextTriagePriority": cases[-1]["triage_priority"] if has_more and cases else None,
     }
 
 
-
-# ── Review Case ────────────────────────────────────────────────────────────
+# ── Review Case ────────────────────────────────────────────────────────────────
 
 
 @app.patch("/api/cases/{case_id}/review")
@@ -204,35 +273,53 @@ async def review_case(
     return {"status": "reviewed"}
 
 
-# ── ASHA: My Submissions ───────────────────────────────────────────────────
+# ── ASHA: My Submissions ───────────────────────────────────────────────────────
 
 
 @app.get("/api/cases/mine")
 async def get_my_cases(
     authorization: str = Header(None),
     user: dict = Depends(require_role("asha_worker", "admin")),
+    before: str = None,   # created_at ISO cursor
+    limit: int = 25,
 ):
     """
-    Returns only the calling user's own submitted cases.
-    RLS enforces this at DB level; the explicit filter is for clarity.
+    Returns the calling user's own submitted cases with cursor pagination.
+    Sorted by created_at DESC only (chronological — no priority sort for personal history).
+    RLS enforces ownership at DB level; the explicit filter is for clarity.
     Returns a limited column set — full briefing JSONB is doctor-facing only.
     """
     raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
-    result = (
+    limit = max(1, min(limit, 100))
+
+    query = (
         db.table("case_records")
         .select(
-            "id, chief_complaint, triage_level, created_at, reviewed_at, patient_age, patient_sex"
+            "id, patient_name, chief_complaint, triage_level, "
+            "created_at, reviewed_at, patient_age, patient_sex"
         )
         .eq("submitted_by", user["sub"])
         .is_("deleted_at", "null")
         .order("created_at", desc=True)
-        .execute()
+        .limit(limit + 1)
     )
-    return result.data
+
+    if before:
+        query = query.lt("created_at", before)
+
+    result = query.execute()
+    rows = result.data
+    has_more = len(rows) > limit
+
+    return {
+        "cases": rows[:limit],
+        "hasMore": has_more,
+        "nextCursor": rows[limit - 1]["created_at"] if has_more and rows else None,
+    }
 
 
-# ── Get Case Detail ───────────────────────────────────────────────────────────
+# ── Get Case Detail ───────────────────────────────────────────────────────────────
 
 
 @app.get("/api/cases/{case_id}")

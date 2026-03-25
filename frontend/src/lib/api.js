@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { enqueue, dequeue, getAllQueued } from './offlineQueue'
 import { v4 as uuidv4 } from 'uuid'
+import { isServerReachable } from './connectivity'
 
 const BASE = import.meta.env.VITE_API_BASE_URL
 
@@ -14,11 +15,15 @@ async function authHeaders() {
 }
 
 export async function submitCase(formData) {
-  // Generate client_id here — same UUID whether online or queued
+  // Generate client_id here — same UUID whether online or queued (idempotency)
   const clientId = uuidv4()
   const payload  = { ...formData, client_id: clientId, client_submitted_at: new Date().toISOString() }
 
-  if (!navigator.onLine) {
+  // True connectivity check — not just navigator.onLine.
+  // navigator.onLine is true even when the satellite link is down but local Wi-Fi is up.
+  const online = await isServerReachable()
+
+  if (!online) {
     // Offline path: store in IndexedDB queue with offline flag (no token stored)
     const offlinePayload = { ...payload, created_offline: true }
     await enqueue(clientId, offlinePayload)
@@ -74,6 +79,10 @@ export async function processQueue() {
   let synced = 0
   let failed = 0
 
+  // Rate-safety: 3.5s between items = max ~17 items/min, safely under the 20/min per-user limit.
+  // Without this delay, a bulk sync of 20 queued cases would exhaust the limit on the last item.
+  const QUEUE_ITEM_DELAY_MS = 3500
+
   for (const item of queued) {
     try {
       const res = await fetch(`${BASE}/api/submit`, {
@@ -110,6 +119,8 @@ export async function processQueue() {
       // Network error — leave in queue for next attempt
       failed++
     }
+    // Paced delay between items — stays under per-user rate limit during bulk sync
+    await new Promise(resolve => setTimeout(resolve, QUEUE_ITEM_DELAY_MS))
   }
 
   return { synced, failed }
@@ -117,14 +128,17 @@ export async function processQueue() {
 
 // ─── Unchanged functions below ───────────────────────────────────────────────
 
-export async function getCases({ before } = {}) {
+export async function getCases({ before_time, before_priority } = {}) {
   const headers = await authHeaders()
   const url = new URL(`${BASE}/api/cases`)
-  if (before) url.searchParams.set('before', before)
+  if (before_time)     url.searchParams.set('before_time', before_time)
+  if (before_priority !== undefined && before_priority !== null) {
+    url.searchParams.set('before_priority', String(before_priority))
+  }
   url.searchParams.set('limit', '25')
   const res = await fetch(url.toString(), { headers })
   if (!res.ok) throw new Error(await res.text())
-  return res.json()   // Returns { cases, hasMore, nextCursor }
+  return res.json()   // Returns { cases, hasMore, nextCursor, nextTriagePriority }
 }
 
 export async function reviewCase(caseId) {
@@ -219,11 +233,14 @@ export async function adminGetStats() {
 
 // ── ASHA: Submission history ──────────────────────────────────────────────────
 
-export async function getMySubmissions() {
+export async function getMySubmissions({ before } = {}) {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/cases/mine`, { headers })
+  const url = new URL(`${BASE}/api/cases/mine`)
+  if (before) url.searchParams.set('before', before)
+  url.searchParams.set('limit', '25')
+  const res = await fetch(url.toString(), { headers })
   if (!res.ok) throw new Error(await res.text())
-  return res.json()
+  return res.json()   // Returns { cases, hasMore, nextCursor }
 }
 
 // ── Analytics ─────────────────────────────────────────────────────────────────

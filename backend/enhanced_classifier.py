@@ -17,7 +17,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import cross_val_score
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 from sklearn.calibration import CalibratedClassifierCV
-import joblib
+import joblib  # noqa: F401 — kept for unpickling legacy model files via pickle protocol
 
 from clinical_features import ClinicalFeatureEngineer
 
@@ -341,86 +341,8 @@ class EnhancedTriageClassifier:
             }
         }
 
-class ContinualLearningManager:
-    """
-    Manages continual learning and model updates based on clinical outcomes
-    """
-
-    def __init__(self, classifier: EnhancedTriageClassifier):
-        self.classifier = classifier
-        self.feedback_buffer = []
-        self.update_threshold = 50  # Update after 50 feedback cases
-        self.safety_threshold = 0.95  # Minimum emergency recall
-
-    def add_outcome_feedback(self, case_id: str, patient_data: Dict[str, Any],
-                           predicted_triage: str, actual_outcome: str):
-        """
-        Add clinical outcome feedback for model improvement
-
-        Args:
-            case_id: Unique case identifier
-            patient_data: Original patient data
-            predicted_triage: Model prediction
-            actual_outcome: Actual clinical outcome
-        """
-        # Map outcomes to triage levels
-        outcome_mapping = {
-            'discharged': 'ROUTINE',
-            'admitted': 'URGENT',
-            'icu': 'EMERGENCY',
-            'emergency_surgery': 'EMERGENCY',
-            'death': 'EMERGENCY'
-        }
-
-        true_triage = outcome_mapping.get(actual_outcome.lower(), 'ROUTINE')
-
-        # Calculate prediction error
-        error_severity = self._calculate_prediction_error(predicted_triage, true_triage)
-
-        if error_severity > 0:  # Only store cases with prediction errors
-            self.feedback_buffer.append({
-                'case_id': case_id,
-                'patient_data': patient_data,
-                'predicted_triage': predicted_triage,
-                'true_triage': true_triage,
-                'error_severity': error_severity,
-                'timestamp': datetime.now()
-            })
-
-            # Trigger update if buffer is full
-            if len(self.feedback_buffer) >= self.update_threshold:
-                self._perform_model_update()
-
-    def _calculate_prediction_error(self, predicted: str, actual: str) -> float:
-        """Calculate clinical prediction error severity"""
-        severity_map = {'ROUTINE': 0, 'URGENT': 1, 'EMERGENCY': 2}
-        pred_severity = severity_map.get(predicted, 0)
-        actual_severity = severity_map.get(actual, 0)
-
-        error = actual_severity - pred_severity
-
-        # Under-triage (missing emergencies) is most severe
-        if error > 0:
-            return error * 2.0
-        # Over-triage is less severe but still important
-        elif error < 0:
-            return abs(error) * 0.5
-        else:
-            return 0.0
-
-    def _perform_model_update(self):
-        """Perform incremental model update with safety checks"""
-        print(f"[Continual Learning] Updating model with {len(self.feedback_buffer)} feedback cases")
-
-        # For now, log the feedback for analysis
-        # In production, this would trigger retraining with safety validation
-        high_severity_errors = [fb for fb in self.feedback_buffer if fb['error_severity'] >= 2.0]
-
-        if high_severity_errors:
-            print(f"[Warning] Found {len(high_severity_errors)} high-severity prediction errors")
-            for error in high_severity_errors[:5]:  # Show first 5
-                print(f"  Case {error['case_id']}: Predicted {error['predicted_triage']}, Actual {error['true_triage']}")
-
-        # Clear buffer
-        self.feedback_buffer = []
-        print("[Continual Learning] Feedback buffer cleared")
+# ContinualLearningManager removed — it was an inert stub.
+# _perform_model_update() only logged and cleared the buffer; no retraining occurred.
+# No route in main.py ever called add_outcome_feedback().
+# Will be reintroduced properly when the PATCH /api/cases/{id}/outcome endpoint
+# and doctor feedback UI are scoped in a future sprint.

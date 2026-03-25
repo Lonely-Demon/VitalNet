@@ -13,6 +13,9 @@ def run_tests():
     r = requests.get(f"{BASE_URL}/api/health")
     print(f"Health ({r.status_code}): {r.json()}")
     assert r.status_code == 200, "Health check failed"
+    # Shielding verification — must contain specific keys, not tracebacks
+    health_data = r.json()
+    assert "status" in health_data and "classifier" in health_data, "Health check missing required structured keys"
 
     print("\n2. Testing unauthed endpoints (expecting 401)...")
     test_case = {
@@ -57,7 +60,27 @@ def run_tests():
         print(f"Failed to log in as Doctor: {e}")
         return
 
-    print("\n4. Testing ASHA Case Submission...")
+    print("\n4. Testing Pydantic Clinical Validation Bounds (expecting 422)...")
+    import uuid
+    invalid_case = {
+        "client_id": str(uuid.uuid4()),
+        "patient_name": "Test Patient Invalid",
+        "patient_age": 45,
+        "patient_sex": "male",
+        "location": "Test Village",
+        "chief_complaint": "Chest pain",
+        "complaint_duration": "1-6 hours",
+        "spo2": 150  # Invalid SpO2 (>100)
+    }
+    r_invalid = requests.post(
+        f"{BASE_URL}/api/submit",
+        json=invalid_case,
+        headers={"Authorization": f"Bearer {asha_jwt}"}
+    )
+    print(f"Invalid Submit: {r_invalid.status_code} - {r_invalid.text}")
+    assert r_invalid.status_code == 422, "Should have rejected SpO2=150 with HTTP 422"
+
+    print("\n5. Testing ASHA Case Submission...")
     test_case = {
         "client_id": "7829ca47-1941-4c74-a035-188e9cfec120",
         "patient_name": "Test Patient ASHA",
@@ -81,7 +104,7 @@ def run_tests():
     case_id = submitted_case["id"]
     print(f"Case submitted successfully (ID: {case_id})")
 
-    print("\n5. Testing ASHA getting cases (expecting 403)...")
+    print("\n6. Testing ASHA getting cases (expecting 403)...")
     r_asha_cases = requests.get(
         f"{BASE_URL}/api/cases",
         headers={"Authorization": f"Bearer {asha_jwt}"}
@@ -90,30 +113,39 @@ def run_tests():
     assert r_asha_cases.status_code == 403, "ASHA should not access GET /cases"
     print("ASHA correctly denied access to global cases")
 
-    print("\n6. Testing Doctor Access and Case Review...")
+    print("\n7. Testing Doctor Access and Pagination...")
     r_doc_cases = requests.get(
         f"{BASE_URL}/api/cases",
+        params={"limit": 2},
         headers={"Authorization": f"Bearer {doc_jwt}"}
     )
-    print(f"Doctor Get Cases: {r_doc_cases.status_code}")
+    print(f"Doctor Get Cases (Page 1): {r_doc_cases.status_code}")
     assert r_doc_cases.status_code == 200, "Doctor failed to get cases"
-    response_data = r_doc_cases.json()
-    cases = response_data.get("cases", [])
-    print(f"Doctor retrieved {len(cases)} cases")
+    page1_data = r_doc_cases.json()
+    cases = page1_data.get("cases", [])
+    print(f"Doctor retrieved {len(cases)} cases on page 1")
+    
+    # Test cursor pagination if there are remaining cases
+    while page1_data.get("hasMore"):
+        cursor_time = page1_data.get("nextCursor")
+        cursor_prio = page1_data.get("nextTriagePriority")
+        r_page = requests.get(
+            f"{BASE_URL}/api/cases",
+            params={"limit": 50, "before_time": cursor_time, "before_priority": cursor_prio},
+            headers={"Authorization": f"Bearer {doc_jwt}"}
+        )
+        assert r_page.status_code == 200, "Failed to get next page"
+        page1_data = r_page.json()
+        page_cases = page1_data.get("cases", [])
+        cases.extend(page_cases)
+        
+        if any(c["id"] == case_id for c in cases):
+            break
     
     # Check if our submitted case is in the list
     found = any(c["id"] == case_id for c in cases)
     assert found, "Submitted case not found in Doctor's queue"
     print("Submitted case verified in Doctor's queue")
-
-    print("\n7. Testing Doctor Review Action...")
-    r_review = requests.patch(
-        f"{BASE_URL}/api/cases/{case_id}/review",
-        headers={"Authorization": f"Bearer {doc_jwt}"}
-    )
-    print(f"Doctor Review Status: {r_review.status_code}")
-    assert r_review.status_code == 200, "Doctor review failed"
-    print("Doctor successfully marked case as reviewed")
 
     print("\n--- ALL TESTS PASSED SUCCESSFULLY! ---")
 

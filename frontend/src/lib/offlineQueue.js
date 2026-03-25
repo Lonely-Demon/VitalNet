@@ -4,11 +4,16 @@ const DB_NAME    = 'vitalnet_offline'
 const STORE_NAME = 'submission_queue'
 
 async function getQueueDB() {
-  return openDB(DB_NAME, 1, {
-    upgrade(db) {
+  return openDB(DB_NAME, 2, {
+    upgrade(db, oldVersion) {
+      // Create submission_queue (fresh install or upgrading from nothing)
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         const store = db.createObjectStore(STORE_NAME, { keyPath: 'client_id' })
         store.createIndex('queued_at', 'queued_at')
+      }
+      // Create form-drafts store (added in v2 — see useDraftSave.js)
+      if (!db.objectStoreNames.contains('form-drafts')) {
+        db.createObjectStore('form-drafts')
       }
     }
   })

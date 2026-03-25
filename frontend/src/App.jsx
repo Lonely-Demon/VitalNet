@@ -1,6 +1,7 @@
 import { AuthProvider, useAuth } from './store/authStore'
 import { RouteGuard } from './components/RouteGuard'
 import ToastProvider from './components/ToastProvider'
+import { UpdatePrompt } from './components/UpdatePrompt'
 import ASHAPanel   from './panels/ASHAPanel'
 import DoctorPanel from './panels/DoctorPanel'
 import AdminPanel  from './panels/AdminPanel'
@@ -36,6 +37,7 @@ export default function App() {
   return (
     <AuthProvider>
       <ToastProvider>
+        <UpdatePrompt />
         <RouteGuard>
           <AppInner />
         </RouteGuard>

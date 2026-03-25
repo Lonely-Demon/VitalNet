@@ -1,7 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import { submitCase } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
+import { useAuth } from '../store/authStore'
 import { useLocalTriage } from '../hooks/useLocalTriage'
+import { useDraftSave } from '../hooks/useDraftSave'
+import { validateForm } from '../utils/validation'
 
 const COMPLAINTS = [
   "Chest pain / tightness",
@@ -69,13 +73,43 @@ const emptyForm = {
 }
 
 export default function IntakeForm() {
+  const [clientId] = useState(() => uuidv4())
   const [form, setForm] = useState(emptyForm)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [fieldErrors, setFieldErrors] = useState({})
   const [localResult, setLocalResult] = useState(null)
+  
+  const { profile } = useAuth()
   const { showToast } = useToast()
   const { classify } = useLocalTriage()
+  
+  // Tie draft strictly to the authenticated worker so tab evictions safely restore
+  const { loadDraft, saveDraft, clearDraft } = useDraftSave(profile?.id || 'anonymous')
+
+  // Load draft on mount
+  useEffect(() => {
+    let mounted = true
+    loadDraft().then(draft => {
+      if (mounted && draft) {
+        setForm(draft)
+        showToast('Restored unsaved draft', 'info')
+      }
+    }).catch(console.error)
+    return () => { mounted = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Auto-save draft on form change (debounced 1s)
+  useEffect(() => {
+    if (form === emptyForm) return
+    const timer = setTimeout(() => {
+      saveDraft(form).catch(console.error)
+    }, 1000)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form])
 
   const handleChange = (e) => {
     const { name, value } = e.target
@@ -100,56 +134,29 @@ export default function IntakeForm() {
 
   const handleSubmit = async () => {
     setError(null)
+    setFieldErrors({})
     setLocalResult(null)
-
-    // Required field validation
-    if (!form.patient_name?.trim() || !form.patient_age || !form.patient_sex ||
-        !form.chief_complaint || !form.complaint_duration || !form.location) {
-      setError("Please fill all required fields (marked with *)")
-      return
-    }
-
-    // Additional validation for "Other" complaint
-    if (form.chief_complaint === "Other" && !form.custom_complaint?.trim()) {
-      setError("Please specify the complaint when selecting 'Other'")
-      return
-    }
-
-    // Vitals range validation (matches backend Pydantic constraints)
-    const vitalsErrors = []
-    if (form.bp_systolic && (form.bp_systolic < 50 || form.bp_systolic > 300)) {
-      vitalsErrors.push("BP Systolic must be between 50 and 300 mmHg")
-    }
-    if (form.bp_diastolic && (form.bp_diastolic < 20 || form.bp_diastolic > 200)) {
-      vitalsErrors.push("BP Diastolic must be between 20 and 200 mmHg")
-    }
-    if (form.spo2 && (form.spo2 < 50 || form.spo2 > 100)) {
-      vitalsErrors.push("SpO2 must be between 50% and 100%")
-    }
-    if (form.heart_rate && (form.heart_rate < 20 || form.heart_rate > 250)) {
-      vitalsErrors.push("Heart rate must be between 20 and 250 bpm")
-    }
-    if (form.temperature && (form.temperature < 30 || form.temperature > 45)) {
-      vitalsErrors.push("Temperature must be between 30°C and 45°C")
-    }
-    if (vitalsErrors.length > 0) {
-      setError(vitalsErrors.join(". "))
-      return
-    }
-
     setLoading(true)
 
     const payload = {
       ...form,
-      // Use custom complaint when "Other" is selected
-      chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint.trim() : form.chief_complaint,
-      patient_name: form.patient_name.trim(),
-      patient_age: parseInt(form.patient_age),
+      chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint?.trim() || "" : form.chief_complaint,
+      patient_name: form.patient_name?.trim() || "",
+      patient_age: form.patient_age ? parseInt(form.patient_age) : undefined,
       bp_systolic: form.bp_systolic ? parseInt(form.bp_systolic) : null,
       bp_diastolic: form.bp_diastolic ? parseInt(form.bp_diastolic) : null,
       spo2: form.spo2 ? parseInt(form.spo2) : null,
       heart_rate: form.heart_rate ? parseInt(form.heart_rate) : null,
       temperature: form.temperature ? parseFloat(form.temperature) : null,
+    }
+
+    // Zod clinical boundary validation
+    const validation = validateForm(payload)
+    if (!validation.success) {
+      setError("Please fix the validation errors below before submitting.")
+      setFieldErrors(validation.errors)
+      setLoading(false)
+      return
     }
 
     // Run local ONNX triage immediately — before any network call
@@ -160,12 +167,14 @@ export default function IntakeForm() {
 
     try {
       const data = await submitCase(payload)
-      // When queued offline, keep local triage result for display
+      
+      // Clear draft since it is successfully saved or queued
+      await clearDraft().catch(console.error)
+
       if (data.queued) {
         setResult({ ...data, localTriage: local })
         showToast('Saved offline \u2014 will sync when connected', 'warning')
       } else {
-        // Server result available — clear local preliminary result
         setResult(data)
         setLocalResult(null)
         showToast('Case submitted successfully', 'success')
@@ -248,23 +257,23 @@ export default function IntakeForm() {
 
       {/* Patient Location */}
       <Section title="Location">
-        <Field label="Location / Village *">
+        <Field label="Location / Village *" error={fieldErrors.location}>
           <input name="location" value={form.location} onChange={handleChange}
-            placeholder="e.g. Rampur Village" className={inputClass} />
+            placeholder="e.g. Rampur Village" className={`${inputClass} ${fieldErrors.location ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
       </Section>
 
       {/* Patient */}
       <Section title="Patient Details">
-        <Field label="Patient Name *">
+        <Field label="Patient Name *" error={fieldErrors.patient_name}>
           <input name="patient_name" value={form.patient_name} onChange={handleChange}
-            placeholder="e.g. Priya Sharma" className={inputClass} maxLength={100} />
+            placeholder="e.g. Priya Sharma" className={`${inputClass} ${fieldErrors.patient_name ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} maxLength={100} />
         </Field>
-        <Field label="Age (years) *">
+        <Field label="Age (years) *" error={fieldErrors.patient_age}>
           <input name="patient_age" type="number" value={form.patient_age}
-            onChange={handleChange} placeholder="e.g. 45" className={inputClass} />
+            onChange={handleChange} placeholder="e.g. 45" className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
-        <Field label="Sex *">
+        <Field label="Sex *" error={fieldErrors.patient_sex}>
           <div className="flex gap-4 mt-1">
             {["male", "female", "other"].map(s => (
               <label key={s} className="flex items-center gap-2 cursor-pointer group">
@@ -280,15 +289,15 @@ export default function IntakeForm() {
 
       {/* Complaint */}
       <Section title="Chief Complaint">
-        <Field label="Primary Complaint *">
+        <Field label="Primary Complaint *" error={fieldErrors.chief_complaint}>
           <select name="chief_complaint" value={form.chief_complaint}
-            onChange={handleChange} className={inputClass}>
+            onChange={handleChange} className={`${inputClass} ${fieldErrors.chief_complaint ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
             <option value="">Select complaint</option>
             {COMPLAINTS.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </Field>
         {form.chief_complaint === "Other" && (
-          <Field label="Please specify the complaint *">
+          <Field label="Please specify the complaint *" error={fieldErrors.chief_complaint}>
             <input
               name="custom_complaint"
               value={form.custom_complaint}
@@ -299,9 +308,9 @@ export default function IntakeForm() {
             />
           </Field>
         )}
-        <Field label="Duration *">
+        <Field label="Duration *" error={fieldErrors.complaint_duration}>
           <select name="complaint_duration" value={form.complaint_duration}
-            onChange={handleChange} className={inputClass}>
+            onChange={handleChange} className={`${inputClass} ${fieldErrors.complaint_duration ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
             <option value="">Select duration</option>
             {DURATIONS.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
@@ -311,25 +320,25 @@ export default function IntakeForm() {
       {/* Vitals */}
       <Section title="Vitals (optional — record what is available)">
         <div className="grid grid-cols-2 gap-3">
-          <Field label="BP Systolic (mmHg)">
+          <Field label="BP Systolic (mmHg)" error={fieldErrors.bp_systolic}>
             <input name="bp_systolic" type="number" value={form.bp_systolic}
-              onChange={handleChange} placeholder="e.g. 120" className={inputClass} />
+              onChange={handleChange} placeholder="e.g. 120" className={`${inputClass} ${fieldErrors.bp_systolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label="BP Diastolic (mmHg)">
+          <Field label="BP Diastolic (mmHg)" error={fieldErrors.bp_diastolic}>
             <input name="bp_diastolic" type="number" value={form.bp_diastolic}
-              onChange={handleChange} placeholder="e.g. 80" className={inputClass} />
+              onChange={handleChange} placeholder="e.g. 80" className={`${inputClass} ${fieldErrors.bp_diastolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label="SpO2 (%)">
+          <Field label="SpO2 (%)" error={fieldErrors.spo2}>
             <input name="spo2" type="number" value={form.spo2}
-              onChange={handleChange} placeholder="e.g. 98" className={inputClass} />
+              onChange={handleChange} placeholder="e.g. 98" className={`${inputClass} ${fieldErrors.spo2 ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label="Heart Rate (bpm)">
+          <Field label="Heart Rate (bpm)" error={fieldErrors.heart_rate}>
             <input name="heart_rate" type="number" value={form.heart_rate}
-              onChange={handleChange} placeholder="e.g. 72" className={inputClass} />
+              onChange={handleChange} placeholder="e.g. 72" className={`${inputClass} ${fieldErrors.heart_rate ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label="Temperature (°C)">
+          <Field label="Temperature (°C)" error={fieldErrors.temperature}>
             <input name="temperature" type="number" step="0.1" value={form.temperature}
-              onChange={handleChange} placeholder="e.g. 37.2" className={inputClass} />
+              onChange={handleChange} placeholder="e.g. 37.2" className={`${inputClass} ${fieldErrors.temperature ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
         </div>
       </Section>
@@ -434,11 +443,12 @@ function Section({ title, children }) {
   )
 }
 
-function Field({ label, children }) {
+function Field({ label, error, children }) {
   return (
     <div>
       <label className="block text-sm font-medium text-text2 mb-2 ml-1">{label}</label>
       {children}
+      {error && <p className="text-emergency text-xs mt-1.5 ml-1 animate-fade-up font-medium">{error}</p>}
     </div>
   )
 }

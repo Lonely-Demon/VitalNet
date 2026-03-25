@@ -16,13 +16,14 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
 
       // Precache the entire app shell
       workbox: {
         globPatterns: [
           '**/*.{js,css,html,ico,png,svg,woff2}',
           'models/triage_classifier.onnx',
+          'models/features_config.json',
         ],
 
         // Background Sync for POST /api/submit (in-flight failure recovery)

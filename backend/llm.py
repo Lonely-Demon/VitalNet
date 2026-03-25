@@ -8,13 +8,17 @@ All tiers share the same output schema enforcement.
 The triage_level from the ML classifier is locked — no LLM can override it.
 """
 import json
+import logging
 import asyncio
 from pathlib import Path
 
 import groq
 from groq import AsyncGroq  # Use async client — non-blocking event loop
+from json_repair import repair_json
 
 from config import settings
+
+logger = logging.getLogger("vitalnet")
 
 # ─── Module-level constants ──────────────────────────────────────────────────
 
@@ -37,6 +41,8 @@ LIST_FIELDS = {
     "recommended_immediate_actions", "recommended_tests",
 }
 
+MAX_RETRIES_PER_MODEL = 1   # 1 retry = 2 total attempts per tier before downgrade
+
 # ─── Clients — initialized once at module load ───────────────────────────────
 
 _groq_client: AsyncGroq | None = None
@@ -51,11 +57,42 @@ if settings.gemini_api_key:
         genai.configure(api_key=settings.gemini_api_key)
         _gemini_configured = True
     except ImportError:
-        print("[WARN] google-generativeai not installed — Gemini fallback disabled")
+        logger.warning("[WARN] google-generativeai not installed — Gemini fallback disabled")
 
 # ─── System prompt — cached at module load, never re-read from disk ──────────
 
-_SYSTEM_PROMPT: str = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+try:
+    _SYSTEM_PROMPT: str = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+except FileNotFoundError:
+    logger.error(
+        "[CRITICAL] System prompt not found at %s. Using minimal fallback prompt.",
+        SYSTEM_PROMPT_PATH,
+    )
+    _SYSTEM_PROMPT = (
+        "You are a clinical triage assistant. Analyse the patient data and return a JSON briefing "
+        "with keys: triage_level, primary_risk_driver, differential_diagnoses, red_flags, "
+        "recommended_immediate_actions, recommended_tests, uncertainty_flags, disclaimer. "
+        "CRITICAL: Your response MUST be a single valid JSON object only. Do not wrap it in "
+        "markdown code blocks. Do not add any explanatory text before or after the JSON. "
+        "Do not use trailing commas."
+    )
+
+
+# ─── JSON parser with auto-repair ────────────────────────────────────────────
+
+def _parse_llm_json(raw: str) -> dict:
+    """
+    Parse LLM JSON output with auto-repair for common formatting errors:
+    trailing commas, markdown code fences, unescaped quotes, etc.
+    Raises json.JSONDecodeError only if repair also fails.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        repaired = repair_json(raw, return_objects=True)
+        if isinstance(repaired, dict):
+            return repaired
+        raise   # re-raise original error — repair produced a non-dict
 
 
 # ─── Patient context builder ──────────────────────────────────────────────────
@@ -116,9 +153,9 @@ async def _call_groq(model: str, patient_context: str) -> dict:
         response_format={"type": "json_object"},
         temperature=0.1,
         max_tokens=1000,
-        timeout=8,
+        timeout=15,   # Bumped from 8s: 70B JSON generation can take 8–12s under load
     )
-    return json.loads(response.choices[0].message.content)
+    return _parse_llm_json(response.choices[0].message.content)
 
 
 # ─── Gemini async call ────────────────────────────────────────────────────────
@@ -143,7 +180,7 @@ async def _call_gemini(model_name: str, patient_context: str) -> dict:
     )
     # Use native async method — avoids thread pool overhead
     response = await model.generate_content_async(patient_context)
-    return json.loads(response.text)
+    return _parse_llm_json(response.text)
 
 
 # ─── Main entry point — fully async ─────────────────────────────────────────
@@ -153,9 +190,14 @@ async def generate_briefing(form_data: dict, triage_result: dict) -> dict:
     Generate a clinical briefing using the 4-tier fallback chain.
     Never raises — always returns a usable briefing dict.
     Triage level from classifier is enforced on every output path.
+
+    Intra-tier retry: if a model fails due to a JSON parse error (stray
+    markdown fence, trailing comma etc.), retries the SAME model once before
+    downgrading to an inferior tier. A formatting artifact should not degrade
+    clinical reasoning quality.
     """
     if not _groq_client and not _gemini_configured:
-        print("⚠ No LLM API keys configured — returning fallback briefing.")
+        logger.warning("No LLM API keys configured — returning fallback briefing.")
         return _fallback_briefing(triage_result)
 
     patient_context = _build_patient_context(form_data, triage_result)
@@ -163,42 +205,63 @@ async def generate_briefing(form_data: dict, triage_result: dict) -> dict:
     # ── Tier 1 & 2: Groq models ───────────────────────────────────────────────
     if _groq_client:
         for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
-            try:
-                briefing = await _call_groq(model, patient_context)
-                print(f"✓ Briefing generated via Groq/{model}")
-                return _enforce_schema(briefing, triage_result)
-            except groq.RateLimitError:
-                print(f"Rate limit on Groq/{model} — trying next tier")
-                await asyncio.sleep(0.5)   # Brief pause before next attempt
-                continue
-            except (groq.APIConnectionError, groq.InternalServerError):
-                print(f"Connection/server error on Groq/{model} — trying next tier")
-                continue
-            except json.JSONDecodeError:
-                print(f"JSON parse error on Groq/{model} — trying next tier")
-                continue
-            except Exception as e:
-                print(f"Unexpected error on Groq/{model}: {e} — trying next tier")
-                continue
+            for attempt in range(MAX_RETRIES_PER_MODEL + 1):
+                try:
+                    briefing = await _call_groq(model, patient_context)
+                    logger.info("Briefing via Groq/%s (attempt %d)", model, attempt + 1)
+                    return _enforce_schema(briefing, triage_result)
+                except groq.RateLimitError:
+                    logger.warning("Rate limit on Groq/%s — moving to next tier", model)
+                    await asyncio.sleep(0.5)
+                    break   # rate limit is not retriable within the same tier
+                except json.JSONDecodeError:
+                    if attempt < MAX_RETRIES_PER_MODEL:
+                        logger.warning(
+                            "JSON parse error on Groq/%s (attempt %d) — retrying same model",
+                            model, attempt + 1,
+                        )
+                        await asyncio.sleep(0.3)
+                        continue
+                    logger.warning(
+                        "JSON parse error on Groq/%s after %d attempts — downgrading",
+                        model, MAX_RETRIES_PER_MODEL + 1,
+                    )
+                    break
+                except (groq.APIConnectionError, groq.InternalServerError):
+                    logger.warning("Connection/server error on Groq/%s — moving to next tier", model)
+                    break
+                except Exception as e:
+                    logger.warning("Unexpected error on Groq/%s: %s — moving to next tier", model, e)
+                    break
 
     # ── Tier 3 & 4: Gemini models ─────────────────────────────────────────────
     if _gemini_configured:
         for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
-            try:
-                briefing = await _call_gemini(model, patient_context)
-                print(f"✓ Briefing generated via Gemini/{model}")
-                return _enforce_schema(briefing, triage_result)
-            except json.JSONDecodeError:
-                print(f"JSON parse error on Gemini/{model} — trying next tier")
-                continue
-            except Exception as e:
-                # Catches Gemini quota errors, connection errors, etc.
-                print(f"Error on Gemini/{model}: {e} — trying next tier")
-                await asyncio.sleep(0.5)
-                continue
+            for attempt in range(MAX_RETRIES_PER_MODEL + 1):
+                try:
+                    briefing = await _call_gemini(model, patient_context)
+                    logger.info("Briefing via Gemini/%s (attempt %d)", model, attempt + 1)
+                    return _enforce_schema(briefing, triage_result)
+                except json.JSONDecodeError:
+                    if attempt < MAX_RETRIES_PER_MODEL:
+                        logger.warning(
+                            "JSON parse error on Gemini/%s (attempt %d) — retrying same model",
+                            model, attempt + 1,
+                        )
+                        await asyncio.sleep(0.3)
+                        continue
+                    logger.warning(
+                        "JSON parse error on Gemini/%s after %d attempts — downgrading",
+                        model, MAX_RETRIES_PER_MODEL + 1,
+                    )
+                    break
+                except Exception as e:
+                    logger.warning("Error on Gemini/%s: %s — moving to next tier", model, e)
+                    await asyncio.sleep(0.5)
+                    break
 
     # ── All tiers exhausted ───────────────────────────────────────────────────
-    print("⚠ All LLM tiers exhausted — returning fallback briefing. Triage badge intact.")
+    logger.warning("All LLM tiers exhausted — returning fallback briefing. Triage badge intact.")
     return _fallback_briefing(triage_result)
 
 

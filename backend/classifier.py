@@ -1,108 +1,56 @@
 """
-VitalNet Classifier Interface
-Supports both legacy and enhanced classifier systems with backward compatibility
+VitalNet Classifier Interface — Enhanced classifier only.
+Legacy classifier paths removed (triage_classifier.pkl deleted in cleanup sprint).
+If loading fails, raises RuntimeError with a descriptive message.
 """
 
-import pickle
-import numpy as np
 from pathlib import Path
-from typing import Dict, Any, Optional
-from clinical_features import ClinicalFeatureEngineer
+from typing import Dict, Any
 
-# Model paths
-LEGACY_PKL_PATH = Path(__file__).parent / "models" / "triage_classifier.pkl"
+# Model path — enhanced classifier only
 ENHANCED_PKL_PATH = Path(__file__).parent / "models" / "enhanced_triage_classifier.pkl"
-
-# Feature engineer for legacy classifier (45-feature pipeline)
-_feature_engineer = ClinicalFeatureEngineer()
 
 # Global classifier state
 _classifier = None
 _classifier_type = None
 _model_info = {}
 
-# Legacy classifier globals (for backward compatibility)
-_clf = None
-_explainer = None
-_feature_names = None
-_label_map = None
-_accuracy = None
-_emergency_fn = None
 
-
-def load_classifier():
+def load_classifier() -> bool:
     """
-    Load the best available classifier (enhanced if available, otherwise legacy)
+    Load the enhanced multi-stage classifier.
+    Raises RuntimeError with a descriptive message if loading fails.
     """
     global _classifier, _classifier_type, _model_info
-    global _clf, _explainer, _feature_names, _label_map, _accuracy, _emergency_fn
 
-    # Try to load enhanced classifier first
-    if ENHANCED_PKL_PATH.exists():
-        try:
-            print("[Classifier] Loading enhanced multi-stage classifier...")
-            from enhanced_classifier import EnhancedTriageClassifier
+    if not ENHANCED_PKL_PATH.exists():
+        raise RuntimeError(
+            f"Enhanced classifier not found at {ENHANCED_PKL_PATH}. "
+            "Run backend/scripts/retrain_and_export.py to regenerate."
+        )
 
-            _classifier = EnhancedTriageClassifier.load_model(str(ENHANCED_PKL_PATH))
-            _classifier_type = "enhanced"
-            _model_info = _classifier.get_model_info()
+    try:
+        from enhanced_classifier import EnhancedTriageClassifier
+        _classifier = EnhancedTriageClassifier.load_model(str(ENHANCED_PKL_PATH))
+        _classifier_type = "enhanced"
+        _model_info = _classifier.get_model_info()
 
-            print(
-                f"[OK] Enhanced classifier loaded - version: {_model_info['model_version']}"
-            )
-            print(
-                f"[OK] Model accuracy: {_model_info['performance_metrics'].get('accuracy', 'N/A'):.4f}"
-            )
-            print(
-                f"[OK] Emergency recall: {_model_info['performance_metrics'].get('emergency_recall', 'N/A'):.4f}"
-            )
+        acc = _model_info["performance_metrics"].get("accuracy", "N/A")
+        recall = _model_info["performance_metrics"].get("emergency_recall", "N/A")
+        print(f"[OK] Enhanced classifier loaded — v{_model_info['model_version']}")
+        print(f"[OK] Accuracy: {acc:.4f}  Emergency recall: {recall:.4f}")
+        return True
 
-            return True
-
-        except Exception as e:
-            print(f"[WARN] Enhanced classifier loading failed: {e}")
-            print("[Classifier] Falling back to legacy classifier...")
-
-    # Fall back to legacy classifier
-    if LEGACY_PKL_PATH.exists():
-        try:
-            print("[Classifier] Loading legacy classifier...")
-
-            with open(LEGACY_PKL_PATH, "rb") as f:
-                _model_data = pickle.load(f)
-
-            # Legacy classifier setup
-            _clf = _model_data["classifier"]
-            _explainer = _model_data["explainer"]
-            _feature_names = _model_data["feature_names"]
-            _label_map = _model_data["label_map"]
-            _accuracy = _model_data["accuracy"]
-            _emergency_fn = _model_data["emergency_fn"]
-
-            _classifier_type = "legacy"
-            _model_info = {
-                "model_version": "1.0.0",
-                "classifier_type": "HistGradientBoostingClassifier",
-                "accuracy": _accuracy,
-                "emergency_fn": _emergency_fn,
-            }
-
-            print(
-                f"[OK] Legacy classifier loaded - accuracy: {_accuracy:.4f}, emergency_fn: {_emergency_fn}"
-            )
-            return True
-
-        except Exception as e:
-            print(f"[ERROR] Legacy classifier loading failed: {e}")
-            raise RuntimeError("No valid classifier found")
-
-    else:
-        raise RuntimeError("No classifier file found")
+    except Exception as e:
+        raise RuntimeError(
+            f"Enhanced classifier loading failed: {e}. "
+            "The model file may be corrupt. Run retrain_and_export.py to regenerate."
+        ) from e
 
 
 def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Run triage prediction using the loaded classifier
+    Run triage prediction using the loaded enhanced classifier.
 
     Args:
         form_data: Patient data dictionary
@@ -111,16 +59,13 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
         Dictionary with triage_level, confidence_score, risk_driver, and metadata
     """
     if _classifier_type is None:
-        raise RuntimeError("Classifier not loaded - call load_classifier() at startup")
+        raise RuntimeError("Classifier not loaded — call load_classifier() at startup")
 
-    if _classifier_type == "enhanced":
-        return _predict_enhanced(form_data)
-    else:
-        return _predict_legacy(form_data)
+    return _predict_enhanced(form_data)
 
 
 def _predict_enhanced(form_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Run prediction using the enhanced classifier"""
+    """Run prediction using the enhanced classifier."""
     try:
         result = _classifier.predict(form_data)
 
@@ -143,45 +88,14 @@ def _predict_enhanced(form_data: Dict[str, Any]) -> Dict[str, Any]:
 
     except Exception as e:
         print(f"[ERROR] Enhanced prediction failed: {e}")
-        # Fall back to legacy prediction if available
-        if _clf is not None:
-            print("[Classifier] Falling back to legacy prediction...")
-            return _predict_legacy(form_data)
-        else:
-            raise
-
-
-def _predict_legacy(form_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Run prediction using the legacy classifier with 45-feature pipeline"""
-    if _clf is None:
-        raise RuntimeError("Legacy classifier not loaded")
-
-    # Use ClinicalFeatureEngineer to build the 45-feature vector
-    feat_dict = _feature_engineer.engineer_features(form_data)
-    feature_vector = [feat_dict[name] for name in _feature_names]
-    features = np.array([feature_vector], dtype=np.float32)
-
-    pred = _clf.predict(features)[0]
-    triage_level = _label_map[pred]
-    proba = _clf.predict_proba(features)[0]
-    confidence = float(np.max(proba))
-    risk_driver = _get_legacy_risk_driver(features[0], triage_level)
-
-    return {
-        "triage_level": triage_level,
-        "confidence_score": confidence,
-        "risk_driver": risk_driver,
-        "model_version": "1.0.0-legacy",
-        "processing_time": "legacy",
-        "fast_path": False,
-    }
+        raise  # Let main.py's handler catch this as a 500
 
 
 def _generate_risk_explanation(
     triage_level: str, clinical_features: Dict[str, float], form_data: Dict[str, Any]
 ) -> str:
     """
-    Generate a human-readable risk explanation from enhanced classifier features
+    Generate a human-readable risk explanation from enhanced classifier features.
     """
     try:
         # Find the most significant clinical indicators
@@ -280,41 +194,8 @@ def _generate_risk_explanation(
         return f"Advanced clinical analysis classified this case as {triage_level}."
 
 
-def _get_legacy_risk_driver(features: np.ndarray, triage_level: str) -> str:
-    """
-    Legacy SHAP-based risk driver explanation.
-    NOTE: SHAP computation runs on every legacy inference. If latency is a concern,
-    migrate to the enhanced classifier which uses a cheaper rule-based explanation.
-    """
-    try:
-        class_idx = {v: k for k, v in _label_map.items()}[triage_level]
-        shap_vals = _explainer.shap_values(features.reshape(1, -1))
-        class_shap = np.abs(shap_vals[0, :, class_idx])
-        top_idx = int(np.argmax(class_shap))
-        top_feat = _feature_names[top_idx]
-        top_val = features[top_idx]
-
-        # Format value with appropriate unit
-        units = {
-            "spo2": "%",
-            "heart_rate": " bpm",
-            "temperature": "°C",
-            "bp_systolic": " mmHg",
-            "bp_diastolic": " mmHg",
-            "age": " yrs",
-        }
-        unit = units.get(top_feat, "")
-        val_str = f"{top_val:.1f}{unit}" if top_val != -1 else "not recorded"
-
-        return f"{top_feat.replace('_', ' ').title()} ({val_str}) was the primary driver of {triage_level} classification."
-
-    except Exception as e:
-        print(f"[WARN] SHAP risk driver failed: {e} - using fallback")
-        return f"Triage level {triage_level} assigned by ML classifier."
-
-
 def get_classifier_info() -> Dict[str, Any]:
-    """Get information about the currently loaded classifier"""
+    """Get information about the currently loaded classifier."""
     return {
         "classifier_type": _classifier_type,
         "model_info": _model_info,
@@ -322,5 +203,5 @@ def get_classifier_info() -> Dict[str, Any]:
     }
 
 
-# Backwards-compatible alias - main.py imports run_triage
+# Backwards-compatible alias — main.py imports run_triage
 run_triage = predict_triage

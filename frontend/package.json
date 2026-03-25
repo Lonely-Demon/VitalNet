@@ -20,9 +20,11 @@
     "tailwindcss": "^4.2.1",
     "uuid": "^13.0.0",
     "vite-plugin-pwa": "^1.2.0",
-    "workbox-window": "^7.4.0"
+    "workbox-window": "^7.4.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "vite": "^7.3.1"
   }
 }

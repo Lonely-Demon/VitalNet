@@ -24,3 +24,5 @@ OUTPUT SCHEMA — respond with exactly this structure:
   "uncertainty_flags": "explicit statement of what is missing and how it affects this assessment",
   "disclaimer": "AI-generated clinical briefing for decision support only. Requires qualified medical examination and physician judgment before any clinical action."
 }
+
+CRITICAL: Your response MUST be a single valid JSON object only. Do not wrap it in markdown code blocks. Do not add any explanatory text before or after the JSON. Do not use trailing commas.
