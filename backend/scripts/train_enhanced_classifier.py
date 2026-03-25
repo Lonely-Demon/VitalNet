@@ -10,13 +10,21 @@ from sklearn.metrics import classification_report, confusion_matrix
 import warnings
 from datetime import datetime
 
-from enhanced_classifier import EnhancedTriageClassifier
-from clinical_features import ClinicalFeatureEngineer
+import os
+import sys
+
+# Add backend to Python path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
+sys.path.insert(0, BACKEND_DIR)
+
+from app.ml.enhanced_classifier import EnhancedTriageClassifier
+from app.ml.clinical_features import ClinicalFeatureEngineer
 
 warnings.filterwarnings('ignore')
 
 # Configuration
-N_SAMPLES = 8000  # Increased dataset size
+N_SAMPLES = 4000  # Increased dataset size
 RANDOM_SEED = 42
 TEST_SIZE = 0.2
 
@@ -433,12 +441,14 @@ def train_enhanced_classifier():
         print(f"[Enhanced Training] EMERGENCY False Negatives: {emergency_fn}")
 
         if emergency_fn == 0:
-            print("[Enhanced Training] ✅ Safety objective met: Zero EMERGENCY false negatives")
+            print("[Enhanced Training] Safety objective met: Zero EMERGENCY false negatives")
         else:
-            print(f"[Enhanced Training] ⚠️  Safety objective NOT met: {emergency_fn} EMERGENCY cases under-triaged")
+            print(f"[Enhanced Training] Safety objective NOT met: {emergency_fn} EMERGENCY cases under-triaged")
 
     # Save the model
-    model_filename = f"enhanced_triage_classifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+    models_dir = os.path.join(BACKEND_DIR, "app", "ml", "models")
+    os.makedirs(models_dir, exist_ok=True)
+    model_filename = os.path.join(models_dir, "enhanced_triage_classifier.pkl")
     classifier.save_model(model_filename)
 
     print(f"\n[Enhanced Training] Training complete! Model saved as: {model_filename}")

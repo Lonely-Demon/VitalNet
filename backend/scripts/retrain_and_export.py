@@ -38,9 +38,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
 sys.path.insert(0, BACKEND_DIR)
 
-from clinical_features import ClinicalFeatureEngineer
+from app.ml.clinical_features import ClinicalFeatureEngineer
 
-PKL_PATH = os.path.join(BACKEND_DIR, "models", "triage_classifier.pkl")
+PKL_PATH = os.path.join(BACKEND_DIR, "app", "ml", "models", "triage_classifier.pkl")
 ONNX_DIR = os.path.join(PROJECT_ROOT, "frontend", "public", "models")
 ONNX_PATH = os.path.join(ONNX_DIR, "triage_classifier.onnx")
 
