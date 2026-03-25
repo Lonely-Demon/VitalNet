@@ -5,10 +5,7 @@ Simple test of the enhanced classifier by directly calling the classifier module
 import sys
 import os
 
-# Add the current directory to path
-sys.path.append('/home/dharshan/VitalNet/backend')
-
-from classifier import predict_triage, get_classifier_info, load_classifier
+from app.ml.classifier import predict_triage, get_classifier_info, load_classifier
 
 def test_enhanced_classifier_direct():
     """Test the enhanced classifier directly"""

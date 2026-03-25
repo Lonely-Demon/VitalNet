@@ -1,7 +1,7 @@
-# backend/analytics_routes.py
-from fastapi import APIRouter, Header, Depends, HTTPException
-from auth import require_role
-from database import get_supabase_for_user
+from fastapi import APIRouter, Header, Depends
+
+from app.core.auth import require_role
+from app.core.database import get_supabase_for_user
 from datetime import datetime, timedelta, timezone
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])

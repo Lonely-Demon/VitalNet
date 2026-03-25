@@ -3,11 +3,13 @@ VitalNet Classifier Interface — Enhanced classifier only.
 Legacy classifier paths removed (triage_classifier.pkl deleted in cleanup sprint).
 If loading fails, raises RuntimeError with a descriptive message.
 """
-
+import logging
 from pathlib import Path
 from typing import Dict, Any
 
-# Model path — enhanced classifier only
+logger = logging.getLogger("vitalnet")
+
+# Model path — enhanced classifier sits alongside this file under app/ml/models/
 ENHANCED_PKL_PATH = Path(__file__).parent / "models" / "enhanced_triage_classifier.pkl"
 
 # Global classifier state
@@ -30,15 +32,21 @@ def load_classifier() -> bool:
         )
 
     try:
-        from enhanced_classifier import EnhancedTriageClassifier
+        from app.ml.enhanced_classifier import EnhancedTriageClassifier
         _classifier = EnhancedTriageClassifier.load_model(str(ENHANCED_PKL_PATH))
         _classifier_type = "enhanced"
         _model_info = _classifier.get_model_info()
 
         acc = _model_info["performance_metrics"].get("accuracy", "N/A")
         recall = _model_info["performance_metrics"].get("emergency_recall", "N/A")
-        print(f"[OK] Enhanced classifier loaded — v{_model_info['model_version']}")
-        print(f"[OK] Accuracy: {acc:.4f}  Emergency recall: {recall:.4f}")
+        logger.info(
+            "Enhanced classifier loaded",
+            extra={
+                "model_version": _model_info["model_version"],
+                "accuracy": acc,
+                "emergency_recall": recall,
+            },
+        )
         return True
 
     except Exception as e:
@@ -87,7 +95,7 @@ def _predict_enhanced(form_data: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        print(f"[ERROR] Enhanced prediction failed: {e}")
+        logger.error("Enhanced prediction failed: %s", e, exc_info=True)
         raise  # Let main.py's handler catch this as a 500
 
 
@@ -190,7 +198,7 @@ def _generate_risk_explanation(
         return f"{base_explanation}. Classified as {triage_level}."
 
     except Exception as e:
-        print(f"[WARN] Risk explanation generation failed: {e}")
+        logger.warning("Risk explanation generation failed: %s", e)
         return f"Advanced clinical analysis classified this case as {triage_level}."
 
 
@@ -203,5 +211,5 @@ def get_classifier_info() -> Dict[str, Any]:
     }
 
 
-# Backwards-compatible alias — main.py imports run_triage
+# Backwards-compatible alias
 run_triage = predict_triage

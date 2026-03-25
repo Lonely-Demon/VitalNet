@@ -1,33 +1,28 @@
-import base64
-import json as _json
+"""
+VitalNet Cases Router — all patient case endpoints.
+Extracted from main.py as part of Phase 12 architectural modularisation.
+"""
 import logging
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, Header, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-import os
 import uuid as uuid_lib
 from datetime import datetime, timezone
-from dotenv import load_dotenv
 
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
-from database import supabase_anon, get_supabase_for_user
-from admin_routes import router as admin_router
-from analytics_routes import router as analytics_router
-from classifier import load_classifier, run_triage
-from llm import generate_briefing
-from auth import require_role
-from schemas import IntakeForm
+from app.core.auth import require_role
+from app.core.database import get_supabase_for_user
+from app.models.schemas import IntakeForm
+from app.ml.classifier import run_triage
+from app.services.llm import generate_briefing
 
-load_dotenv()
+import base64
+import json as _json
 
-# ── Logging — named logger avoids conflicts with uvicorn's root logger ─────────
 logger = logging.getLogger("vitalnet")
 
+router = APIRouter()
 
-# ── Per-user rate limiter ──────────────────────────────────────────────────────
 
 def _get_user_id(request: Request) -> str:
     """
@@ -49,71 +44,10 @@ def _get_user_id(request: Request) -> str:
 limiter = Limiter(key_func=_get_user_id)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    load_classifier()
-    logger.info("[OK] VitalNet API started")
-    yield
-
-
-app = FastAPI(title="VitalNet API", version="0.2.0", lifespan=lifespan)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.add_middleware(SlowAPIMiddleware)
-app.include_router(admin_router)
-app.include_router(analytics_router)
-
-# CORS — restricted to known origins
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:4173",
-        "http://127.0.0.1:4173",
-        os.getenv("FRONTEND_URL", "").rstrip("/"),
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ── Health Check ───────────────────────────────────────────────────────────────
-
-
-@app.get("/api/health")
-async def health():
-    from classifier import get_classifier_info
-
-    # Database connectivity check
-    try:
-        supabase_anon.table("facilities").select("id").limit(1).execute()
-        db_status = "connected"
-    except Exception as e:
-        db_status = f"error: {str(e)[:80]}"  # Truncate — never expose full errors
-
-    # Classifier state — use public API, not private _classifier_type variable
-    info = get_classifier_info()
-    classifier_loaded = bool(info["classifier_type"])
-    classifier_status = (
-        f"loaded — {info['classifier_type']} v{info['model_info'].get('model_version', 'N/A')}"
-        if classifier_loaded
-        else "NOT LOADED"
-    )
-
-    return {
-        "status": "ok" if db_status == "connected" and classifier_loaded else "degraded",
-        "database": db_status,
-        "classifier": classifier_status,
-        "version": "0.2.0",
-    }
-
-
 # ── Submit Case ────────────────────────────────────────────────────────────────
 
 
-@app.post("/api/submit")
+@router.post("/api/submit")
 @limiter.limit("20/minute")   # 20 per authenticated user per minute
 async def submit_case(
     request: Request,       # required first positional param for slowapi
@@ -187,7 +121,7 @@ async def submit_case(
 # ── Get Cases ──────────────────────────────────────────────────────────────────
 
 
-@app.get("/api/cases")
+@router.get("/api/cases")
 async def get_cases(
     authorization: str = Header(None),
     user: dict = Depends(require_role("doctor", "admin")),
@@ -227,10 +161,6 @@ async def get_cases(
 
     if before_time is not None and before_priority is not None:
         # Composite keyset cursor — correct two-column keyset pagination.
-        # Fetch cases AFTER the last seen case in (priority ASC, created_at DESC) order:
-        # either (a) lower priority tier (higher integer), OR
-        # (b) same priority tier but older created_at.
-        # PostgREST v11+ supports nested and() inside or() — safe on Supabase Platform.
         query = query.or_(
             f"triage_priority.gt.{before_priority},"
             f"and(triage_priority.eq.{before_priority},created_at.lt.{before_time})"
@@ -241,12 +171,10 @@ async def get_cases(
 
     has_more = len(rows) > limit
     cases = rows[:limit]
-    # No Python-side sort needed — DB handles ordering via triage_priority column
 
     return {
         "cases": cases,
         "hasMore": has_more,
-        # Return both cursor components for the next page request
         "nextCursor": cases[-1]["created_at"] if has_more and cases else None,
         "nextTriagePriority": cases[-1]["triage_priority"] if has_more and cases else None,
     }
@@ -255,7 +183,7 @@ async def get_cases(
 # ── Review Case ────────────────────────────────────────────────────────────────
 
 
-@app.patch("/api/cases/{case_id}/review")
+@router.patch("/api/cases/{case_id}/review")
 async def review_case(
     case_id: str,
     authorization: str = Header(None),
@@ -276,7 +204,7 @@ async def review_case(
 # ── ASHA: My Submissions ───────────────────────────────────────────────────────
 
 
-@app.get("/api/cases/mine")
+@router.get("/api/cases/mine")
 async def get_my_cases(
     authorization: str = Header(None),
     user: dict = Depends(require_role("asha_worker", "admin")),
@@ -322,7 +250,7 @@ async def get_my_cases(
 # ── Get Case Detail ───────────────────────────────────────────────────────────────
 
 
-@app.get("/api/cases/{case_id}")
+@router.get("/api/cases/{case_id}")
 async def get_case_detail(
     case_id: str,
     authorization: str = Header(None),

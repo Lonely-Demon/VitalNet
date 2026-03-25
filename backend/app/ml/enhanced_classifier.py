@@ -19,9 +19,10 @@ from sklearn.metrics import classification_report, confusion_matrix, accuracy_sc
 from sklearn.calibration import CalibratedClassifierCV
 import joblib  # noqa: F401 — kept for unpickling legacy model files via pickle protocol
 
-from clinical_features import ClinicalFeatureEngineer
+from app.ml.clinical_features import ClinicalFeatureEngineer
 
 warnings.filterwarnings('ignore')
+
 
 class EnhancedTriageClassifier:
     """
@@ -341,8 +342,7 @@ class EnhancedTriageClassifier:
             }
         }
 
+
 # ContinualLearningManager removed — it was an inert stub.
-# _perform_model_update() only logged and cleared the buffer; no retraining occurred.
-# No route in main.py ever called add_outcome_feedback().
 # Will be reintroduced properly when the PATCH /api/cases/{id}/outcome endpoint
 # and doctor feedback UI are scoped in a future sprint.

@@ -16,13 +16,13 @@ import groq
 from groq import AsyncGroq  # Use async client — non-blocking event loop
 from json_repair import repair_json
 
-from config import settings
+from app.core.config import settings
 
 logger = logging.getLogger("vitalnet")
 
 # ─── Module-level constants ──────────────────────────────────────────────────
 
-SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "clinical_system_prompt.txt"
+SYSTEM_PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "clinical_system_prompt.txt"
 
 FIXED_DISCLAIMER = (
     "AI-generated clinical briefing for decision support only. "

@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, Header, HTTPException
+
+from app.core.auth import require_role
+from app.core.database import supabase_admin
 from pydantic import BaseModel, EmailStr
 from typing import Optional
-from auth import require_role
-from database import supabase_admin
 
 router = APIRouter(prefix='/api/admin', tags=['admin'])
 

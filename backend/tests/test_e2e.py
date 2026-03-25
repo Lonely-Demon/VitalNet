@@ -1,7 +1,7 @@
 import requests
 import json
 import time
-from config import settings
+from app.core.config import settings
 from supabase import create_client
 
 BASE_URL = "http://localhost:8000"
