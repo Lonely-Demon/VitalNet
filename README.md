@@ -1,86 +1,73 @@
 # VitalNet 🩺
 
-VitalNet is a high-performance AI-driven clinical triage and briefing platform designed for rural health workers (ASHAs) and doctors. It leverage machine learning and large language models to provide instant diagnostic insights and patient briefings.
+VitalNet is a high-performance offline-first PWA intended for clinical triage by rural health workers (ASHAs) and PHC doctors. It leverages a rigorous Supabase backend and a multi-tiered LLM architecture to provide instant diagnostic insights in extreme low-resource environments.
 
 ## 🚀 Features
-
-- **Local ML Triage**: Uses a `HistGradientBoostingClassifier` to predict urgency (EMERGENCY, URGENT, ROUTINE) locally on the backend.
-- **SHAP Risk Explanations**: Provides per-patient "Risk Drivers" identifying exactly which vitals or symptoms triggered the triage level.
-- **AI Clinical Briefings**: Generates detailed clinical context (differential diagnoses, red flags, and actions) using Groq's Llama models with a resilient fallback chain.
-- **Priority Dashboard**: A real-time Doctor's dashboard that auto-refreshes and sorts cases by medical severity.
-- **SaaS-tier UI**: Polished Tailwind v4 interface with a premium solid elevation system and interactive clinical inputs.
+- **Offline Reliability**: Full IndexedDB draft pooling and a background queue that syncs automatically when network is restored.
+- **Local ML Triage**: Generates EMERGENCY, URGENT, ROUTINE inferences securely in-browser via ONNX WASM.
+- **Tiered Clinical Briefings**: Groq Llama 3 70B primary, auto-cascading to Gemini 2.0 Flash fallback architectures for 99.9% uptime.
+- **Developer Experience**: Pure FastAPI backend built entirely on dependency injection, strict Zod inputs, structured JSON logging, and fully gated GitHub CI/CD workflows.
 
 ---
 
-## 🛠️ Local Development Setup
+## 🛠️ Local Development
 
 ### 1. Prerequisites
-- **Python 3.13** (strictly required for classifier compatibility)
-- **Node.js** (v18+ recommended)
-- **Groq API Key** (for clinical briefings)
+- **Python 3.13** (Required for ONNX classifier compatibility)
+- **Node.js** (v20+ recommended)
+- **Supabase Local CLI** (`supabase start`)
 
 ### 2. Backend Setup
-1. Navigate to the backend directory:
+The backend follows a strict enterprise `app/` package architecture.
+
+1. Install dependencies:
    ```bash
    cd backend
-   ```
-2. Create and activate a virtual environment:
-   ```bash
    python -m venv venv
-   # On Windows:
-   venv\Scripts\activate
-   # On macOS/Linux:
-   source venv/bin/activate
-   ```
-3. Install dependencies:
-   ```bash
+   # Windows: venv\\Scripts\\activate | Mac/Linux: source venv/bin/activate
    pip install -r requirements.txt
    ```
-4. Configure environment variables. Create a `.env` file in `backend/`:
+2. Set Environment Variables (`backend/.env.local`):
    ```env
-   GROQ_API_KEY=your_key_here
-   DATABASE_URL=sqlite:///./vitalnet.db
+   # Local testing keys
+   GROQ_API_KEY="..."
+   GEMINI_API_KEY="..."
+   SUPABASE_URL="..."
+   SUPABASE_ANON_KEY="..."
    ```
-5. Run the server:
+3. Run the Server:
    ```bash
-   python -m uvicorn main:app --reload --port 8000
+   python -m uvicorn app.main:app --reload --port 8000
    ```
-   *The API will be available at http://localhost:8000. Check http://localhost:8000/api/health to verify.*
 
 ### 3. Frontend Setup
-1. Navigate to the frontend directory:
+The frontend is a Vite-powered React 19 SPA utilizing TailwindCSS v4 and Vite-PWA.
+
+1. Install dependencies:
    ```bash
    cd frontend
-   ```
-2. Install dependencies:
-   ```bash
    npm install
    ```
-3. Configure environment variables. Create a `.env` file in `frontend/`:
+2. Set Environment Variables (`frontend/.env.local`):
    ```env
-   VITE_API_BASE_URL=http://localhost:8000
+   VITE_SUPABASE_URL="..."
+   VITE_SUPABASE_ANON_KEY="..."
+   VITE_API_BASE_URL="http://localhost:8000"
    ```
-4. Run the development server:
+3. Run Development Server:
    ```bash
    npm run dev
    ```
-   *The app will be available at http://localhost:5173.*
 
 ---
 
-## 🚢 Deployment
-
-### Railway (Backend)
-- The backend is pre-configured with `Procfile`, `railway.toml`, and `runtime.txt`.
-- Set your `GROQ_API_KEY` in the Railway dashboard environment variables.
-
-### Vercel (Frontend)
-- The frontend includes `vercel.json` for SPA routing.
-- Set `VITE_API_BASE_URL` to your production backend URL in the Vercel dashboard.
-
----
+## 🔒 Branching Workflow & CI/CD
+This repository employs **Strict Branch Protection**:
+1. You cannot push to `main` directly.
+2. Cut a feature branch (`git checkout -b feature/your-name`), make changes, and push.
+3. Open a Pull Request on GitHub to `main`.
+4. GitHub Actions will automatically run `pytest` (Backend) and Vite `build` (Frontend).
+5. Once the tests pass **and** secret scanning is cleared, you may squash-merge your branch.
 
 ## 📝 License
-This project is part of a 24-hour rapid development sprint. Built with 🩺 by Antigravity.
-
-# VitalNet CI Trigger v2
+Proprietary triage platform built for extreme reliability metrics.
