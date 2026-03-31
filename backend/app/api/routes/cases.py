@@ -18,10 +18,20 @@ from app.services.llm import generate_briefing
 
 import base64
 import json as _json
+import re
 
 logger = logging.getLogger("vitalnet")
 
 router = APIRouter()
+
+
+def _sanitize_medical_text(value: str | None, max_length: int = 500) -> str | None:
+    if value is None:
+        return None
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", value)
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:max_length] if cleaned else None
 
 
 def _get_user_id(request: Request) -> str:
@@ -56,6 +66,9 @@ async def submit_case(
     user: dict = Depends(require_role("asha_worker", "admin")),
 ):
     form_data = form.model_dump()
+    for field in ("patient_name", "chief_complaint", "observations", "known_conditions", "current_medications", "location"):
+        if field in form_data:
+            form_data[field] = _sanitize_medical_text(form_data[field], 500 if field != "chief_complaint" else 200) or form_data[field]
 
     # Step 1: Classifier + SHAP (always runs — LLM-independent)
     try:
@@ -85,9 +98,13 @@ async def submit_case(
             "observations": form.observations,
             "known_conditions": form.known_conditions,
             "current_medications": form.current_medications,
+            "human_review_requested": form.human_review_requested,
+            "human_review_reason": form.human_review_reason,
             "triage_level": triage_result["triage_level"],
             "triage_confidence": triage_result["confidence_score"],
             "risk_driver": triage_result["risk_driver"],
+            "llm_status": briefing.get("llm_status", "generated"),
+            "needs_review": bool(briefing.get("needs_review") or triage_result.get("needs_review")),
             "briefing": briefing,
             "llm_model_used": briefing.get("_model_used", "unknown"),
             "created_offline": form.created_offline,

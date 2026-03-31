@@ -6,8 +6,9 @@ Advanced clinical triage classifier with specialized models and uncertainty quan
 import numpy as np
 import pickle
 import warnings
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, cast
 from datetime import datetime
+from copy import deepcopy
 from sklearn.ensemble import (
     HistGradientBoostingClassifier,
     VotingClassifier,
@@ -20,6 +21,13 @@ from sklearn.calibration import CalibratedClassifierCV
 import joblib  # noqa: F401 — kept for unpickling legacy model files via pickle protocol
 
 from app.ml.clinical_features import ClinicalFeatureEngineer
+from app.ml.model_contract import (
+    CONFIDENCE_FLOOR,
+    FEATURE_SCHEMA_VERSION,
+    LIVE_DRIFT_WINDOW,
+    MODEL_VERSION,
+    UNCERTAINTY_FLOOR,
+)
 
 warnings.filterwarnings('ignore')
 
@@ -52,7 +60,8 @@ class EnhancedTriageClassifier:
         self.feature_count = 0
 
         # Model metadata
-        self.model_version = "2.0.0"
+        self.model_version = MODEL_VERSION
+        self.feature_schema_version = FEATURE_SCHEMA_VERSION
         self.training_date = None
         self.performance_metrics = {}
 
@@ -115,15 +124,19 @@ class EnhancedTriageClassifier:
 
         # Train individual models
         print("[Enhanced Classifier] Training emergency detector...")
+        self.emergency_detector = cast(HistGradientBoostingClassifier, self.emergency_detector)
         self.emergency_detector.fit(X, y)
 
         print("[Enhanced Classifier] Training symptom classifier...")
+        self.symptom_classifier = cast(RandomForestClassifier, self.symptom_classifier)
         self.symptom_classifier.fit(X, y)
 
         print("[Enhanced Classifier] Training clinical reasoner...")
+        self.clinical_reasoner = cast(HistGradientBoostingClassifier, self.clinical_reasoner)
         self.clinical_reasoner.fit(X, y)
 
         print("[Enhanced Classifier] Training meta-classifier...")
+        self.meta_classifier = cast(VotingClassifier, self.meta_classifier)
         self.meta_classifier.fit(X, y)
 
         # Calibrate probabilities for better uncertainty quantification
@@ -160,39 +173,87 @@ class EnhancedTriageClassifier:
 
         # Engineer features
         features = self.feature_engineer.engineer_features(patient_data)
-        feature_vector = np.array(list(features.values())).reshape(1, -1)
+        red_flags = self.feature_engineer.detect_red_flags(patient_data)
+        feature_vector = np.array(list(features.values()), dtype=float).reshape(1, -1)
+
+        meta_classifier = cast(VotingClassifier, self.meta_classifier)
+        emergency_detector = cast(HistGradientBoostingClassifier, self.emergency_detector)
+        symptom_classifier = cast(RandomForestClassifier, self.symptom_classifier)
+        clinical_reasoner = cast(HistGradientBoostingClassifier, self.clinical_reasoner)
+        probability_calibrator = cast(CalibratedClassifierCV, self.probability_calibrator)
+
+        if red_flags.get("must_escalate"):
+            emergency_prob = np.array([0.0, 0.0, 1.0], dtype=float)
+            uncertainty = self._calculate_uncertainty([emergency_prob])
+            result = {
+                'triage_level': 'EMERGENCY',
+                'confidence': 1.0,
+                'probabilities': {
+                    'ROUTINE': 0.0,
+                    'URGENT': 0.0,
+                    'EMERGENCY': 1.0,
+                },
+                'uncertainty': uncertainty,
+                'fast_path': True,
+                'processing_time': 'ultra_fast',
+                'model_version': self.model_version,
+                'feature_schema_version': self.feature_schema_version,
+                'needs_review': True,
+                'review_reason': 'Explicit clinical red flag detected',
+                'red_flags': red_flags,
+                'individual_predictions': {
+                    'emergency_detector': emergency_prob.tolist(),
+                    'symptom_classifier': emergency_prob.tolist(),
+                    'clinical_reasoner': emergency_prob.tolist(),
+                },
+                'clinical_features': features,
+            }
+            self._record_live_prediction(result)
+            return result
 
         # Stage 1: Emergency fast-path
-        emergency_prob = self.emergency_detector.predict_proba(feature_vector)[0]
+        emergency_prob = emergency_detector.predict_proba(feature_vector)[0]
+        emergency_uncertainty = self._calculate_uncertainty([emergency_prob])
         if emergency_prob[2] > self.emergency_threshold:
-            return {
+            result = {
                 'triage_level': 'EMERGENCY',
                 'confidence': float(emergency_prob[2]),
                 'fast_path': True,
                 'processing_time': 'ultra_fast',
                 'model_version': self.model_version,
-                'uncertainty': self._calculate_uncertainty([emergency_prob]),
+                'feature_schema_version': self.feature_schema_version,
+                'uncertainty': emergency_uncertainty,
+                'needs_review': bool(emergency_uncertainty.get('high_uncertainty')),
+                'review_reason': 'Emergency fast-path triggered',
+                'red_flags': red_flags,
                 'clinical_features': features
             }
+            self._record_live_prediction(result)
+            return result
 
         # Full ensemble prediction
-        probabilities = self.probability_calibrator.predict_proba(feature_vector)[0]
-        predicted_class = np.argmax(probabilities)
+        probabilities = probability_calibrator.predict_proba(feature_vector)[0]
+        predicted_class = int(np.argmax(probabilities))
 
         # Get individual model predictions for uncertainty calculation
         individual_predictions = [
-            self.emergency_detector.predict_proba(feature_vector)[0],
-            self.symptom_classifier.predict_proba(feature_vector)[0],
-            self.clinical_reasoner.predict_proba(feature_vector)[0]
+            emergency_detector.predict_proba(feature_vector)[0],
+            symptom_classifier.predict_proba(feature_vector)[0],
+            clinical_reasoner.predict_proba(feature_vector)[0]
         ]
 
         uncertainty = self._calculate_uncertainty(individual_predictions)
+        needs_review = bool(
+            uncertainty['high_uncertainty']
+            or uncertainty['agreement_score'] < UNCERTAINTY_FLOOR
+            or float(probabilities[predicted_class]) < CONFIDENCE_FLOOR
+        )
 
         # Map class to label
         class_labels = {0: 'ROUTINE', 1: 'URGENT', 2: 'EMERGENCY'}
         triage_level = class_labels[predicted_class]
 
-        return {
+        result = {
             'triage_level': triage_level,
             'confidence': float(probabilities[predicted_class]),
             'probabilities': {
@@ -204,6 +265,10 @@ class EnhancedTriageClassifier:
             'fast_path': False,
             'processing_time': 'full_analysis',
             'model_version': self.model_version,
+            'feature_schema_version': self.feature_schema_version,
+            'needs_review': needs_review,
+            'review_reason': 'Low confidence or high uncertainty' if needs_review else None,
+            'red_flags': red_flags,
             'individual_predictions': {
                 'emergency_detector': individual_predictions[0].tolist(),
                 'symptom_classifier': individual_predictions[1].tolist(),
@@ -211,6 +276,9 @@ class EnhancedTriageClassifier:
             },
             'clinical_features': features
         }
+
+        self._record_live_prediction(result)
+        return result
 
     def _calculate_uncertainty(self, predictions: List[np.ndarray]) -> Dict[str, float]:
         """
@@ -242,14 +310,42 @@ class EnhancedTriageClassifier:
             'high_uncertainty': bool(max_class_variance > 0.1 or entropy > 0.8)
         }
 
+    def _record_live_prediction(self, result: Dict[str, Any]) -> None:
+        """Update lightweight live drift metrics from recent predictions."""
+        live_drift = self.performance_metrics.setdefault(
+            'live_drift',
+            {
+                'window_size': LIVE_DRIFT_WINDOW,
+                'recent_confidences': [],
+                'recent_uncertainty': [],
+                'review_count': 0,
+            },
+        )
+
+        confidence = float(result.get('confidence', 0.0))
+        uncertainty = result.get('uncertainty', {}) or {}
+
+        live_drift['recent_confidences'].append(confidence)
+        live_drift['recent_uncertainty'].append(float(uncertainty.get('epistemic_uncertainty', 0.0)))
+        if result.get('needs_review'):
+            live_drift['review_count'] += 1
+
+        if len(live_drift['recent_confidences']) > LIVE_DRIFT_WINDOW:
+            live_drift['recent_confidences'] = live_drift['recent_confidences'][-LIVE_DRIFT_WINDOW:]
+            live_drift['recent_uncertainty'] = live_drift['recent_uncertainty'][-LIVE_DRIFT_WINDOW:]
+
+        live_drift['average_confidence'] = float(np.mean(live_drift['recent_confidences'])) if live_drift['recent_confidences'] else 0.0
+        live_drift['average_uncertainty'] = float(np.mean(live_drift['recent_uncertainty'])) if live_drift['recent_uncertainty'] else 0.0
+
     def _calculate_performance_metrics(self, X: np.ndarray, y: np.ndarray):
         """Calculate and store performance metrics"""
         try:
             # Cross-validation scores
-            cv_scores = cross_val_score(self.meta_classifier, X, y, cv=5)
+            meta_classifier = cast(VotingClassifier, self.meta_classifier)
+            cv_scores = cross_val_score(meta_classifier, X, y, cv=5)
 
             # Predictions for confusion matrix
-            y_pred = self.meta_classifier.predict(X)
+            y_pred = meta_classifier.predict(X)
 
             # Emergency recall (most important metric)
             cm = confusion_matrix(y, y_pred)
@@ -285,6 +381,7 @@ class EnhancedTriageClassifier:
             'feature_engineer': self.feature_engineer,
             'feature_count': self.feature_count,
             'model_version': self.model_version,
+            'feature_schema_version': self.feature_schema_version,
             'training_date': self.training_date,
             'performance_metrics': self.performance_metrics,
             'emergency_threshold': self.emergency_threshold
@@ -313,6 +410,7 @@ class EnhancedTriageClassifier:
         classifier.feature_engineer = model_data['feature_engineer']
         classifier.feature_count = model_data['feature_count']
         classifier.model_version = model_data['model_version']
+        classifier.feature_schema_version = model_data.get('feature_schema_version', FEATURE_SCHEMA_VERSION)
         classifier.training_date = model_data['training_date']
         classifier.performance_metrics = model_data['performance_metrics']
         classifier.emergency_threshold = model_data.get('emergency_threshold', 0.85)
@@ -329,6 +427,7 @@ class EnhancedTriageClassifier:
         """Get comprehensive model information"""
         return {
             'model_version': self.model_version,
+            'feature_schema_version': self.feature_schema_version,
             'training_date': self.training_date.isoformat() if self.training_date else None,
             'is_trained': self.is_trained,
             'feature_count': self.feature_count,

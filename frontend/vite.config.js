@@ -25,26 +25,28 @@ export default defineConfig({
 
       // Precache the entire app shell
       workbox: {
+        maximumFileSizeToCacheInBytes: 30 * 1024 * 1024,
         globPatterns: [
-          '**/*.{js,css,html,ico,png,svg,woff2}',
+          '**/*.{js,css,html,ico,png,svg,woff2,wasm}',
           'models/triage_classifier.onnx',
           'models/features_config.json',
         ],
 
         // Background Sync for POST /api/submit (in-flight failure recovery)
-        runtimeCaching: [{
-          urlPattern: ({ url }) => url.pathname === '/api/submit',
-          handler: 'NetworkOnly',
-          method: 'POST',
-          options: {
-            backgroundSync: {
-              name: 'vitalnet_submission_queue',
-              options: {
-                maxRetentionTime: 24 * 60,  // 24 hours in minutes
-              },
-            },
-          },
-        }],
+        // DISABLED: Using application-level queue instead to prevent duplicate submissions
+        // runtimeCaching: [{
+        //   urlPattern: ({ url }) => url.pathname === '/api/submit',
+        //   handler: 'NetworkOnly',
+        //   method: 'POST',
+        //   options: {
+        //     backgroundSync: {
+        //       name: 'vitalnet_submission_queue',
+        //       options: {
+        //         maxRetentionTime: 24 * 60,  // 24 hours in minutes
+        //       },
+        //     },
+        //   },
+        // }],
       },
 
       manifest: {
@@ -83,6 +85,26 @@ export default defineConfig({
       },
     }),
   ],
+  // Code splitting configuration for better initial load performance
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // React core - loaded first
+          'vendor-react': ['react', 'react-dom'],
+          // Charting library - only loaded on analytics pages
+          'vendor-charts': ['recharts'],
+          // Supabase client - loaded for authenticated users
+          'vendor-supabase': ['@supabase/supabase-js'],
+          // Date utilities
+          'vendor-date': ['date-fns'],
+        },
+      },
+    },
+    // Increase chunk size warning limit for ONNX
+    chunkSizeWarningLimit: 2000,
+  },
+
   server: {
     proxy: {
       '/api': 'http://localhost:8000'

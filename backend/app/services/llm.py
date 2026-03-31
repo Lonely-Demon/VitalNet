@@ -17,6 +17,7 @@ from groq import AsyncGroq  # Use async client — non-blocking event loop
 from json_repair import repair_json
 
 from app.core.config import settings
+from app.ml.model_contract import CONFIDENCE_FLOOR
 
 logger = logging.getLogger("vitalnet")
 
@@ -33,7 +34,7 @@ FIXED_DISCLAIMER = (
 REQUIRED_FIELDS = [
     "triage_level", "primary_risk_driver", "differential_diagnoses",
     "red_flags", "recommended_immediate_actions", "recommended_tests",
-    "uncertainty_flags", "disclaimer",
+    "uncertainty_flags", "disclaimer", "llm_status", "needs_review",
 ]
 
 LIST_FIELDS = {
@@ -104,6 +105,8 @@ def _build_patient_context(form_data: dict, triage_result: dict) -> str:
     symptoms = form_data.get("symptoms", [])
     symptoms_str = ", ".join(symptoms) if symptoms else "None reported"
 
+    uncertainty = triage_result.get("uncertainty", {}) or {}
+
     return f"""PATIENT CONTEXT:
 - Age: {form_data.get('patient_age')} years
 - Sex: {form_data.get('patient_sex')}
@@ -123,6 +126,14 @@ TRIAGE CLASSIFICATION (from ML classifier — locked, do not override):
 Level: {triage_result['triage_level']}
 Confidence: {triage_result['confidence_score']:.2f}
 Primary signal: {triage_result['risk_driver']}"""
+    + f"""
+Classifier uncertainty:
+- agreement_score: {uncertainty.get('agreement_score')}
+- epistemic_uncertainty: {uncertainty.get('epistemic_uncertainty')}
+- total_entropy: {uncertainty.get('total_entropy')}
+- high_uncertainty: {uncertainty.get('high_uncertainty')}
+Needs review: {bool(triage_result.get('needs_review'))}
+"""
 
 
 # ─── Schema enforcement ───────────────────────────────────────────────────────
@@ -134,6 +145,12 @@ def _enforce_schema(briefing: dict, triage_result: dict) -> dict:
     """
     briefing["triage_level"] = triage_result["triage_level"]  # SAFETY: LLM cannot override
     briefing["disclaimer"] = FIXED_DISCLAIMER
+    briefing["llm_status"] = briefing.get("llm_status") or "generated"
+    briefing["needs_review"] = bool(
+        triage_result.get("needs_review")
+        or triage_result.get("confidence_score", 1.0) < CONFIDENCE_FLOOR
+        or triage_result.get("uncertainty", {}).get("high_uncertainty")
+    )
     for field in REQUIRED_FIELDS:
         if field not in briefing:
             briefing[field] = [] if field in LIST_FIELDS else "Not available"
@@ -268,14 +285,42 @@ async def generate_briefing(form_data: dict, triage_result: dict) -> dict:
 # ─── Fallback briefing ────────────────────────────────────────────────────────
 
 def _fallback_briefing(triage_result: dict) -> dict:
+    level = triage_result["triage_level"]
+    needs_review = bool(
+        triage_result.get("needs_review")
+        or triage_result.get("confidence_score", 1.0) < CONFIDENCE_FLOOR
+        or triage_result.get("uncertainty", {}).get("high_uncertainty")
+        or level in {"URGENT", "EMERGENCY"}
+    )
+
+    if level == "EMERGENCY":
+        actions = [
+            "Immediate in-person clinical evaluation",
+            "Escalate to emergency services or nearest higher-level facility",
+            "Do not discharge without human review",
+        ]
+        red_flags = [triage_result.get("risk_driver", "Emergency presentation")]
+    elif level == "URGENT":
+        actions = [
+            "Expedite clinician review",
+            "Arrange same-day assessment",
+            "Monitor for deterioration while awaiting evaluation",
+        ]
+        red_flags = [triage_result.get("risk_driver", "Urgent presentation")]
+    else:
+        actions = ["Refer patient to PHC doctor for in-person evaluation"]
+        red_flags = []
+
     return {
-        "triage_level":                 triage_result["triage_level"],
+        "triage_level":                 level,
         "primary_risk_driver":          triage_result["risk_driver"],
         "differential_diagnoses":       ["LLM briefing unavailable — triage from ML classifier is intact"],
-        "red_flags":                    [],
-        "recommended_immediate_actions": ["Refer patient to PHC doctor for in-person evaluation"],
+        "red_flags":                    red_flags,
+        "recommended_immediate_actions": actions,
         "recommended_tests":            [],
         "uncertainty_flags":            "LLM briefing could not be generated. Triage level and risk driver from ML classifier remain valid.",
         "disclaimer":                   FIXED_DISCLAIMER,
+        "llm_status":                   "fallback",
+        "needs_review":                 needs_review,
         "_model_used":                  "fallback",
     }

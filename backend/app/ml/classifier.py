@@ -3,19 +3,32 @@ VitalNet Classifier Interface — Enhanced classifier only.
 Legacy classifier paths removed (triage_classifier.pkl deleted in cleanup sprint).
 If loading fails, raises RuntimeError with a descriptive message.
 """
+import hashlib
 import logging
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, TYPE_CHECKING
 
 logger = logging.getLogger("vitalnet")
 
+if TYPE_CHECKING:
+    from app.ml.enhanced_classifier import EnhancedTriageClassifier
+
 # Model path — enhanced classifier sits alongside this file under app/ml/models/
 ENHANCED_PKL_PATH = Path(__file__).parent / "models" / "enhanced_triage_classifier.pkl"
+EXPECTED_ENHANCED_PKL_SHA256 = "3f661afed8f042899843cf0556975dc20efb7df0c99752e6f6439ade25f7cfb5"
 
 # Global classifier state
-_classifier = None
-_classifier_type = None
-_model_info = {}
+_classifier: "EnhancedTriageClassifier | None" = None
+_classifier_type: str | None = None
+_model_info: Dict[str, Any] = {}
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_classifier() -> bool:
@@ -31,11 +44,22 @@ def load_classifier() -> bool:
             "Run backend/scripts/retrain_and_export.py to regenerate."
         )
 
+    if _sha256(ENHANCED_PKL_PATH) != EXPECTED_ENHANCED_PKL_SHA256:
+        raise RuntimeError(
+            f"Enhanced classifier integrity check failed for {ENHANCED_PKL_PATH}. "
+            "Regenerate the model artifacts before startup."
+        )
+
     try:
         from app.ml.enhanced_classifier import EnhancedTriageClassifier
         _classifier = EnhancedTriageClassifier.load_model(str(ENHANCED_PKL_PATH))
         _classifier_type = "enhanced"
         _model_info = _classifier.get_model_info()
+
+        if _model_info.get("model_version") != "2.0.0":
+            raise RuntimeError(
+                f"Model version mismatch: expected 2.0.0, got {_model_info.get('model_version')}."
+            )
 
         acc = _model_info["performance_metrics"].get("accuracy", "N/A")
         recall = _model_info["performance_metrics"].get("emergency_recall", "N/A")
@@ -75,6 +99,9 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
 def _predict_enhanced(form_data: Dict[str, Any]) -> Dict[str, Any]:
     """Run prediction using the enhanced classifier."""
     try:
+        if _classifier is None:
+            raise RuntimeError("Enhanced classifier not initialized")
+
         result = _classifier.predict(form_data)
 
         # Extract risk driver from clinical features
@@ -88,10 +115,12 @@ def _predict_enhanced(form_data: Dict[str, Any]) -> Dict[str, Any]:
             "confidence_score": result["confidence"],
             "risk_driver": risk_driver,
             "model_version": result.get("model_version", "N/A"),
+            "feature_schema_version": result.get("feature_schema_version", "N/A"),
             "processing_time": result.get("processing_time", "standard"),
             "uncertainty": result.get("uncertainty", {}),
             "probabilities": result.get("probabilities", {}),
             "fast_path": result.get("fast_path", False),
+            "needs_review": result.get("needs_review", False),
         }
 
     except Exception as e:
