@@ -2,6 +2,24 @@ import logging
 import sys
 from pythonjsonlogger import jsonlogger
 
+from app.core.correlation import get_correlation_id
+
+
+class CorrelationIdLoggerAdapter(logging.LoggerAdapter):
+    """
+    Logger adapter that automatically adds correlation ID to log records.
+    """
+    
+    def process(self, msg, kwargs):
+        # Add correlation_id to extra if not already present
+        if "extra" not in kwargs:
+            kwargs["extra"] = {}
+        if "correlation_id" not in kwargs["extra"]:
+            correlation_id = get_correlation_id()
+            if correlation_id:
+                kwargs["extra"]["correlation_id"] = correlation_id
+        return msg, kwargs
+
 
 def setup_logging() -> logging.Logger:
     """
@@ -19,7 +37,8 @@ def setup_logging() -> logging.Logger:
 
     handler = logging.StreamHandler(sys.stdout)
     formatter = jsonlogger.JsonFormatter(
-        "%(asctime)s %(levelname)s %(name)s %(module)s %(message)s"
+        "%(asctime)s %(levelname)s %(name)s %(module)s %(message)s "
+        "%(correlation_id)s"
     )
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)

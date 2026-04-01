@@ -1,30 +1,32 @@
 """
 VitalNet API — Application entrypoint.
 This file is responsible ONLY for:
-  1. Structured JSON logging setup
-  2. ML model loading at startup (lifespan)
-  3. FastAPI app initialization
-  4. Middleware registration (CORS, rate limiter)
-  5. Router registration
-  6. Global exception handlers
+1. Structured JSON logging setup
+2. ML model loading at startup (lifespan)
+3. FastAPI app initialization
+4. Middleware registration (CORS, rate limiter, correlation ID)
+5. Router registration
+6. Global exception handlers
 
 All route logic lives in app/api/routes/.
 """
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import _rate_limit_exceeded_handler
+from starlette.middleware.base import BaseHTTPMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.api.routes import admin_routes, analytics_routes, cases, security
-from app.core.config import settings
 from app.core.logging import setup_logging
+from app.core.config import settings
+from app.core.correlation import generate_correlation_id, set_correlation_id, get_correlation_id
 from app.ml.classifier import load_classifier
+from app.api.routes import cases, admin_routes, analytics_routes
 
 # ── 1. Structured JSON logging — must be first ────────────────────────────────
 logger = setup_logging()
@@ -43,92 +45,83 @@ async def lifespan(app: FastAPI):
 
 # ── 3. FastAPI app init ───────────────────────────────────────────────────────
 
-_docs_enabled = bool(settings.api_docs_enabled)
-_state_changing_methods = {"POST", "PUT", "PATCH", "DELETE"}
-
-app = FastAPI(
-    title="VitalNet API",
-    version="0.2.0",
-    lifespan=lifespan,
-    docs_url="/docs" if _docs_enabled else None,
-    redoc_url="/redoc" if _docs_enabled else None,
-    openapi_url="/openapi.json" if _docs_enabled else None,
-)
+app = FastAPI(title="VitalNet API", version="0.2.0", lifespan=lifespan)
 
 
 # ── 4. Rate limiter ───────────────────────────────────────────────────────────
 
 app.state.limiter = cases.limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# ── 5. Response compression ───────────────────────────────────────────────────
 
-app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
+# ── 5. CORS — restricted to known origins loaded from settings ────────────────
 
-# ── 6. Security middleware ────────────────────────────────────────────────────
-
-
-@app.middleware("http")
-async def csrf_and_device_guard(request: Request, call_next):
-    if request.url.path.startswith("/api") and request.method.upper() in _state_changing_methods:
-        auth_header = request.headers.get("authorization")
-        if auth_header:
-            csrf_header = request.headers.get("x-csrf-token", "")
-            if csrf_header != settings.csrf_token:
-                return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
-
-            if not request.headers.get("x-device-id"):
-                return JSONResponse(status_code=400, content={"detail": "Missing X-Device-Id header"})
-
-    return await call_next(request)
-
-
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
-    response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
-    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'self'")
-    if settings.environment.lower() != "development":
-        response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
-    return response
-
-
-# ── 7. CORS — restricted to known origins loaded from settings ────────────────
+_allowed_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+]
+if settings.frontend_url:
+    _allowed_origins.append(settings.frontend_url.rstrip("/"))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,
+    allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Device-Id"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
-# ── 8. Routers ────────────────────────────────────────────────────────────────
+# ── 5a. Correlation ID middleware ─────────────────────────────────────────────
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware that generates a unique correlation ID for each request
+    and adds it to the response headers (X-Request-ID).
+    
+    The correlation ID is also stored in a context variable for use
+    in logging throughout the request lifecycle.
+    """
+    
+    async def dispatch(self, request: Request, call_next):
+        # Check if client provided a correlation ID, otherwise generate one
+        client_correlation_id = request.headers.get("X-Request-ID")
+        correlation_id = client_correlation_id or generate_correlation_id()
+        
+        # Set correlation ID in context for the current request
+        set_correlation_id(correlation_id)
+        
+        # Process the request
+        response = await call_next(request)
+        
+        # Add correlation ID to response headers
+        response.headers["X-Request-ID"] = correlation_id
+        
+        return response
+
+
+app.add_middleware(CorrelationIdMiddleware)
+
+
+# ── 6. Routers ────────────────────────────────────────────────────────────────
 
 app.include_router(cases.router)
 app.include_router(admin_routes.router)
 app.include_router(analytics_routes.router)
-app.include_router(security.router)
 
 
-# ── 9. Global exception handlers — emit structured JSON, never raw tracebacks ─
-
-
-@app.exception_handler(RateLimitExceeded)
-async def rate_limit_exceeded_handler(request: Request, exc: Exception):
-    if isinstance(exc, RateLimitExceeded):
-        return _rate_limit_exceeded_handler(request, exc)
-    return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
+# ── 7. Global exception handlers — emit structured JSON, never raw tracebacks ─
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled server error", extra={"path": str(request.url.path)})
+    correlation_id = get_correlation_id()
+    logger.exception(
+        "Unhandled server error",
+        extra={"path": str(request.url.path), "correlation_id": correlation_id},
+    )
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal Server Error"},
@@ -137,14 +130,15 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    correlation_id = get_correlation_id()
     logger.warning(
         "Validation error",
-        extra={"path": str(request.url.path), "errors": exc.errors()},
+        extra={"path": str(request.url.path), "errors": exc.errors(), "correlation_id": correlation_id},
     )
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
-# ── 10. Health Check ───────────────────────────────────────────────────────────
+# ── 8. Health Check ───────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health():
@@ -156,7 +150,7 @@ async def health():
         supabase_anon.table("facilities").select("id").limit(1).execute()
         db_status = "connected"
     except Exception as e:
-        db_status = f"error: {str(e)[:80]}" # Truncate — never expose full errors
+        db_status = f"error: {str(e)[:80]}"  # Truncate — never expose full errors
 
     # Classifier state
     info = get_classifier_info()
@@ -167,15 +161,9 @@ async def health():
         else "NOT LOADED"
     )
 
-    is_healthy = db_status == "connected" and classifier_loaded
-    response_body = {
-        "status": "ok" if is_healthy else "degraded",
+    return {
+        "status": "ok" if db_status == "connected" and classifier_loaded else "degraded",
         "database": db_status,
         "classifier": classifier_status,
         "version": "0.2.0",
     }
-
-    # Return 503 Service Unavailable when degraded
-    if not is_healthy:
-        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=response_body)
-    return response_body
