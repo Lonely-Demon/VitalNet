@@ -5,81 +5,103 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vitalnet-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # PR checks: linting and formatting only (no secrets)
+  # PR checks: no repository secrets, repo-controlled code only.
   lint-backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     if: github.event_name == 'pull_request'
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        persist-credentials: false
+        fetch-depth: 1
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
     - name: Install Dependencies
       run: |
-        cd backend
-        pip install -r requirements.txt
-        pip install ruff
+        python -m pip install --upgrade pip
+        pip install --no-cache-dir -r backend/requirements.txt
+        pip install --no-cache-dir ruff==0.13.2
     - name: Lint Backend
-      run: |
-        cd backend
-        ruff check .
+      run: ruff check backend
 
-  lint-frontend:
+  build-frontend-pr:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     if: github.event_name == 'pull_request'
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        persist-credentials: false
+        fetch-depth: 1
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
       with:
         node-version: '20'
-    - name: Install and Lint
+    - name: Install and Build (No Install Scripts)
       run: |
-        cd frontend
-        npm ci
-        npm run lint
+        npm ci --prefix frontend --ignore-scripts
+        npm run build --prefix frontend
+      env:
+        VITE_SUPABASE_URL: https://example.supabase.co
+        VITE_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+        VITE_API_BASE_URL: http://localhost:8000
 
-  # Full test suite with secrets (push to main only)
+  # Push-to-main checks: still secretless to avoid secret-bearing workflow risks.
   test-backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: github.event_name == 'push'
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        persist-credentials: false
+        fetch-depth: 1
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
     - name: Install Dependencies
       run: |
-        cd backend
-        pip install -r requirements.txt
-        pip install pytest pytest-asyncio httpx
+        python -m pip install --upgrade pip
+        pip install --no-cache-dir -r backend/requirements.txt
+        pip install --no-cache-dir pytest pytest-asyncio httpx
     - name: Run Pytest
       run: |
-        cd backend
-        python -m pytest tests/ -v
+        python -m pytest backend/tests/ -v
     env:
-      SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
-      SUPABASE_JWT_SECRET: ${{ secrets.TEST_SUPABASE_JWT_SECRET }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.TEST_SUPABASE_SERVICE_ROLE_KEY }}
-      GROQ_API_KEY: ${{ secrets.TEST_GROQ_API_KEY }}
-  # Gemini and LLM mocked out during unit tests
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_ANON_KEY: ci-placeholder-anon-key
+      SUPABASE_JWT_SECRET: ci-placeholder-jwt-secret
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key
+      GROQ_API_KEY: ci-placeholder-groq-key
 
-  build-frontend:
+  build-frontend-main:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     if: github.event_name == 'push'
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        persist-credentials: false
+        fetch-depth: 1
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
       with:
         node-version: '20'
-    - name: Install and Build
+    - name: Install and Build (No Install Scripts)
       run: |
-        cd frontend
-        npm ci
-        npm run build
+        npm ci --prefix frontend --ignore-scripts
+        npm run build --prefix frontend
     env:
-      VITE_SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
-      VITE_SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
-      VITE_API_BASE_URL: https://vitalnet-staging.app
+      VITE_SUPABASE_URL: https://example.supabase.co
+      VITE_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
