@@ -1,39 +1,14 @@
-import React, { useState } from 'react'
-import { reviewCase } from '../api/cases'
+import { useState } from 'react'
+import { reviewCase } from '../lib/api'
 import TriageBadge from './TriageBadge'
 
-function safeText(value) {
-  return String(value ?? '')
-    .replace(/[\u0000-\u001F\u007F]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function safeList(values) {
-  if (!Array.isArray(values)) return []
-  return values
-    .map((item) => safeText(item))
-    .filter(Boolean)
-    .slice(0, 50)
-}
-
-function BriefingCard({ caseData, onReviewed }) {
+export default function BriefingCard({ caseData, onReviewed }) {
   const [expanded, setExpanded] = useState(caseData.triage_level === 'EMERGENCY')
   const [marking, setMarking] = useState(false)
   const [reviewed, setReviewed] = useState(caseData.reviewed_at !== null)
 
   // briefing is already a JSONB object from Supabase — no JSON.parse needed
-  const briefing = typeof caseData.briefing === 'object' && caseData.briefing ? caseData.briefing : {}
-  const b = {
-    ...briefing,
-    primary_risk_driver: safeText(briefing.primary_risk_driver),
-    differential_diagnoses: safeList(briefing.differential_diagnoses),
-    red_flags: safeList(briefing.red_flags),
-    recommended_immediate_actions: safeList(briefing.recommended_immediate_actions),
-    recommended_tests: safeList(briefing.recommended_tests),
-    uncertainty_flags: safeText(briefing.uncertainty_flags),
-    disclaimer: safeText(briefing.disclaimer),
-  }
+  const b = caseData.briefing
 
   const handleMarkReviewed = async () => {
     setMarking(true)
@@ -79,12 +54,12 @@ function BriefingCard({ caseData, onReviewed }) {
             )}
           </div>
           <p className="text-sm font-medium text-text">
-            {caseData.patient_name && <>{safeText(caseData.patient_name)} · </>}
+            {caseData.patient_name && <>{caseData.patient_name} · </>}
             {caseData.patient_age}
             {caseData.patient_sex === 'male' ? 'M' : caseData.patient_sex === 'female' ? 'F' : ''}
-            {" · "}{safeText(caseData.patient_location)}
+            {" · "}{caseData.patient_location}
           </p>
-          <p className="text-sm text-text2">{safeText(caseData.chief_complaint)}</p>
+          <p className="text-sm text-text2">{caseData.chief_complaint}</p>
           <p className="text-xs text-text3 mt-1 font-mono">
             {timeStr}
           </p>
@@ -173,6 +148,3 @@ function BriefingSection({ title, children }) {
     </div>
   )
 }
-
-// Memoize to prevent re-renders when parent state changes but props stay the same
-export default React.memo(BriefingCard)

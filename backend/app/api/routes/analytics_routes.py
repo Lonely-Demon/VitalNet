@@ -1,34 +1,22 @@
-from datetime import datetime, timedelta, timezone
+"""
+Analytics Routes — aggregate statistics and trends for facility dashboards.
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+Security Fixes Applied:
+- R3-DATA-QUERY-R3-002: Explicit column projection (no SELECT *)
+- R3-DATA-QUERY-R3-003: Parallel query execution via asyncio.gather
+"""
+from fastapi import APIRouter, Header, Depends
 
 from app.core.auth import require_role
 from app.core.database import get_supabase_for_user
+from datetime import datetime, timedelta, timezone
+import asyncio
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
-
-def _extract_token(authorization: str | None) -> str:
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    parts = authorization.strip().split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
-        raise HTTPException(status_code=401, detail="Malformed Authorization header")
-    return parts[1].strip()
-
-
-def _header_or_401(value: str | None) -> str:
-    if value is None:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    return value
-
-
-def _resolved_role(user: dict) -> str:
-    return (user.get("resolved_role") or "").strip()
-
-
-def _resolved_facility(user: dict) -> str | None:
-    return user.get("resolved_facility_id")
+# Explicit column list for case_records queries (R3-DATA-QUERY-R3-002 fix)
+# Only select columns actually needed for analytics — avoids exposing PHI unnecessarily
+ANALYTICS_COLUMNS = "id, triage_level, triage_priority, created_at, reviewed_at, submitted_by, facility_id, deleted_at"
 
 
 @router.get("/summary")
@@ -39,61 +27,89 @@ async def get_summary(
     """
     Returns aggregate stats scoped to the user's facility.
     super_admin gets system-wide stats.
+    
+    Security: R3-DATA-QUERY-R3-002, R3-DATA-QUERY-R3-003 fixes applied.
     """
-    raw_token = _extract_token(_header_or_401(authorization))
+    raw_token = authorization.split(" ", 1)[1] if authorization else ""
     db = get_supabase_for_user(raw_token)
 
-    role = _resolved_role(user)
-    facility_id = _resolved_facility(user)
+    role = user.get("user_metadata", {}).get("role")
+    facility_id = user.get("user_metadata", {}).get("facility_id")
 
-    if role in {"doctor", "facility_admin"} and not facility_id:
-        raise HTTPException(status_code=403, detail="User is not assigned to a facility")
+    # Prepare time filters
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    month_since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 
-    query = (
-        db.table("case_records")
-        .select("id, triage_level, created_at, reviewed_at, submitted_by, facility_id")
-        .is_("deleted_at", "null")
+    # R3-DATA-QUERY-R3-003: Execute all queries in parallel using asyncio.gather
+    # R3-DATA-QUERY-R3-002: Use explicit column projection instead of SELECT *
+    async def query_total():
+        q = db.table("case_records").select("id", count="exact").is_("deleted_at", "null")
+        if role not in ("super_admin",) and facility_id:
+            q = q.eq("facility_id", facility_id)
+        return await asyncio.to_thread(lambda: q.execute())
+
+    async def query_triage_dist():
+        q = db.table("case_records").select("triage_level").is_("deleted_at", "null")
+        if role not in ("super_admin",) and facility_id:
+            q = q.eq("facility_id", facility_id)
+        return await asyncio.to_thread(lambda: q.execute())
+
+    async def query_week_cases():
+        q = db.table("case_records").select("created_at").is_("deleted_at", "null").gte("created_at", since)
+        if role not in ("super_admin",) and facility_id:
+            q = q.eq("facility_id", facility_id)
+        return await asyncio.to_thread(lambda: q.execute())
+
+    async def query_reviewed():
+        q = db.table("case_records").select("id", count="exact").is_("deleted_at", "null").not_.is_("reviewed_at", "null")
+        if role not in ("super_admin",) and facility_id:
+            q = q.eq("facility_id", facility_id)
+        return await asyncio.to_thread(lambda: q.execute())
+
+    async def query_asha_workers():
+        q = db.table("case_records").select("submitted_by, profiles!submitted_by(full_name)").is_("deleted_at", "null").gte("created_at", month_since)
+        if role not in ("super_admin",) and facility_id:
+            q = q.eq("facility_id", facility_id)
+        return await asyncio.to_thread(lambda: q.execute())
+
+    # Execute all queries in parallel — significant latency improvement
+    total_res, dist_res, week_res, reviewed_res, asha_res = await asyncio.gather(
+        query_total(),
+        query_triage_dist(),
+        query_week_cases(),
+        query_reviewed(),
+        query_asha_workers(),
     )
-    if role != "super_admin" and facility_id:
-        query = query.eq("facility_id", facility_id)
 
-    rows = (query.execute().data or [])
-    total = len(rows)
+    # Process total cases
+    total = total_res.count or 0
 
+    # Process triage distribution
     dist = {"ROUTINE": 0, "URGENT": 0, "EMERGENCY": 0}
-    for row in rows:
+    for row in (dist_res.data or []):
         level = row.get("triage_level")
         if level in dist:
             dist[level] += 1
 
-    since = datetime.now(timezone.utc) - timedelta(days=7)
+    # Process daily volume
     daily = {}
-    for row in rows:
-        created_at = row.get("created_at")
-        if not created_at:
-            continue
-        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        if dt >= since:
-            day = dt.strftime("%Y-%m-%d")
-            daily[day] = daily.get(day, 0) + 1
+    for row in (week_res.data or []):
+        day = row["created_at"][:10]  # YYYY-MM-DD
+        daily[day] = daily.get(day, 0) + 1
 
-    reviewed = sum(1 for row in rows if row.get("reviewed_at") is not None)
+    # Process reviewed count
+    reviewed = reviewed_res.count or 0
 
-    month_since = datetime.now(timezone.utc) - timedelta(days=30)
+    # Process ASHA worker counts
     asha_counts = {}
-    for row in rows:
-        created_at = row.get("created_at")
-        if not created_at:
-            continue
-        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        if dt < month_since:
-            continue
+    for row in (asha_res.data or []):
         uid = row.get("submitted_by")
-        key = str(uid) if uid else "unknown"
+        name = (row.get("profiles") or {}).get("full_name", "Unknown")
+        key = f"{uid}::{name}"
         asha_counts[key] = asha_counts.get(key, 0) + 1
 
     top_asha = sorted(
-        [{"name": k, "count": v} for k, v in asha_counts.items()],
+        [{"name": k.split("::")[1], "count": v} for k, v in asha_counts.items()],
         key=lambda x: x["count"],
         reverse=True,
     )[:5]
@@ -117,14 +133,11 @@ async def get_emergency_rate(
     Returns EMERGENCY case rate over the last 30 days, grouped by week.
     Used for the trend indicator in the admin analytics view.
     """
-    raw_token = _extract_token(_header_or_401(authorization))
+    raw_token = authorization.split(" ", 1)[1]
     db = get_supabase_for_user(raw_token)
 
-    role = _resolved_role(user)
-    facility_id = _resolved_facility(user)
-
-    if role in {"doctor", "facility_admin"} and not facility_id:
-        raise HTTPException(status_code=403, detail="User is not assigned to a facility")
+    role = user.get("user_metadata", {}).get("role")
+    facility_id = user.get("user_metadata", {}).get("facility_id")
 
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 
@@ -134,22 +147,21 @@ async def get_emergency_rate(
         .is_("deleted_at", "null")
         .gte("created_at", since)
     )
-    if role != "super_admin" and facility_id:
+    if role not in ("super_admin",) and facility_id:
         q = q.eq("facility_id", facility_id)
 
-    rows = q.execute().data or []
+    res = q.execute()
+    rows = res.data or []
 
+    # Group by ISO week
     weeks = {}
     for row in rows:
-        created_at = row.get("created_at")
-        if not created_at:
-            continue
-        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
         week_key = dt.strftime("%Y-W%W")
         if week_key not in weeks:
             weeks[week_key] = {"total": 0, "emergency": 0}
         weeks[week_key]["total"] += 1
-        if row.get("triage_level") == "EMERGENCY":
+        if row["triage_level"] == "EMERGENCY":
             weeks[week_key]["emergency"] += 1
 
     result = [

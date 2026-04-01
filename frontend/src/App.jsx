@@ -1,10 +1,13 @@
+import { lazy, Suspense } from 'react'
 import { AuthProvider, useAuth } from './store/authStore'
 import { RouteGuard } from './components/RouteGuard'
 import ToastProvider from './components/ToastProvider'
 import { UpdatePrompt } from './components/UpdatePrompt'
-import ASHAPanel   from './panels/ASHAPanel'
-import DoctorPanel from './panels/DoctorPanel'
-import AdminPanel  from './panels/AdminPanel'
+
+// Lazy load panel components
+const ASHAPanel = lazy(() => import('./panels/ASHAPanel'))
+const DoctorPanel = lazy(() => import('./panels/DoctorPanel'))
+const AdminPanel = lazy(() => import('./panels/AdminPanel'))
 
 function AppInner() {
   const { profile, signOut } = useAuth()
@@ -27,9 +30,27 @@ function AppInner() {
     )
   }
 
-  if (profile?.role === 'admin')       return <AdminPanel />
-  if (profile?.role === 'doctor')      return <DoctorPanel />
-  if (profile?.role === 'asha_worker') return <ASHAPanel />
+  if (profile?.role === 'admin') {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-bg flex items-center justify-center text-text2">Loading...</div>}>
+        <AdminPanel />
+      </Suspense>
+    )
+  }
+  if (profile?.role === 'doctor') {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-bg flex items-center justify-center text-text2">Loading...</div>}>
+        <DoctorPanel />
+      </Suspense>
+    )
+  }
+  if (profile?.role === 'asha_worker') {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-bg flex items-center justify-center text-text2">Loading...</div>}>
+        <ASHAPanel />
+      </Suspense>
+    )
+  }
   return null
 }
 
