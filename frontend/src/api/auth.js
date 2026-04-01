@@ -11,8 +11,21 @@ import { supabase } from '@/lib/supabase'
 export async function authHeaders() {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) throw new Error('Not authenticated')
+  const deviceId = getOrCreateDeviceId()
   return {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${session.access_token}`,
+    'X-Device-Id': deviceId,
+    'X-CSRF-Token': import.meta.env.VITE_CSRF_TOKEN || 'vitalnet-spa',
   }
+}
+
+function getOrCreateDeviceId() {
+  const key = 'vitalnet_device_id'
+  let value = localStorage.getItem(key)
+  if (!value) {
+    value = globalThis.crypto?.randomUUID?.() || `dev-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    localStorage.setItem(key, value)
+  }
+  return value
 }

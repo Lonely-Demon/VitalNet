@@ -47,3 +47,5 @@ class BriefingOutput(BaseModel):
     recommended_tests: List[str]
     uncertainty_flags: str
     disclaimer: str
+    llm_status: str = "generated"
+    needs_review: bool = False

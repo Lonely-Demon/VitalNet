@@ -17,10 +17,23 @@ import { v4 as uuidv4 } from 'uuid'
 const BASE = import.meta.env.VITE_API_BASE_URL
 
 async function _authHeaders(token) {
+  const deviceId = getOrCreateDeviceId()
   return {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${token}`,
+    'X-Device-Id': deviceId,
+    'X-CSRF-Token': import.meta.env.VITE_CSRF_TOKEN || 'vitalnet-spa',
   }
+}
+
+function getOrCreateDeviceId() {
+  const key = 'vitalnet_device_id'
+  let value = localStorage.getItem(key)
+  if (!value) {
+    value = globalThis.crypto?.randomUUID?.() || `dev-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    localStorage.setItem(key, value)
+  }
+  return value
 }
 
 /**
@@ -100,10 +113,7 @@ export async function processQueue() {
     try {
       const res = await fetch(`${BASE}/api/submit`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${freshToken}`,
-        },
+        headers: await _authHeaders(freshToken),
         body: JSON.stringify(item.payload),
       })
 

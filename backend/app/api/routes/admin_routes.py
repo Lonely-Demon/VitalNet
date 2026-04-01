@@ -1,11 +1,69 @@
-from fastapi import APIRouter, Depends, Header, HTTPException
-
-from app.core.auth import require_role
-from app.core.database import supabase_admin
-from pydantic import BaseModel, EmailStr
+import re
+from datetime import datetime, timezone
 from typing import Optional
 
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+
+from app.core.auth import require_role
+from app.core.audit import AuditEventType, get_client_ip, log_phi_access
+from app.core.database import get_supabase_for_user, supabase_admin
+from pydantic import BaseModel, EmailStr
+
 router = APIRouter(prefix='/api/admin', tags=['admin'])
+
+ALLOWED_ROLES = {"asha_worker", "doctor", "facility_admin", "admin", "super_admin"}
+ADMIN_ASSIGNABLE_ROLES = {"asha_worker", "doctor", "facility_admin"}
+SUPER_ADMIN_ASSIGNABLE_ROLES = ALLOWED_ROLES
+PASSWORD_POLICY_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{12,128}$")
+
+
+def _extract_token(authorization: str | None) -> str:
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    parts = authorization.strip().split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+        raise HTTPException(status_code=401, detail="Malformed Authorization header")
+    return parts[1].strip()
+
+
+def _header_or_401(value: str | None) -> str:
+    if value is None:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    return value
+
+
+def _effective_role(user: dict) -> str:
+    return (user.get("resolved_role") or "").strip()
+
+
+def _ensure_role_assignable(actor_role: str, target_role: str) -> None:
+    assignable = SUPER_ADMIN_ASSIGNABLE_ROLES if actor_role == "super_admin" else ADMIN_ASSIGNABLE_ROLES
+    if target_role not in assignable:
+        raise HTTPException(status_code=403, detail="Role assignment not permitted")
+
+
+def _validate_password(password: str) -> None:
+    if not PASSWORD_POLICY_RE.match(password or ""):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Password must be 12-128 characters and include uppercase, lowercase, "
+                "number, and symbol"
+            ),
+        )
+
+
+def _mask_csv_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if text and text[0] in {"=", "+", "-", "@", "\t", "\r", "\n"}:
+        return "'" + text
+    return text
+
+
+def _safe_role_error_detail() -> str:
+    return "Invalid role selection"
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -17,6 +75,7 @@ class CreateUserRequest(BaseModel):
     role: str                           # 'asha_worker' | 'doctor' | 'admin'
     facility_id: Optional[str] = None
     asha_id: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 class UpdateUserRequest(BaseModel):
@@ -40,62 +99,119 @@ class CreateFacilityRequest(BaseModel):
 
 @router.get('/users')
 async def list_users(
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
+    user: dict = Depends(require_role('admin', 'super_admin')),
+    page: int = 1,
+    limit: int = 100,
 ):
     """
     Returns all users joined with their profiles.
     Uses admin client for auth.admin.list_users(), then enriches
     with profiles data for role/facility info.
     """
-    # Fetch all profiles (admin SELECT policy covers this)
-    profiles_result = supabase_admin.table('profiles').select(
+    actor_role = _effective_role(user)
+    actor_facility_id = user.get("resolved_facility_id")
+    limit = max(1, min(limit, 200))
+    page = max(1, page)
+    start = (page - 1) * limit
+    end = start + limit - 1
+
+    # Fetch profiles with pagination to avoid mass user enumeration
+    profile_query = supabase_admin.table('profiles').select(
         'id, full_name, role, facility_id, asha_id, is_active, created_at, '
         'facilities(name, district)'
-    ).execute()
+    )
 
-    profiles_by_id = {p['id']: p for p in profiles_result.data}
+    if actor_role != "super_admin" and actor_facility_id:
+        profile_query = profile_query.eq("facility_id", actor_facility_id)
 
-    # Fetch auth users for email + last_sign_in — per_page=1000 avoids pagination gap
-    auth_users = supabase_admin.auth.admin.list_users(page=1, per_page=1000)
+    profiles_result = profile_query.range(start, end).execute()
+    profile_rows = profiles_result.data if profiles_result else []
+
+    profiles_by_id = {p['id']: p for p in profile_rows}
+
+    # Fetch auth users only for profile ids on current page
+    auth_users = supabase_admin.auth.admin.list_users(page=page, per_page=limit)
+    auth_users = [au for au in auth_users if str(au.id) in profiles_by_id]
 
     result = []
     for au in auth_users:
         profile = profiles_by_id.get(str(au.id), {})
+        if actor_role != "super_admin" and actor_facility_id and profile.get("facility_id") != actor_facility_id:
+            continue
+
+        role_value = profile.get('role', 'asha_worker')
         result.append({
             'id':            str(au.id),
-            'email':         au.email,
+            'email':         _mask_csv_value(au.email),
             'full_name':     profile.get('full_name', ''),
-            'role':          profile.get('role', 'asha_worker'),
+            'role':          role_value,
             'facility_id':   profile.get('facility_id'),
             'facility_name': (profile.get('facilities') or {}).get('name'),
-            'asha_id':       profile.get('asha_id'),
+            'asha_id':       _mask_csv_value(profile.get('asha_id')),
             'is_active':     profile.get('is_active', True),
             'created_at':    str(au.created_at),
             'last_sign_in':  str(au.last_sign_in_at) if au.last_sign_in_at else None,
         })
 
-    return result
+    log_phi_access(
+        event_type=AuditEventType.PHI_READ,
+        user_id=user.get("sub", "unknown"),
+        user_role=actor_role,
+        resource_type="profiles",
+        resource_id=f"page:{page}",
+        facility_id=actor_facility_id,
+        ip_address=get_client_ip(request),
+        details={"count": len(result), "pagination": {"page": page, "limit": limit}},
+    )
+
+    return {
+        "data": result,
+        "page": page,
+        "limit": limit,
+        "total": len(profile_rows),
+    }
 
 
 @router.post('/users')
 async def create_user(
     body: CreateUserRequest,
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
+    user: dict = Depends(require_role('admin', 'super_admin')),
 ):
     """
     Creates a new auth user and their profile row.
     email_confirm=True so new users can log in immediately without
     going through email verification flow.
     """
+    actor_role = _effective_role(user)
+    requested_role = (body.role or "").strip()
+
+    if requested_role not in ALLOWED_ROLES:
+        raise HTTPException(status_code=400, detail=_safe_role_error_detail())
+
+    _ensure_role_assignable(actor_role, requested_role)
+    _validate_password(body.password)
+
+    if requested_role in {"doctor", "facility_admin", "asha_worker"} and not body.facility_id:
+        raise HTTPException(status_code=400, detail="facility_id is required for non-admin users")
+
+    if actor_role != "super_admin" and requested_role in {"admin", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only super_admin can create admin-level users")
+
+    if actor_role != "super_admin" and user.get("resolved_facility_id") and body.facility_id:
+        if body.facility_id != user.get("resolved_facility_id"):
+            raise HTTPException(status_code=403, detail="Cannot create users outside your facility")
+
     response = supabase_admin.auth.admin.create_user({
         'email':         body.email,
         'password':      body.password,
         'email_confirm': True,
         'user_metadata': {
             'full_name':   body.full_name,
-            'role':        body.role,
+            'role':        requested_role,
             'facility_id': body.facility_id or '',
         },
     })
@@ -104,9 +220,21 @@ async def create_user(
 
     # Patch the profile row created by the DB trigger with extra fields
     supabase_admin.table('profiles').update({
+        'role':        requested_role,
         'facility_id': body.facility_id,
         'asha_id':     body.asha_id,
     }).eq('id', new_user_id).execute()
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_CREATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=actor_role,
+        resource_type="profiles",
+        resource_id=new_user_id,
+        facility_id=body.facility_id,
+        ip_address=get_client_ip(request),
+        details={"created_role": requested_role},
+    )
 
     return {'id': new_user_id, 'email': body.email}
 
@@ -115,21 +243,54 @@ async def create_user(
 async def update_user(
     user_id: str,
     body: UpdateUserRequest,
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
+    user: dict = Depends(require_role('admin', 'super_admin')),
 ):
     """
     Updates profile fields (role, facility, asha_id, is_active).
     Also updates user_metadata in auth so the JWT hook re-embeds
     the new role on next login.
     """
+    actor_role = _effective_role(user)
+
+    target_profile_response = (
+        supabase_admin.table("profiles")
+        .select("id, role, facility_id")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    target_profile = getattr(target_profile_response, "data", None) or {}
+    if not target_profile:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if actor_role != "super_admin":
+        if target_profile.get("role") in {"admin", "super_admin"}:
+            raise HTTPException(status_code=403, detail="Cannot modify admin-level users")
+        actor_facility = user.get("resolved_facility_id")
+        if actor_facility and target_profile.get("facility_id") not in {actor_facility, None}:
+            raise HTTPException(status_code=403, detail="Cannot modify users outside your facility")
+
     profile_update = {}
     meta_update = {}
 
     if body.role is not None:
-        profile_update['role'] = body.role
-        meta_update['role'] = body.role
+        requested_role = body.role.strip()
+        if requested_role not in ALLOWED_ROLES:
+            raise HTTPException(status_code=400, detail=_safe_role_error_detail())
+
+        _ensure_role_assignable(actor_role, requested_role)
+
+        if actor_role != "super_admin" and requested_role in {"admin", "super_admin"}:
+            raise HTTPException(status_code=403, detail="Only super_admin can grant admin roles")
+
+        profile_update['role'] = requested_role
+        meta_update['role'] = requested_role
     if body.facility_id is not None:
+        if actor_role != "super_admin" and user.get("resolved_facility_id") and body.facility_id:
+            if body.facility_id != user.get("resolved_facility_id"):
+                raise HTTPException(status_code=403, detail="Cannot move users outside your facility")
         profile_update['facility_id'] = body.facility_id
         meta_update['facility_id'] = body.facility_id
     if body.asha_id is not None:
@@ -145,31 +306,108 @@ async def update_user(
             user_id, {'user_metadata': meta_update}
         )
 
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=actor_role,
+        resource_type="profiles",
+        resource_id=user_id,
+        facility_id=profile_update.get("facility_id") or target_profile.get("facility_id"),
+        ip_address=get_client_ip(request),
+        details={"fields_updated": sorted(profile_update.keys())},
+    )
+
     return {'status': 'updated'}
 
 
 @router.delete('/users/{user_id}')
 async def deactivate_user(
     user_id: str,
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
+    user: dict = Depends(require_role('admin', 'super_admin')),
 ):
     """
     Soft-deactivates: sets profiles.is_active = false.
     Does NOT delete the auth user or their case records.
     Hard deletion is intentionally not exposed via API.
     """
+    actor_role = _effective_role(user)
+
+    target_profile_response = (
+        supabase_admin.table("profiles")
+        .select("id, role, facility_id")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    target_profile = getattr(target_profile_response, "data", None) or {}
+    if not target_profile:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if actor_role != "super_admin" and target_profile.get("role") in {"admin", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Cannot deactivate admin-level users")
+
+    actor_facility = user.get("resolved_facility_id")
+    if actor_role != "super_admin" and actor_facility and target_profile.get("facility_id") not in {actor_facility, None}:
+        raise HTTPException(status_code=403, detail="Cannot deactivate users outside your facility")
+
     supabase_admin.table('profiles').update({'is_active': False}).eq('id', user_id).execute()
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=actor_role,
+        resource_type="profiles",
+        resource_id=user_id,
+        facility_id=target_profile.get("facility_id"),
+        ip_address=get_client_ip(request),
+        details={"is_active": False, "changed_at": datetime.now(timezone.utc).isoformat()},
+    )
+
     return {'status': 'deactivated'}
 
 
 @router.post('/users/{user_id}/reactivate')
 async def reactivate_user(
     user_id: str,
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
+    user: dict = Depends(require_role('admin', 'super_admin')),
 ):
+    actor_role = _effective_role(user)
+
+    target_profile_response = (
+        supabase_admin.table("profiles")
+        .select("id, role, facility_id")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    target_profile = getattr(target_profile_response, "data", None) or {}
+    if not target_profile:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if actor_role != "super_admin" and target_profile.get("role") in {"admin", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Cannot reactivate admin-level users")
+
+    actor_facility = user.get("resolved_facility_id")
+    if actor_role != "super_admin" and actor_facility and target_profile.get("facility_id") not in {actor_facility, None}:
+        raise HTTPException(status_code=403, detail="Cannot reactivate users outside your facility")
+
     supabase_admin.table('profiles').update({'is_active': True}).eq('id', user_id).execute()
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=actor_role,
+        resource_type="profiles",
+        resource_id=user_id,
+        facility_id=target_profile.get("facility_id"),
+        ip_address=get_client_ip(request),
+        details={"is_active": True, "changed_at": datetime.now(timezone.utc).isoformat()},
+    )
+
     return {'status': 'reactivated'}
 
 
@@ -177,32 +415,108 @@ async def reactivate_user(
 
 @router.get('/facilities')
 async def list_facilities(
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
+    user: dict = Depends(require_role('admin', 'super_admin', 'facility_admin')),
 ):
-    result = supabase_admin.table('facilities').select('*').order('name').execute()
+    actor_role = _effective_role(user)
+    actor_facility = user.get("resolved_facility_id")
+
+    query = supabase_admin.table('facilities').select('*').order('name')
+    if actor_role == 'facility_admin' and actor_facility:
+        query = query.eq('id', actor_facility)
+
+    result = query.execute()
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_READ,
+        user_id=user.get("sub", "unknown"),
+        user_role=actor_role,
+        resource_type="facilities",
+        resource_id="list",
+        facility_id=actor_facility,
+        ip_address=get_client_ip(request),
+        details={"count": len(result.data or [])},
+    )
+
     return result.data
 
 
 @router.post('/facilities')
 async def create_facility(
     body: CreateFacilityRequest,
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
+    user: dict = Depends(require_role('admin', 'super_admin')),
 ):
+    if _effective_role(user) != 'super_admin':
+        raise HTTPException(status_code=403, detail='Only super_admin can create facilities')
+
     result = supabase_admin.table('facilities').insert(body.model_dump()).execute()
+
+    created_id = result.data[0]['id'] if result.data else None
+    log_phi_access(
+        event_type=AuditEventType.PHI_CREATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=_effective_role(user),
+        resource_type="facilities",
+        resource_id=created_id,
+        facility_id=created_id,
+        ip_address=get_client_ip(request),
+        details={"name": body.name},
+    )
+
     return result.data[0]
 
 
 @router.patch('/facilities/{facility_id}/toggle')
 async def toggle_facility(
     facility_id: str,
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
+    user: dict = Depends(require_role('admin', 'super_admin')),
 ):
+    if _effective_role(user) != 'super_admin':
+        raise HTTPException(status_code=403, detail='Only super_admin can toggle facility state')
+
     current = supabase_admin.table('facilities').select('is_active').eq('id', facility_id).single().execute()
     new_state = not current.data['is_active']
     supabase_admin.table('facilities').update({'is_active': new_state}).eq('id', facility_id).execute()
+
+    profile_count = (
+        supabase_admin.table("profiles")
+        .select("id")
+        .eq("facility_id", facility_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    active_profile_rows = profile_count.data or []
+
+    open_case_count = (
+        supabase_admin.table("case_records")
+        .select("id")
+        .eq("facility_id", facility_id)
+        .is_("reviewed_at", "null")
+        .is_("deleted_at", "null")
+        .execute()
+    )
+    open_case_rows = open_case_count.data or []
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=_effective_role(user),
+        resource_type="facilities",
+        resource_id=facility_id,
+        facility_id=facility_id,
+        ip_address=get_client_ip(request),
+        details={
+            "is_active": new_state,
+            "active_profiles": len(active_profile_rows),
+            "open_cases": len(open_case_rows),
+        },
+    )
+
     return {'is_active': new_state}
 
 
@@ -211,10 +525,23 @@ async def toggle_facility(
 @router.get('/stats')
 async def get_stats(
     authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
+    user: dict = Depends(require_role('admin', 'super_admin', 'facility_admin')),
 ):
-    cases = supabase_admin.table('case_records').select('triage_level').is_('deleted_at', 'null').execute()
-    profiles = supabase_admin.table('profiles').select('role, is_active').execute()
+    actor_role = _effective_role(user)
+    actor_facility = user.get("resolved_facility_id")
+
+    token = _extract_token(_header_or_401(authorization))
+    db = get_supabase_for_user(token)
+
+    cases_query = db.table('case_records').select('triage_level').is_('deleted_at', 'null')
+    profiles_query = db.table('profiles').select('role, is_active')
+
+    if actor_role == 'facility_admin' and actor_facility:
+        cases_query = cases_query.eq('facility_id', actor_facility)
+        profiles_query = profiles_query.eq('facility_id', actor_facility)
+
+    cases = cases_query.execute()
+    profiles = profiles_query.execute()
 
     triage_counts = {'EMERGENCY': 0, 'URGENT': 0, 'ROUTINE': 0}
     for c in cases.data:

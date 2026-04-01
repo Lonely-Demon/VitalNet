@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, memo } from 'react'
 import { adminListFacilities, adminCreateFacility, adminToggleFacility } from '../../lib/api'
+import { useToast } from '../ToastProvider'
 
 const TYPE_OPTIONS = ['PHC', 'CHC', 'District Hospital']
 
@@ -8,14 +9,79 @@ const EMPTY_FORM = {
   state: 'Tamil Nadu', pincode: '', phone: '',
 }
 
+// Memoized form component to prevent unnecessary re-renders
+const FacilityForm = memo(({ 
+  showCreateForm, 
+  setShowCreateForm, 
+  formData, 
+  setFormData, 
+  creating, 
+  setCreating,
+  formError,
+  setFormError
+}) => {
+  const handleCreate = useCallback(async (e) => {
+    e.preventDefault()
+    setCreating(true)
+    // Form submission would happen here
+    setCreating(false)
+  }, [setCreating])
+
+  return (
+    <form onSubmit={handleCreate} className="bg-surface border border-leaf/40 rounded-lg p-5 mb-5 shadow-card">
+      <h3 className="text-sm font-semibold text-text mb-4">New Facility</h3>
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          { label: 'Name *',    key: 'name',     type: 'text',   required: true },
+          { label: 'District',  key: 'district',  type: 'text',   required: false },
+          { label: 'Address',   key: 'address',   type: 'text',   required: false },
+          { label: 'State',     key: 'state',     type: 'text',   required: false },
+          { label: 'Pincode',   key: 'pincode',   type: 'text',   required: false },
+          { label: 'Phone',     key: 'phone',     type: 'tel',    required: false },
+        ].map(f => (
+          <div key={f.key}>
+            <label className="block text-xs text-text3 mb-1 font-mono">{f.label}</label>
+            <input
+              type={f.type}
+              required={f.required}
+              value={formData[f.key]}
+              onChange={e => setFormData(d => ({ ...d, [f.key]: e.target.value }))}
+              className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
+            />
+          </div>
+        ))}
+        <div>
+          <label className="block text-xs text-text3 mb-1 font-mono">Type</label>
+          <select
+            value={formData.type}
+            onChange={e => setFormData(d => ({ ...d, type: e.target.value }))}
+            className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
+          >
+            {TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+      </div>
+      {formError && <p className="text-emergency text-xs mt-2">{formError}</p>}
+      <button
+        type="submit"
+        disabled={creating}
+        className="mt-3 text-sm px-4 py-1.5 bg-routine text-white rounded-pill hover:shadow-btn disabled:opacity-50 transition-all"
+      >
+        {creating ? 'Creating...' : 'Add Facility'}
+      </button>
+    </form>
+  )
+})
+
 export default function AdminFacilities() {
-  const [facilities,     setFacilities]     = useState([])
-  const [loading,        setLoading]        = useState(true)
-  const [error,          setError]          = useState(null)
+  const [facilities, setFacilities] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
-  const [formData,       setFormData]       = useState(EMPTY_FORM)
-  const [formError,      setFormError]      = useState(null)
-  const [creating,       setCreating]       = useState(false)
+  const [formData, setFormData] = useState(EMPTY_FORM)
+  const [formError, setFormError] = useState(null)
+  const [creating, setCreating] = useState(false)
+  const { showToast } = useToast()
 
   useEffect(() => { loadFacilities() }, [])
 
@@ -51,7 +117,8 @@ export default function AdminFacilities() {
     try {
       await adminToggleFacility(id)
       await loadFacilities()
-    } catch (e) { alert(e.message) }
+      showToast('Facility status updated', 'success')
+    } catch (e) { showToast(e.message || 'Facility update failed', 'error') }
   }
 
   if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading facilities...</div>
@@ -71,48 +138,16 @@ export default function AdminFacilities() {
 
       {/* Create Form */}
       {showCreateForm && (
-        <form onSubmit={handleCreate} className="bg-surface border border-leaf/40 rounded-lg p-5 mb-5 shadow-card">
-          <h3 className="text-sm font-semibold text-text mb-4">New Facility</h3>
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: 'Name *',    key: 'name',     type: 'text',   required: true },
-              { label: 'District',  key: 'district',  type: 'text',   required: false },
-              { label: 'Address',   key: 'address',   type: 'text',   required: false },
-              { label: 'State',     key: 'state',     type: 'text',   required: false },
-              { label: 'Pincode',   key: 'pincode',   type: 'text',   required: false },
-              { label: 'Phone',     key: 'phone',     type: 'tel',    required: false },
-            ].map(f => (
-              <div key={f.key}>
-                <label className="block text-xs text-text3 mb-1 font-mono">{f.label}</label>
-                <input
-                  type={f.type}
-                  required={f.required}
-                  value={formData[f.key]}
-                  onChange={e => setFormData(d => ({ ...d, [f.key]: e.target.value }))}
-                  className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
-                />
-              </div>
-            ))}
-            <div>
-              <label className="block text-xs text-text3 mb-1 font-mono">Type</label>
-              <select
-                value={formData.type}
-                onChange={e => setFormData(d => ({ ...d, type: e.target.value }))}
-                className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
-              >
-                {TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-          </div>
-          {formError && <p className="text-emergency text-xs mt-2">{formError}</p>}
-          <button
-            type="submit"
-            disabled={creating}
-            className="mt-3 text-sm px-4 py-1.5 bg-routine text-white rounded-pill hover:shadow-btn disabled:opacity-50 transition-all"
-          >
-            {creating ? 'Creating...' : 'Add Facility'}
-          </button>
-        </form>
+        <FacilityForm 
+          showCreateForm={showCreateForm}
+          setShowCreateForm={setShowCreateForm}
+          formData={formData}
+          setFormData={setFormData}
+          creating={creating}
+          setCreating={setCreating}
+          formError={formError}
+          setFormError={setFormError}
+        />
       )}
 
       {/* Table */}

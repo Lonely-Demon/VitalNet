@@ -150,12 +150,12 @@ def audit_phi_endpoint(resource_type: str, event_type: str = AuditEventType.PHI_
 
 
 # Convenience functions for common audit events
-def audit_case_create(user: dict, case_id: str, facility_id: str, request: Request = None):
+def audit_case_create(user: dict, case_id: str, facility_id: str, request: Optional[Request] = None):
     """Log case creation (PHI write)."""
     log_phi_access(
         event_type=AuditEventType.PHI_CREATE,
         user_id=user.get("sub", "unknown"),
-        user_role=user.get("user_metadata", {}).get("role"),
+        user_role=user.get("resolved_role") or user.get("user_metadata", {}).get("role"),
         resource_type="case_records",
         resource_id=case_id,
         facility_id=facility_id,
@@ -163,42 +163,42 @@ def audit_case_create(user: dict, case_id: str, facility_id: str, request: Reque
     )
 
 
-def audit_case_read(user: dict, case_id: str, request: Request = None):
+def audit_case_read(user: dict, case_id: str, request: Optional[Request] = None):
     """Log case read (PHI access)."""
     log_phi_access(
         event_type=AuditEventType.PHI_READ,
         user_id=user.get("sub", "unknown"),
-        user_role=user.get("user_metadata", {}).get("role"),
+        user_role=user.get("resolved_role") or user.get("user_metadata", {}).get("role"),
         resource_type="case_records",
         resource_id=case_id,
-        facility_id=user.get("user_metadata", {}).get("facility_id"),
+        facility_id=user.get("resolved_facility_id") or user.get("user_metadata", {}).get("facility_id"),
         ip_address=get_client_ip(request) if request else None,
     )
 
 
-def audit_case_update(user: dict, case_id: str, fields_updated: list, request: Request = None):
+def audit_case_update(user: dict, case_id: str, fields_updated: list, request: Optional[Request] = None):
     """Log case update (PHI modification)."""
     log_phi_access(
         event_type=AuditEventType.PHI_UPDATE,
         user_id=user.get("sub", "unknown"),
-        user_role=user.get("user_metadata", {}).get("role"),
+        user_role=user.get("resolved_role") or user.get("user_metadata", {}).get("role"),
         resource_type="case_records",
         resource_id=case_id,
-        facility_id=user.get("user_metadata", {}).get("facility_id"),
+        facility_id=user.get("resolved_facility_id") or user.get("user_metadata", {}).get("facility_id"),
         ip_address=get_client_ip(request) if request else None,
         details={"fields_updated": fields_updated},
     )
 
 
-def audit_bulk_access(user: dict, resource_type: str, count: int, request: Request = None):
+def audit_bulk_access(user: dict, resource_type: str, count: int, request: Optional[Request] = None):
     """Log bulk PHI access (e.g., listing cases)."""
     log_phi_access(
         event_type=AuditEventType.PHI_READ,
         user_id=user.get("sub", "unknown"),
-        user_role=user.get("user_metadata", {}).get("role"),
+        user_role=user.get("resolved_role") or user.get("user_metadata", {}).get("role"),
         resource_type=resource_type,
         resource_id=f"bulk:{count}",
-        facility_id=user.get("user_metadata", {}).get("facility_id"),
+        facility_id=user.get("resolved_facility_id") or user.get("user_metadata", {}).get("facility_id"),
         ip_address=get_client_ip(request) if request else None,
         details={"bulk_access": True, "record_count": count},
     )

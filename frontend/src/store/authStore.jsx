@@ -1,16 +1,18 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { clearPersistedAuthStorage, supabase } from '../lib/supabase'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const [session,  setSession]  = useState(undefined) // undefined = loading
   const [profile,  setProfile]  = useState(null)
+  const [profileFetchFailed, setProfileFetchFailed] = useState(false)
 
   useEffect(() => {
     // Load existing session from IndexedDB on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
+      setProfileFetchFailed(false)
       if (session) fetchProfile(session.user.id)
     })
 
@@ -18,8 +20,12 @@ export function AuthProvider({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         setSession(session)
+        setProfileFetchFailed(false)
         if (session) fetchProfile(session.user.id)
-        else setProfile(null)
+        else {
+          setProfile(null)
+          clearPersistedAuthStorage().catch(() => {})
+        }
       }
     )
     return () => subscription.unsubscribe()
@@ -32,21 +38,31 @@ export function AuthProvider({ children }) {
         .select('*')
         .eq('id', userId)
         .single()
-      if (data) setProfile(data)
+      if (data) {
+        setProfile(data)
+        setProfileFetchFailed(false)
+      }
     } catch {
-      // Offline or network error — keep existing profile (don't blank the page)
-      console.warn('[VitalNet] Profile fetch failed (offline?), keeping cached state')
+      setProfileFetchFailed(true)
     }
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut()
+    await clearPersistedAuthStorage()
+    setProfile(null)
+    setProfileFetchFailed(false)
   }
 
   const value = {
     session,
     profile,
     role:      session?.user?.app_metadata?.role ?? profile?.role ?? null,
-    isLoading: session === undefined,
+    isLoading: session === undefined || (Boolean(session) && !profile && !profileFetchFailed),
+    hasProfileError: profileFetchFailed,
     signIn:    (email, password) =>
                  supabase.auth.signInWithPassword({ email, password }),
-    signOut:   () => supabase.auth.signOut(),
+    signOut,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
