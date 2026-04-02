@@ -1,139 +1,66 @@
 import base64
-import hmac
 import json
-from typing import Any
 
 from fastapi import Depends, Header, HTTPException, status
 
-from app.core.database import get_supabase_for_user, supabase_anon
+from app.core.database import supabase_anon
 
-ALLOWED_JWT_ALGS = {"HS256", "RS256", "ES256"}
+ALGORITHM = "HS256"
 AUDIENCE = "authenticated"
 
 
-def _decode_jwt_part(part: str) -> dict[str, Any]:
-    padded = part + "=" * (-len(part) % 4)
-    decoded = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
-    return json.loads(decoded)
-
-
-def _extract_bearer_token(authorization: str | None) -> str:
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    parts = authorization.strip().split(" ", 1)
-    if len(parts) != 2 or not hmac.compare_digest(parts[0].lower(), "bearer"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Malformed Authorization header",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    token = parts[1].strip()
-    if token.count(".") != 2:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Malformed bearer token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    header = _decode_jwt_part(token.split(".", 1)[0])
-    alg = (header.get("alg") or "").upper()
-    if alg not in ALLOWED_JWT_ALGS:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unsupported token algorithm",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return token
-
-
-async def get_current_user(authorization: str = Header(default=None)) -> dict[str, Any]:
+async def get_current_user(authorization: str = Header(None)) -> dict:
     """
-    Validate bearer token with Supabase and resolve authorization fields from DB profile.
-    Never trusts role/facility_id from JWT metadata for backend authorization decisions.
+    Extracts and validates the Supabase JWT from the
+    Authorization: Bearer <token> header.
+    Returns the full JWT payload dictionary.
+    Raises HTTP 401 on any failure.
+    Uses Supabase's get_user() to support ES256 signatures and instant revocation.
     """
-    token = _extract_bearer_token(authorization)
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or malformed Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = authorization.split(" ", 1)[1]
 
     try:
-        user_response = supabase_anon.auth.get_user(token)
-    except Exception:
+        # 1. Validate the token cryptographically and check revocation
+        supabase_anon.auth.get_user(token)
+
+        # 2. Extract the payload manually (since get_user() omits custom JWT claims)
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload_json = base64.urlsafe_b64decode(payload_b64).decode("utf-8")
+
+        return json.loads(payload_json)
+
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
+            detail=f"Invalid or expired token: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    user_obj = getattr(user_response, "user", None)
-    user_id = str(getattr(user_obj, "id", "") or "")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication context",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    try:
-        payload = _decode_jwt_part(token.split(".")[1])
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Malformed token payload",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    audience = payload.get("aud")
-    if audience not in {AUDIENCE, [AUDIENCE]}:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token audience",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    user_db = get_supabase_for_user(token)
-    profile_result = (
-        user_db.table("profiles")
-        .select("id, role, facility_id, is_active")
-        .eq("id", user_id)
-        .maybe_single()
-        .execute()
-    )
-    profile = profile_result.data or {}
-
-    if not profile:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Profile not provisioned")
-
-    if profile.get("is_active") is False:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
-
-    return {
-        "sub": user_id,
-        "email": getattr(user_obj, "email", None),
-        "app_metadata": getattr(user_obj, "app_metadata", {}) or {},
-        "user_metadata": getattr(user_obj, "user_metadata", {}) or {},
-        "resolved_role": profile.get("role") or "",
-        "resolved_facility_id": profile.get("facility_id"),
-        "is_active": bool(profile.get("is_active", True)),
-        "profile": profile,
-    }
 
 
 def require_role(*roles: str):
-    """Returns a dependency that enforces one of the provided server-resolved roles."""
-
-    allowed_roles = {r for r in roles if r}
-
+    """
+    Returns a dependency that enforces the caller has one of the given roles.
+    Usage: Depends(require_role('doctor', 'admin'))
+    """
     async def role_guard(user: dict = Depends(get_current_user)) -> dict:
-        user_role = user.get("resolved_role") or ""
-        if user_role not in allowed_roles:
+        # Check both user_metadata (custom data) and app_metadata (auth provider data)
+        user_role = (
+            user.get("user_metadata", {}).get("role")
+            or user.get("app_metadata", {}).get("role")
+            or ""
+        )
+        if user_role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient permissions for this endpoint",
+                detail=f"Role '{user_role}' is not permitted for this endpoint.",
             )
         return user
 

@@ -1,30 +1,30 @@
 """
 VitalNet API — Application entrypoint.
 This file is responsible ONLY for:
-1. Structured JSON logging setup
-2. ML model loading at startup (lifespan)
-3. FastAPI app initialization
-4. Middleware registration (CORS, rate limiter, correlation ID)
-5. Router registration
-6. Global exception handlers
+  1. Structured JSON logging setup
+  2. ML model loading at startup (lifespan)
+  3. FastAPI app initialization
+  4. Middleware registration (CORS, rate limiter)
+  5. Router registration
+  6. Global exception handlers
 
 All route logic lives in app/api/routes/.
 """
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.logging import setup_logging
+from app.core.logging import setup_logging, set_correlation_id
 from app.core.config import settings
-from app.core.correlation import generate_correlation_id, set_correlation_id, get_correlation_id
 from app.ml.classifier import load_classifier
 from app.api.routes import cases, admin_routes, analytics_routes
 
@@ -55,6 +55,42 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
+# ── 4b. Correlation ID middleware ─────────────────────────────────────────────
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to generate/extract and propagate X-Request-ID for request tracing.
+    - Extracts X-Request-ID from incoming request headers if present
+    - Generates a new UUID if not provided
+    - Adds correlation ID to request state for access in route handlers
+    - Includes correlation ID in response headers
+    - Sets correlation ID in logging context for all log entries
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        # Extract correlation ID from header or generate new one
+        correlation_id = request.headers.get("X-Request-ID")
+        if not correlation_id:
+            correlation_id = str(uuid.uuid4())
+
+        # Set correlation ID in request state for route handlers
+        request.state.correlation_id = correlation_id
+
+        # Set correlation ID in logging context
+        set_correlation_id(correlation_id)
+
+        # Process the request
+        response = await call_next(request)
+
+        # Add correlation ID to response headers
+        response.headers["X-Request-ID"] = correlation_id
+
+        return response
+
+
+app.add_middleware(CorrelationIdMiddleware)
+
+
 # ── 5. CORS — restricted to known origins loaded from settings ────────────────
 
 _allowed_origins = [
@@ -75,37 +111,6 @@ app.add_middleware(
 )
 
 
-# ── 5a. Correlation ID middleware ─────────────────────────────────────────────
-
-class CorrelationIdMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware that generates a unique correlation ID for each request
-    and adds it to the response headers (X-Request-ID).
-    
-    The correlation ID is also stored in a context variable for use
-    in logging throughout the request lifecycle.
-    """
-    
-    async def dispatch(self, request: Request, call_next):
-        # Check if client provided a correlation ID, otherwise generate one
-        client_correlation_id = request.headers.get("X-Request-ID")
-        correlation_id = client_correlation_id or generate_correlation_id()
-        
-        # Set correlation ID in context for the current request
-        set_correlation_id(correlation_id)
-        
-        # Process the request
-        response = await call_next(request)
-        
-        # Add correlation ID to response headers
-        response.headers["X-Request-ID"] = correlation_id
-        
-        return response
-
-
-app.add_middleware(CorrelationIdMiddleware)
-
-
 # ── 6. Routers ────────────────────────────────────────────────────────────────
 
 app.include_router(cases.router)
@@ -117,7 +122,7 @@ app.include_router(analytics_routes.router)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    correlation_id = get_correlation_id()
+    correlation_id = getattr(request.state, "correlation_id", "unknown")
     logger.exception(
         "Unhandled server error",
         extra={"path": str(request.url.path), "correlation_id": correlation_id},
@@ -130,7 +135,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    correlation_id = get_correlation_id()
+    correlation_id = getattr(request.state, "correlation_id", "unknown")
     logger.warning(
         "Validation error",
         extra={"path": str(request.url.path), "errors": exc.errors(), "correlation_id": correlation_id},

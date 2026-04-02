@@ -1,9 +1,14 @@
+import logging
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.core.auth import require_role
+from app.core.correlation import get_correlation_id
 from app.core.database import supabase_admin
 from pydantic import BaseModel, EmailStr
 from typing import Optional
+
+logger = logging.getLogger("vitalnet")
 
 router = APIRouter(prefix='/api/admin', tags=['admin'])
 
@@ -138,12 +143,23 @@ async def update_user(
         profile_update['is_active'] = body.is_active
 
     if profile_update:
-        supabase_admin.table('profiles').update(profile_update).eq('id', user_id).execute()
+        profile_result = supabase_admin.table('profiles').update(profile_update).eq('id', user_id).execute()
+
+        if not profile_result.data:
+            logger.warning("Profile update failed - user_id=%s not found", user_id)
+            raise HTTPException(status_code=404, detail="User profile not found")
 
     if meta_update:
-        supabase_admin.auth.admin.update_user_by_id(
-            user_id, {'user_metadata': meta_update}
-        )
+        try:
+            supabase_admin.auth.admin.update_user_by_id(
+                user_id, {'user_metadata': meta_update}
+            )
+        except Exception as e:
+            logger.error("Auth metadata update failed for user_id=%s: %s", user_id, e)
+            if profile_update:
+                logger.warning("Rolling back profile update due to auth metadata failure - user_id=%s", user_id)
+                supabase_admin.table('profiles').update({k: v for k, v in profile_update.items()}).eq('id', user_id).execute()
+            raise HTTPException(status_code=500, detail="Failed to update user metadata. Profile update was rolled back.")
 
     return {'status': 'updated'}
 
@@ -200,9 +216,31 @@ async def toggle_facility(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    current = supabase_admin.table('facilities').select('is_active').eq('id', facility_id).single().execute()
-    new_state = not current.data['is_active']
-    supabase_admin.table('facilities').update({'is_active': new_state}).eq('id', facility_id).execute()
+    current = supabase_admin.table('facilities').select('id, is_active').eq('id', facility_id).single().execute()
+    if not current.data:
+        raise HTTPException(status_code=404, detail="Facility not found")
+    
+    current_state = current.data['is_active']
+    new_state = not current_state
+    
+    result = (
+        supabase_admin.table('facilities')
+        .update({'is_active': new_state})
+        .eq('id', facility_id)
+        .eq('is_active', current_state)
+        .execute()
+    )
+    
+    if not result.data:
+        logger.warning(
+            "Facility toggle race condition detected for facility_id=%s - concurrent modification",
+            facility_id
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Facility was modified by another admin. Please retry."
+        )
+    
     return {'is_active': new_state}
 
 

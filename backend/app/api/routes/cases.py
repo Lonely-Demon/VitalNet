@@ -130,20 +130,23 @@ async def submit_case(
 async def get_cases(
     authorization: str = Header(None),
     user: dict = Depends(require_role("doctor", "admin")),
-    before_time: str = None,       # ISO timestamp of the last seen case
-    before_priority: int = None,   # triage_priority of the last seen case (0/1/2)
+    before_time: str = None, # ISO timestamp of the last seen case
+    before_priority: int = None, # triage_priority of the last seen case (0/1/2)
+    before_id: str = None, # id of the last seen case (unique tie-breaker)
     limit: int = 25,
 ):
     """
     Cursor-based pagination with composite keyset for the Doctor Dashboard.
 
     Sort order: EMERGENCY (0) → URGENT (1) → ROUTINE (2) first,
-    then by created_at DESC within each tier.
+    then by created_at DESC within each tier,
+    then by id DESC as a unique tie-breaker.
 
-    Use before_time + before_priority from the previous page's
-    nextCursor / nextTriagePriority to fetch the next page.
+    Use before_time + before_priority + before_id from the previous page's
+    nextCursor / nextTriagePriority / nextId to fetch the next page.
     The composite cursor correctly handles cases at tier boundaries
-    without silent data loss.
+    without silent data loss. R3-REL-DATA-R3-003 fix: Added id as unique
+    tie-breaker to ensure stable pagination across equal timestamps.
     """
     raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
@@ -159,17 +162,26 @@ async def get_cases(
             "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
         )
         .is_("deleted_at", "null")
-        .order("triage_priority", desc=False)   # EMERGENCY (0) first
-        .order("created_at", desc=True)          # Newest within each tier
-        .limit(limit + 1)                        # Fetch one extra to determine hasMore
+        .order("triage_priority", desc=False) # EMERGENCY (0) first
+        .order("created_at", desc=True) # Newest within each tier
+        .order("id", desc=True) # Unique tie-breaker for stable pagination
+        .limit(limit + 1) # Fetch one extra to determine hasMore
     )
 
     if before_time is not None and before_priority is not None:
-        # Composite keyset cursor — correct two-column keyset pagination.
-        query = query.or_(
-            f"triage_priority.gt.{before_priority},"
-            f"and(triage_priority.eq.{before_priority},created_at.lt.{before_time})"
-        )
+        # Composite keyset cursor with unique tie-breaker — correct three-column keyset pagination.
+        # R3-REL-DATA-R3-003: Added id to handle cases with equal timestamps
+        if before_id is not None:
+            query = query.or_(
+                f"triage_priority.gt.{before_priority},"
+                f"and(triage_priority.eq.{before_priority},created_at.lt.{before_time}),"
+                f"and(triage_priority.eq.{before_priority},created_at.eq.{before_time},id.lt.{before_id})"
+            )
+        else:
+            query = query.or_(
+                f"triage_priority.gt.{before_priority},"
+                f"and(triage_priority.eq.{before_priority},created_at.lt.{before_time})"
+            )
 
     result = query.execute()
     rows = result.data
@@ -182,6 +194,7 @@ async def get_cases(
         "hasMore": has_more,
         "nextCursor": cases[-1]["created_at"] if has_more and cases else None,
         "nextTriagePriority": cases[-1]["triage_priority"] if has_more and cases else None,
+        "nextId": cases[-1]["id"] if has_more and cases else None,  # R3-REL-DATA-R3-003: Unique tie-breaker for stable pagination
     }
 
 
@@ -204,9 +217,12 @@ async def review_case(
         }
     ).eq("id", case_id).execute()
 
-    if not update_result.data:
+    # Check if any row was actually updated (not just found)
+    # R3-REL-DATA-R3-004: Confirm persistence before reporting success
+    if not update_result.data or len(update_result.data) == 0:
         raise HTTPException(status_code=404, detail="Case not found")
-    return {"status": "reviewed"}
+
+    return {"status": "reviewed", "case_id": case_id, "reviewed_by": user["sub"]}
 
 
 # ── ASHA: My Submissions ───────────────────────────────────────────────────────
@@ -216,14 +232,16 @@ async def review_case(
 async def get_my_cases(
     authorization: str = Header(None),
     user: dict = Depends(require_role("asha_worker", "admin")),
-    before: str = None,   # created_at ISO cursor
+    before: str = None, # created_at ISO cursor
+    before_id: str = None, # id of the last seen case (unique tie-breaker)
     limit: int = 25,
 ):
     """
     Returns the calling user's own submitted cases with cursor pagination.
-    Sorted by created_at DESC only (chronological — no priority sort for personal history).
+    Sorted by created_at DESC, then by id DESC as a unique tie-breaker.
     RLS enforces ownership at DB level; the explicit filter is for clarity.
     Returns a limited column set — full briefing JSONB is doctor-facing only.
+    R3-REL-DATA-R3-003 fix: Added id as unique tie-breaker to ensure stable pagination.
     """
     raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
@@ -238,10 +256,17 @@ async def get_my_cases(
         .eq("submitted_by", user["sub"])
         .is_("deleted_at", "null")
         .order("created_at", desc=True)
+        .order("id", desc=True)  # R3-REL-DATA-R3-003: Unique tie-breaker for stable pagination
         .limit(limit + 1)
     )
 
-    if before:
+    if before and before_id:
+        # R3-REL-DATA-R3-003: Use composite cursor with unique tie-breaker
+        query = query.or_(
+            f"created_at.lt.{before},"
+            f"and(created_at.eq.{before},id.lt.{before_id})"
+        )
+    elif before:
         query = query.lt("created_at", before)
 
     result = query.execute()
@@ -252,6 +277,7 @@ async def get_my_cases(
         "cases": rows[:limit],
         "hasMore": has_more,
         "nextCursor": rows[limit - 1]["created_at"] if has_more and rows else None,
+        "nextId": rows[limit - 1]["id"] if has_more and rows else None,  # R3-REL-DATA-R3-003: Unique tie-breaker
     }
 
 

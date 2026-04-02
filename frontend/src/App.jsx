@@ -32,25 +32,45 @@ function AppInner() {
 
   if (profile?.role === 'admin') {
     return (
-      <Suspense fallback={<div className="min-h-screen bg-bg flex items-center justify-center text-text2">Loading...</div>}>
+      <Suspense fallback={<div>Loading...</div>}>
         <AdminPanel />
       </Suspense>
     )
   }
   if (profile?.role === 'doctor') {
     return (
-      <Suspense fallback={<div className="min-h-screen bg-bg flex items-center justify-center text-text2">Loading...</div>}>
+      <Suspense fallback={<div>Loading...</div>}>
         <DoctorPanel />
       </Suspense>
     )
   }
   if (profile?.role === 'asha_worker') {
     return (
-      <Suspense fallback={<div className="min-h-screen bg-bg flex items-center justify-center text-text2">Loading...</div>}>
+      <Suspense fallback={<div>Loading...</div>}>
         <ASHAPanel />
       </Suspense>
     )
   }
+  return null
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <ToastProvider>
+        <UpdatePrompt />
+        <RouteGuard>
+          <AppInner />
+        </RouteGuard>
+      </ToastProvider>
+    </AuthProvider>
+  )
+}
+  }
+
+  if (profile?.role === 'admin')       return <AdminPanel />
+  if (profile?.role === 'doctor')      return <DoctorPanel />
+  if (profile?.role === 'asha_worker') return <ASHAPanel />
   return null
 }
 

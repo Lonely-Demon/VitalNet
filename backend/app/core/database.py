@@ -1,10 +1,10 @@
 """
 Supabase database clients — three-client setup with connection pooling.
 
-1. supabase_anon  — anon key, public reads (health check, facilities list).
+1. supabase_anon — anon key, public reads (health check, facilities list).
 2. get_supabase_for_user() — per-request RLS-scoped client for all case/profile data.
 3. supabase_admin — service_role key, used ONLY for auth.admin.* operations.
-                    Never use for case_records or profiles data queries.
+Never use for case_records or profiles data queries.
 
 Also exposes get_db_session() as a FastAPI Depends()-compatible dependency.
 
@@ -12,6 +12,10 @@ Connection Pooling:
 - Uses a singleton base client with connection reuse
 - Only sets auth token per-request instead of creating new clients
 - Significantly reduces overhead and improves performance
+
+Reliability (CHAOS-005 to CHAOS-010):
+- Query timeouts handled at route level to prevent hanging requests
+- Graceful degradation patterns in analytics endpoints
 """
 from typing import Optional
 import threading
@@ -54,16 +58,6 @@ def _get_base_client() -> Client:
                     ),
                 )
     return _base_user_client
-
-
-def extract_bearer_token(authorization: Optional[str]) -> str:
-    """
-    Extract the raw JWT from an Authorization header value.
-    Returns the token portion after "Bearer ", or raises HTTP 401 if missing.
-    """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    return authorization.split(" ", 1)[-1]
 
 
 def get_supabase_for_user(raw_token: str) -> Client:

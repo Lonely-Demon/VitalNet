@@ -1,24 +1,28 @@
 import logging
 import sys
+from contextvars import ContextVar
 from pythonjsonlogger import jsonlogger
 
-from app.core.correlation import get_correlation_id
+# Context variable to store correlation ID for the current request
+correlation_id_var: ContextVar[str] = ContextVar("correlation_id", default="")
 
 
-class CorrelationIdLoggerAdapter(logging.LoggerAdapter):
-    """
-    Logger adapter that automatically adds correlation ID to log records.
-    """
-    
-    def process(self, msg, kwargs):
-        # Add correlation_id to extra if not already present
-        if "extra" not in kwargs:
-            kwargs["extra"] = {}
-        if "correlation_id" not in kwargs["extra"]:
-            correlation_id = get_correlation_id()
-            if correlation_id:
-                kwargs["extra"]["correlation_id"] = correlation_id
-        return msg, kwargs
+def get_correlation_id() -> str:
+    """Get the correlation ID for the current request context."""
+    return correlation_id_var.get()
+
+
+def set_correlation_id(correlation_id: str) -> None:
+    """Set the correlation ID for the current request context."""
+    correlation_id_var.set(correlation_id)
+
+
+class CorrelationIdFilter(logging.Filter):
+    """Logging filter that adds correlation_id to each log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.correlation_id = get_correlation_id()
+        return True
 
 
 def setup_logging() -> logging.Logger:
@@ -37,10 +41,11 @@ def setup_logging() -> logging.Logger:
 
     handler = logging.StreamHandler(sys.stdout)
     formatter = jsonlogger.JsonFormatter(
-        "%(asctime)s %(levelname)s %(name)s %(module)s %(message)s "
-        "%(correlation_id)s"
+        "%(asctime)s %(levelname)s %(name)s %(module)s %(message)s %(correlation_id)s"
     )
     handler.setFormatter(formatter)
+    # Add correlation ID filter to include it in all log entries
+    handler.addFilter(CorrelationIdFilter())
     root_logger.addHandler(handler)
 
     return logging.getLogger("vitalnet")
