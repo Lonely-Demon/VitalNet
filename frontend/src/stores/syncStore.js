@@ -13,7 +13,7 @@
  * to prevent duplicate replay bursts across tabs.
  */
 import { supabase } from '@/lib/supabase'
-import { enqueue, dequeue, getAllQueued } from '@/lib/offlineQueue'
+import { enqueue, dequeue, getAllQueued, moveToFailedQueue } from '@/lib/offlineQueue'
 import { isServerReachable } from '@/lib/connectivity'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -111,9 +111,12 @@ function releaseSyncLock() {
 }
 
 async function _authHeaders(token) {
+  const deviceId = localStorage.getItem('vn_device_id') || localStorage.getItem('device_id') || localStorage.getItem('X-Device-Id') || localStorage.getItem('deviceId') || ''
   return {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${token}`,
+    'X-Device-Id': deviceId,
+    'X-CSRF-Token': 'vitalnet-spa',
   }
 }
 
@@ -203,11 +206,14 @@ export async function processQueue() {
 
     for (const item of queued) {
       try {
+        const deviceId = localStorage.getItem('vn_device_id') || localStorage.getItem('device_id') || localStorage.getItem('X-Device-Id') || localStorage.getItem('deviceId') || ''
         const res = await fetch(BASE ? `${BASE}/api/submit` : '/api/submit', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${freshToken}`,
+            'X-Device-Id': deviceId,
+            'X-CSRF-Token': 'vitalnet-spa',
           },
           body: JSON.stringify(item.payload),
         })
@@ -222,10 +228,16 @@ export async function processQueue() {
         } else if (res.status >= 400 && res.status < 500) {
           // Any 4xx = permanent client error — this payload will NEVER succeed.
           // Dequeue immediately to unblock subsequent queue items.
-          console.warn(
-            '[VitalNet] Permanent error — dequeuing case to prevent head-of-line blocking.',
-            item.client_id, res.status, await res.text()
+          const errorText = await res.text()
+          console.error(
+            '[VitalNet] Permanent error — moving case to failed queue.',
+            item.client_id, res.status, errorText
           )
+          try {
+            await moveToFailedQueue(item.payload, res.status, errorText)
+          } catch (err) {
+            console.error('[VitalNet] Failed to move item to failed queue:', err)
+          }
           await dequeue(item.client_id)
           failed++
         } else {

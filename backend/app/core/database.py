@@ -150,3 +150,23 @@ supabase_admin: Client = create_client(
     settings.supabase_service_role_key,
     options=ClientOptions(auto_refresh_token=False, persist_session=False),
 )
+
+
+def validate_schema_compatibility() -> None:
+    """
+    Verify database schema compatibility with critical tables and columns.
+    Raises RuntimeError if a table or expected query path fails due to schema mismatch.
+    Allows empty tables to pass successfully.
+    """
+    tables_to_check = ["facilities", "profiles", "case_records", "case_reviews"]
+    for table in tables_to_check:
+        try:
+            # Query just one ID to verify the table exists and can be queried.
+            # If the table is empty, this returns empty data but succeeds.
+            supabase_anon.table(table).select("id").limit(1).execute()
+        except Exception as e:
+            # If it's a real schema/database error (e.g. table not found), raise.
+            raise RuntimeError(
+                f"Database schema compatibility check failed for table '{table}': {e}"
+            )
+

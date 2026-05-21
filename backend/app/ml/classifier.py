@@ -34,23 +34,23 @@ def _sha256(path: Path) -> str:
 def load_classifier() -> bool:
     """
     Load the enhanced multi-stage classifier.
-    Raises RuntimeError with a descriptive message if loading fails.
+    Catches all exceptions, logs a warning/error, sets globals to None, and returns False.
     """
     global _classifier, _classifier_type, _model_info
 
-    if not ENHANCED_PKL_PATH.exists():
-        raise RuntimeError(
-            f"Enhanced classifier not found at {ENHANCED_PKL_PATH}. "
-            "Run backend/scripts/retrain_and_export.py to regenerate."
-        )
-
-    if _sha256(ENHANCED_PKL_PATH) != EXPECTED_ENHANCED_PKL_SHA256:
-        raise RuntimeError(
-            f"Enhanced classifier integrity check failed for {ENHANCED_PKL_PATH}. "
-            "Regenerate the model artifacts before startup."
-        )
-
     try:
+        if not ENHANCED_PKL_PATH.exists():
+            raise FileNotFoundError(
+                f"Enhanced classifier not found at {ENHANCED_PKL_PATH}. "
+                "Run backend/scripts/retrain_and_export.py to regenerate."
+            )
+
+        if _sha256(ENHANCED_PKL_PATH) != EXPECTED_ENHANCED_PKL_SHA256:
+            raise RuntimeError(
+                f"Enhanced classifier integrity check failed for {ENHANCED_PKL_PATH}. "
+                "Regenerate the model artifacts before startup."
+            )
+
         from app.ml.enhanced_classifier import EnhancedTriageClassifier
         _classifier = EnhancedTriageClassifier.load_model(str(ENHANCED_PKL_PATH))
         _classifier_type = "enhanced"
@@ -74,15 +74,162 @@ def load_classifier() -> bool:
         return True
 
     except Exception as e:
-        raise RuntimeError(
-            f"Enhanced classifier loading failed: {e}. "
-            "The model file may be corrupt. Run retrain_and_export.py to regenerate."
-        ) from e
+        logger.error(
+            "[CRITICAL WARNING] Enhanced classifier load failed: %s. "
+            "Gracefully degrading to rule-based triage fallback.",
+            e,
+            exc_info=True
+        )
+        _classifier_type = None
+        _classifier = None
+        _model_info = {}
+        return False
+
+
+def _predict_fallback(form_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Robust rules-based clinical triage engine for ML fallback.
+    Analyzes spo2, heart_rate, bp_systolic, temperature, and symptoms.
+    """
+    from app.ml.model_contract import SYMPTOM_NORMALIZATION_MAP
+
+    spo2 = form_data.get("spo2")
+    heart_rate = form_data.get("heart_rate")
+    bp_systolic = form_data.get("bp_systolic")
+    temperature = form_data.get("temperature")
+    symptoms = form_data.get("symptoms") or []
+
+    def to_float(val):
+        if val is None or val == -1 or val == "":
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
+    spo2_f = to_float(spo2)
+    hr_f = to_float(heart_rate)
+    bp_sys_f = to_float(bp_systolic)
+    temp_f = to_float(temperature)
+
+    # Normalize symptoms to canonical forms
+    normalized_symptoms = []
+    for s in symptoms:
+        raw = str(s or "").strip().lower()
+        if not raw:
+            continue
+        cleaned = raw.replace("_", " ").replace("/", " ").replace("-", " ")
+        cleaned = "".join(char for char in cleaned if char.isalnum() or char.isspace())
+        cleaned = " ".join(cleaned.split())
+        canonical = SYMPTOM_NORMALIZATION_MAP.get(cleaned, cleaned.replace(" ", "_"))
+        normalized_symptoms.append(canonical)
+
+    triage_level = "ROUTINE"
+    risk_factors = []
+
+    # Check emergency and urgent limits
+    # 1. SpO2
+    if spo2_f is not None:
+        if spo2_f < 90:
+            triage_level = "EMERGENCY"
+            risk_factors.append(f"critically low oxygen saturation ({spo2_f:.1f}%)")
+        elif spo2_f < 94:
+            if triage_level == "ROUTINE":
+                triage_level = "URGENT"
+            risk_factors.append(f"low oxygen saturation ({spo2_f:.1f}%)")
+
+    # 2. Heart Rate
+    if hr_f is not None:
+        if hr_f > 140 or hr_f < 40:
+            triage_level = "EMERGENCY"
+            risk_factors.append(f"critically abnormal heart rate ({hr_f:.1f} bpm)")
+        elif hr_f > 130 or hr_f < 50:
+            triage_level = "EMERGENCY"
+            risk_factors.append(f"critically abnormal heart rate ({hr_f:.1f} bpm)")
+        elif hr_f > 110 or hr_f < 60:
+            if triage_level == "ROUTINE":
+                triage_level = "URGENT"
+            risk_factors.append(f"abnormal heart rate ({hr_f:.1f} bpm)")
+
+    # 3. Blood Pressure (systolic)
+    if bp_sys_f is not None:
+        if bp_sys_f < 80 or bp_sys_f > 200:
+            triage_level = "EMERGENCY"
+            risk_factors.append(f"critically abnormal blood pressure ({bp_sys_f:.1f} mmHg)")
+        elif bp_sys_f < 90 or bp_sys_f > 180:
+            triage_level = "EMERGENCY"
+            risk_factors.append(f"critically abnormal blood pressure ({bp_sys_f:.1f} mmHg)")
+        elif bp_sys_f < 100 or bp_sys_f > 150:
+            if triage_level == "ROUTINE":
+                triage_level = "URGENT"
+            risk_factors.append(f"abnormal blood pressure ({bp_sys_f:.1f} mmHg)")
+
+    # 4. Temperature
+    if temp_f is not None:
+        if temp_f > 40.0:
+            triage_level = "EMERGENCY"
+            risk_factors.append(f"critically high fever ({temp_f:.1f}°C)")
+        elif temp_f < 35.0:
+            triage_level = "EMERGENCY"
+            risk_factors.append(f"dangerously low temperature ({temp_f:.1f}°C)")
+        elif temp_f > 38.5:
+            if triage_level == "ROUTINE":
+                triage_level = "URGENT"
+            risk_factors.append(f"high fever ({temp_f:.1f}°C)")
+        elif temp_f < 36.0:
+            if triage_level == "ROUTINE":
+                triage_level = "URGENT"
+            risk_factors.append(f"low temperature ({temp_f:.1f}°C)")
+
+    # 5. Symptoms
+    emergency_symptoms = {"chest_pain", "altered_consciousness", "severe_bleeding", "seizure", "anaphylaxis", "stroke"}
+    urgent_symptoms = {"breathlessness", "high_fever", "severe_abdominal_pain", "persistent_vomiting", "weakness_one_side", "difficulty_speaking", "swelling_face_throat", "acute_abdomen"}
+
+    for s in normalized_symptoms:
+        if s in emergency_symptoms:
+            triage_level = "EMERGENCY"
+            risk_factors.append(s.replace("_", " "))
+        elif s in urgent_symptoms:
+            if triage_level == "ROUTINE":
+                triage_level = "URGENT"
+            risk_factors.append(s.replace("_", " "))
+
+    if risk_factors:
+        risk_driver = "Primary risk factors: " + "; ".join(risk_factors) + f". Classified as {triage_level}."
+    else:
+        risk_driver = f"Multiple clinical indicators contributed to this triage decision. Classified as {triage_level}."
+
+    probabilities = {
+        "ROUTINE": 0.0,
+        "URGENT": 0.0,
+        "EMERGENCY": 0.0
+    }
+    probabilities[triage_level] = 1.0
+
+    return {
+        "triage_level": triage_level,
+        "confidence_score": 1.0,
+        "risk_driver": risk_driver,
+        "model_version": "degraded-rules-v1.0",
+        "feature_schema_version": "v45-2026-03-30",
+        "processing_time": "fallback-rules",
+        "uncertainty": {
+            "agreement_score": 1.0,
+            "epistemic_uncertainty": 0.0,
+            "total_entropy": 0.0,
+            "high_uncertainty": False
+        },
+        "probabilities": probabilities,
+        "fast_path": True,
+        "needs_review": triage_level in {"EMERGENCY", "URGENT"}
+    }
+
 
 
 def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Run triage prediction using the loaded enhanced classifier.
+    If the classifier is not loaded, gracefully degrades to rules-based fallback.
 
     Args:
         form_data: Patient data dictionary
@@ -90,8 +237,9 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Dictionary with triage_level, confidence_score, risk_driver, and metadata
     """
-    if _classifier_type is None:
-        raise RuntimeError("Classifier not loaded — call load_classifier() at startup")
+    global _classifier_type, _classifier
+    if _classifier_type is None or _classifier is None:
+        return _predict_fallback(form_data)
 
     return _predict_enhanced(form_data)
 

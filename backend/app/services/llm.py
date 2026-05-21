@@ -242,6 +242,7 @@ async def generate_briefing(form_data: dict, triage_result: dict) -> dict:
                 try:
                     briefing = await _call_groq(model, patient_context)
                     logger.info("Briefing via Groq/%s (attempt %d)", model, attempt + 1)
+                    briefing["_model_used"] = model
                     return _enforce_schema(briefing, triage_result)
                 except groq.RateLimitError:
                     logger.warning("Rate limit on Groq/%s — moving to next tier", model)
@@ -274,6 +275,7 @@ async def generate_briefing(form_data: dict, triage_result: dict) -> dict:
                 try:
                     briefing = await _call_gemini(model, patient_context)
                     logger.info("Briefing via Gemini/%s (attempt %d)", model, attempt + 1)
+                    briefing["_model_used"] = model
                     return _enforce_schema(briefing, triage_result)
                 except json.JSONDecodeError:
                     if attempt < MAX_RETRIES_PER_MODEL:

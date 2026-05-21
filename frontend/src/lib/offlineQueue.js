@@ -102,7 +102,7 @@ async function decryptPayload(encryptedObj, userId) {
 }
 
 async function getQueueDB() {
-  return openDB(DB_NAME, 3, {
+  return openDB(DB_NAME, 4, {
     upgrade(db, oldVersion) {
       // Create submission_queue (fresh install or upgrading from nothing)
       if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -112,6 +112,11 @@ async function getQueueDB() {
       // Create form-drafts store (added in v2 — see useDraftSave.js)
       if (!db.objectStoreNames.contains('form-drafts')) {
         db.createObjectStore('form-drafts')
+      }
+      // Create failed_queue store (added in v4)
+      if (!db.objectStoreNames.contains('failed_queue')) {
+        const failedStore = db.createObjectStore('failed_queue', { keyPath: 'client_id' })
+        failedStore.createIndex('failed_at', 'failed_at')
       }
     }
   })
@@ -199,6 +204,32 @@ export async function getQueueCount() {
 }
 
 /**
+ * Move a permanently failed case to the failed queue store.
+ * Encrypts the payload before storage to protect PHI.
+ */
+export async function moveToFailedQueue(payload, status, error) {
+  if (!payload || !payload.client_id) {
+    throw new Error('payload and payload.client_id are required')
+  }
+  
+  const userId = _currentUserId || 'anonymous'
+  const db = await getQueueDB()
+  
+  const encryptedPayload = await encryptPayload(payload, userId)
+  
+  await db.put('failed_queue', {
+    client_id: payload.client_id,
+    payload: encryptedPayload,
+    failed_at: new Date().toISOString(),
+    status: status,
+    error: typeof error === 'string' ? error : (error?.message || String(error)),
+    user_id: userId
+  })
+  
+  notifyQueueChange()
+}
+
+/**
  * Clear all queued PHI data from device.
  * R3-DATA-LIFECYCLE-R3-003 fix: Called on logout/deactivation.
  */
@@ -207,6 +238,9 @@ export async function clearAllQueues() {
   await db.clear(STORE_NAME)
   if (db.objectStoreNames.contains('form-drafts')) {
     await db.clear('form-drafts')
+  }
+  if (db.objectStoreNames.contains('failed_queue')) {
+    await db.clear('failed_queue')
   }
   notifyQueueChange()
   console.log('[VitalNet] All offline queues cleared (PHI purged from device)')

@@ -6,7 +6,6 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.core.auth import require_role
-from app.core.correlation import get_correlation_id
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.database import get_supabase_for_user, supabase_admin
 from pydantic import BaseModel, EmailStr
@@ -232,7 +231,25 @@ async def create_user(
     if body.is_active is not None:
         profile_fields['is_active'] = body.is_active
 
-    supabase_admin.table('profiles').update(profile_fields).eq('id', new_user_id).execute()
+    try:
+        profile_res = supabase_admin.table('profiles').update(profile_fields).eq('id', new_user_id).execute()
+        if not profile_res or not getattr(profile_res, 'data', None):
+            raise Exception("Profile update returned no data (empty or missing row)")
+    except Exception as e:
+        logger.error(
+            "Failed to update profile for new user %s. Attempting administrative rollback: %s",
+            new_user_id,
+            e
+        )
+        try:
+            supabase_admin.auth.admin.delete_user(new_user_id)
+            logger.info("Administrative rollback successful: auth user %s deleted", new_user_id)
+        except Exception as rollback_err:
+            logger.error("Failed to delete orphaned auth user %s during rollback: %s", new_user_id, rollback_err)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize user profile. The created account was rolled back."
+        )
 
     log_phi_access(
         event_type=AuditEventType.PHI_CREATE,

@@ -38,7 +38,29 @@ logger = setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load the ML classifier once at startup; release on shutdown."""
-    load_classifier()
+    from app.core.database import validate_schema_compatibility
+
+    # 1. Database schema compatibility gate
+    try:
+        validate_schema_compatibility()
+        logger.info("Database schema compatibility check passed successfully")
+    except RuntimeError as e:
+        logger.critical("CRITICAL: Schema compatibility check failed: %s", e)
+        raise e
+    except Exception as e:
+        logger.critical("CRITICAL: Unexpected database schema check failure: %s", e)
+        raise RuntimeError(f"Unexpected database schema check failure: {e}") from e
+
+    # 2. ML loading fallback (graceful degraded mode startup)
+    try:
+        loaded = load_classifier()
+        if not loaded:
+            logger.warning("WARNING: ML classifier failed to load. Booting in degraded mode (rules-based fallback).")
+        else:
+            logger.info("ML classifier loaded successfully")
+    except Exception as e:
+        logger.warning("WARNING: Unexpected error loading ML classifier: %s. Booting in degraded mode.", e)
+
     logger.info("VitalNet API started")
     yield
     logger.info("VitalNet API shutting down")
@@ -197,33 +219,54 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # ── 12. Health Check ──────────────────────────────────────────────────────────
 
 @app.get("/api/health")
-async def health():
+async def health(authorization: str = Header(default=None)):
     from app.core.database import supabase_anon
     from app.ml.classifier import get_classifier_info
+    from app.core.auth import get_current_user
 
-    # Database connectivity check
+    # 1. Quick Database connectivity check
     try:
         supabase_anon.table("facilities").select("id").limit(1).execute()
         db_status = "connected"
     except Exception as e:
         db_status = f"error: {str(e)[:80]}"  # Truncate — never expose full errors
 
-    # Classifier state
+    # 2. Classifier state check
     info = get_classifier_info()
-    classifier_loaded = bool(info["classifier_type"])
-    classifier_status = (
-        f"loaded — {info['classifier_type']} v{info['model_info'].get('model_version', 'N/A')}"
-        if classifier_loaded
-        else "NOT LOADED"
-    )
+    classifier_loaded = bool(info.get("classifier_type"))
 
+    # Determine if overall healthy
     is_healthy = db_status == "connected" and classifier_loaded
-    response_body = {
-        "status": "ok" if is_healthy else "degraded",
-        "database": db_status,
-        "classifier": classifier_status,
-        "version": "0.2.0",
-    }
+
+    # 3. Check authorization for detailed diagnostics
+    show_diagnostics = False
+    if authorization:
+        try:
+            # Re-use our robust JWT extraction & profile lookup flow
+            user = await get_current_user(authorization)
+            if user and user.get("resolved_role") in {"clinician", "admin", "super_admin"}:
+                show_diagnostics = True
+        except Exception:
+            pass  # Fallback to anonymous (basic) response on auth failure
+
+    if show_diagnostics:
+        classifier_status = (
+            f"loaded — {info['classifier_type']} v{info['model_info'].get('model_version', 'N/A')}"
+            if classifier_loaded
+            else "NOT LOADED"
+        )
+        response_body = {
+            "status": "ok" if is_healthy else "degraded",
+            "database": db_status,
+            "classifier": classifier_status,
+            "version": "0.2.0",
+        }
+    else:
+        # Anonymous or basic response
+        response_body = {
+            "status": "ok" if is_healthy else "degraded",
+            "version": "0.2.0",
+        }
 
     # Return 503 Service Unavailable when degraded
     if not is_healthy:
