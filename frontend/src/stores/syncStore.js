@@ -17,7 +17,7 @@ import { enqueue, dequeue, getAllQueued } from '@/lib/offlineQueue'
 import { isServerReachable } from '@/lib/connectivity'
 import { v4 as uuidv4 } from 'uuid'
 
-const BASE = import.meta.env.VITE_API_BASE_URL
+const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 
 // ROOT-SYNC-DD-001 fix: Multi-tab coordination using BroadcastChannel
 const SYNC_CHANNEL_NAME = 'vitalnet-sync-coordinator'
@@ -144,7 +144,7 @@ export async function submitCase(formData) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     const headers = await _authHeaders(session.access_token)
-    const res = await fetch(`${BASE}/api/submit`, {
+      const res = await fetch(BASE ? `${BASE}/api/submit` : '/api/submit', {
       method: 'POST', headers, body: JSON.stringify(payload),
     })
 
@@ -203,7 +203,7 @@ export async function processQueue() {
 
     for (const item of queued) {
       try {
-        const res = await fetch(`${BASE}/api/submit`, {
+        const res = await fetch(BASE ? `${BASE}/api/submit` : '/api/submit', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

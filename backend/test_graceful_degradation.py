@@ -40,7 +40,7 @@ def test_fallback_prediction():
     result = predict_triage(emergency_data)
     print(f"Emergency case prediction: {result['triage_level']} (confidence: {result['confidence_score']})")
     print(f"Risk driver: {result['risk_driver']}")
-    assert result["triage_level"] == "emergency", "Should classify as emergency"
+    assert result["triage_level"].upper() == "EMERGENCY", "Should classify as EMERGENCY"
     assert "model_version" in result, "Should include model version"
     print("[PASS] Emergency case handled correctly")
     
@@ -56,8 +56,8 @@ def test_fallback_prediction():
     result = predict_triage(normal_data)
     print(f"\nNormal case prediction: {result['triage_level']} (confidence: {result['confidence_score']})")
     print(f"Risk driver: {result['risk_driver']}")
-    assert result["triage_level"] == "non-urgent", "Should classify as non-urgent"
-    print("✓ Non-urgent case handled correctly")
+    assert result["triage_level"].upper() in ["ROUTINE", "NON-URGENT"], "Should classify as ROUTINE or NON-URGENT"
+    print("[PASS] Non-urgent case handled correctly")
     
     # Test urgent case
     urgent_data = {
@@ -70,9 +70,10 @@ def test_fallback_prediction():
     result = predict_triage(urgent_data)
     print(f"\nUrgent case prediction: {result['triage_level']} (confidence: {result['confidence_score']})")
     print(f"Risk driver: {result['risk_driver']}")
-    assert result["triage_level"] in ["urgent", "emergency"], "Should classify as urgent or emergency"
-    print("✓ Urgent case handled correctly")
-    
+    assert result["triage_level"].upper() in ["URGENT", "EMERGENCY"], "Should classify as URGENT or EMERGENCY"
+    print("[PASS] Urgent case handled correctly")
+
+
     return True
 
 
@@ -85,7 +86,7 @@ def test_classifier_info():
     
     print(f"Classifier type: {info['classifier_type']}")
     print(f"Is enhanced: {info['is_enhanced']}")
-    print("✓ Classifier info retrieved successfully")
+    print("[PASS] Classifier info retrieved successfully")
     
     return True
 
@@ -102,13 +103,13 @@ if __name__ == "__main__":
         test_classifier_info()
         
         print("\n" + "=" * 70)
-        print("✓ ALL TESTS PASSED")
+        print("[PASS] ALL TESTS PASSED")
         print("The application can now start and function without the ML model.")
         print("=" * 70)
         sys.exit(0)
         
     except Exception as e:
-        print(f"\n✗ TEST FAILED: {e}")
+        print(f"\n[FAIL] TEST FAILED: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

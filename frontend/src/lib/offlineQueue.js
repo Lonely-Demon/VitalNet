@@ -65,7 +65,8 @@ async function encryptPayload(payload, userId) {
       data: Array.from(new Uint8Array(encrypted))
     }
   } catch (e) {
-    console.error('[VitalNet] Encryption failed, storing with warning flag:', e)
+    // ROOT-COMPLY-008: Remove PHI from console logs
+    console.error('[VitalNet] Encryption failed, storing with warning flag')
     // Fallback: store with warning but don't block clinical workflow
     return { encrypted: false, data: payload, _unencrypted_warning: true }
   }
@@ -94,7 +95,8 @@ async function decryptPayload(encryptedObj, userId) {
     const decoder = new TextDecoder()
     return JSON.parse(decoder.decode(decrypted))
   } catch (e) {
-    console.error('[VitalNet] Decryption failed:', e)
+    // ROOT-COMPLY-008: Remove PHI from console logs
+    console.error('[VitalNet] Decryption failed')
     throw new Error('Failed to decrypt queued case data')
   }
 }
@@ -181,7 +183,8 @@ export async function getAllQueued() {
         const decryptedPayload = await decryptPayload(item.payload, item.user_id || _currentUserId || 'anonymous')
         return { ...item, payload: decryptedPayload }
       } catch (e) {
-        console.error('[VitalNet] Failed to decrypt queued item:', item.client_id, e)
+        // ROOT-COMPLY-008: Remove PHI from console logs
+        console.error('[VitalNet] Failed to decrypt queued item:', item.client_id)
         return { ...item, payload: null, _decryption_failed: true }
       }
     })

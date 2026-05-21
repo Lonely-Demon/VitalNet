@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { memo, useCallback, useState } from 'react'
 import { reviewCase } from '../lib/api'
 import TriageBadge from './TriageBadge'
 
-export default function BriefingCard({ caseData, onReviewed }) {
+function BriefingCard({ caseData, onReviewed }) {
   const [expanded, setExpanded] = useState(caseData.triage_level === 'EMERGENCY')
   const [marking, setMarking] = useState(false)
   const [reviewed, setReviewed] = useState(caseData.reviewed_at !== null)
@@ -10,7 +10,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
   // briefing is already a JSONB object from Supabase — no JSON.parse needed
   const b = caseData.briefing
 
-  const handleMarkReviewed = async () => {
+  const handleMarkReviewed = useCallback(async () => {
     setMarking(true)
     try {
       await reviewCase(caseData.id)
@@ -21,7 +21,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
     } finally {
       setMarking(false)
     }
-  }
+  }, [caseData.id, onReviewed])
 
   const timeStr = new Date(caseData.created_at).toLocaleTimeString([], {
     hour: '2-digit', minute: '2-digit'
@@ -40,9 +40,11 @@ export default function BriefingCard({ caseData, onReviewed }) {
       ${caseData.triage_level === 'EMERGENCY' ? 'animate-pulse-ring' : ''}
     `}>
       {/* Header — always visible */}
-      <div
-        className="p-4 cursor-pointer flex items-start justify-between"
+      <button
+        className="w-full p-4 cursor-pointer flex items-start justify-between text-left hover:bg-surface2/20 focus:outline-none focus:ring-2 focus:ring-sage focus:ring-inset"
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        aria-controls={`briefing-content-${caseData.id}`}
       >
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
@@ -64,12 +66,12 @@ export default function BriefingCard({ caseData, onReviewed }) {
             {timeStr}
           </p>
         </div>
-        <span className="text-text3 ml-2">{expanded ? "▲" : "▼"}</span>
-      </div>
+        <span className="text-text3 ml-2 flex items-center justify-center min-w-[44px] min-h-[44px]" aria-hidden="true">{expanded ? "▲" : "▼"}</span>
+      </button>
 
       {/* Expanded briefing */}
       {expanded && b && (
-        <div className="px-5 pb-5 border-t border-leaf/40 pt-4 space-y-5 bg-surface2/30">
+        <div id={`briefing-content-${caseData.id}`} className="px-5 pb-5 border-t border-leaf/40 pt-4 space-y-5 bg-surface2/30">
 
           <BriefingSection title="Primary Signal">
             <p className="text-sm text-text font-medium leading-relaxed">{b.primary_risk_driver}</p>
@@ -148,3 +150,6 @@ function BriefingSection({ title, children }) {
     </div>
   )
 }
+
+// ROOT-PERF-005: avoid rerendering unchanged cards when parent rerenders.
+export default memo(BriefingCard)

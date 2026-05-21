@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS public.phi_audit_log (
 ## Files Modified
 - `backend/app/core/audit.py` (NEW)
 - `backend/app/api/routes/cases.py` (imports and audit calls)
+- `backend/app/api/routes/security.py` (delete audits)
 - `backend/supabase/migrations/phase15_data_security_hardening.sql` (Section 5)
 
 ## Risk Assessment

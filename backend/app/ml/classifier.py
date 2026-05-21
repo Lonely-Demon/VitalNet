@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 # Model path — enhanced classifier sits alongside this file under app/ml/models/
 ENHANCED_PKL_PATH = Path(__file__).parent / "models" / "enhanced_triage_classifier.pkl"
-EXPECTED_ENHANCED_PKL_SHA256 = "3f661afed8f042899843cf0556975dc20efb7df0c99752e6f6439ade25f7cfb5"
+EXPECTED_ENHANCED_PKL_SHA256 = "256db22348dc6bfcbde20bcddd079eff50a8613f86747f8e3d13572c53cde420"
 
 # Global classifier state
 _classifier: "EnhancedTriageClassifier | None" = None

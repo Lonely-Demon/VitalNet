@@ -507,6 +507,17 @@ with open(PKL_PATH, "wb") as f:
 
 print(f"       Saved ({os.path.getsize(PKL_PATH) / 1024:.1f} KB)")
 
+# Train and save the full EnhancedTriageClassifier ensemble for the backend
+print("[4.5/6] Training and exporting EnhancedTriageClassifier ensemble...")
+from app.ml.enhanced_classifier import EnhancedTriageClassifier
+enhanced_clf = EnhancedTriageClassifier()
+# Fit on the entire dataset to maximize the training set size for production use
+enhanced_clf.fit(X, y)
+ENHANCED_PKL_PATH = os.path.join(BACKEND_DIR, "app", "ml", "models", "enhanced_triage_classifier.pkl")
+enhanced_clf.save_model(ENHANCED_PKL_PATH)
+print(f"       Enhanced model saved successfully at {ENHANCED_PKL_PATH}")
+
+
 # ---------------------------------------------------------------------------
 # ONNX export
 # ---------------------------------------------------------------------------

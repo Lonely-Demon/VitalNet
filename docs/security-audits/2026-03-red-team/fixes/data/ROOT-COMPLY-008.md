@@ -3,7 +3,7 @@
 **Unit ID:** ROOT-COMPLY-008
 **Priority:** P1 (HIGH)
 **Title:** PHI visible in browser console logs
-**Status:** REQUIRES REMEDIATION
+**Status:** COMPLETED
 
 ## Finding Summary
 Multiple frontend components log PHI to browser console, making it visible to browser extensions, developer tools, and potentially captured in error reporting.
@@ -58,11 +58,9 @@ logger.debug('Patient record accessed', { id: patient.id });
 }
 ```
 
-## Files to Review
-- `frontend/src/pages/*.jsx`
-- `frontend/src/components/*.jsx`
-- `frontend/src/store/*.js`
-- `frontend/src/api/*.js`
+## Files Modified
+- `frontend/src/lib/offlineQueue.js`
+- `frontend/src/store/authStore.jsx`
 
 ## Risk Assessment
 - **Before:** HIGH - PHI exposed to browser extensions and error tools

@@ -1,24 +1,27 @@
 # VitalNet Test Credentials
 
-Use these accounts to test role-based routing and permissions in the local environment and production.
+> [!WARNING]
+> **SECURITY**: Never commit real passwords. Use environment-specific credential management (e.g., 1Password, Supabase vault, or secure `.env.local` files excluded from version control).
+
+Use these account patterns to test role-based routing and permissions. **Actual passwords must be set via Supabase Admin Panel** and never hardcoded in documentation.
 
 ## ASHA Worker
 - **Email**: `asha@test.vitalnet`
-- **Password**: `TestASHA2026!`
+- **Password**: `[SET_VIA_SUPABASE_ADMIN]`
 - **Role**: `asha_worker`
 - **View**: Intake Form
 
 ## Doctor
 - **Email**: `doctor@test.vitalnet`
-- **Password**: `TestDoctor2026!`
+- **Password**: `[SET_VIA_SUPABASE_ADMIN]`
 - **Role**: `doctor`
 - **View**: Dashboard
 
 ## Administrator
 - **Email**: `admin@test.vitalnet`
-- **Password**: `TestAdmin2026!`
+- **Password**: `[SET_VIA_SUPABASE_ADMIN]`
 - **Role**: `admin`
 - **View**: Dashboard (Global access)
 
 > [!IMPORTANT]
-> These accounts are for testing only. Ensure that a similar pattern is used if re-creating users in the Supabase dashboard.
+> Passwords must meet security policy: 12-128 characters, containing uppercase, lowercase, number, and symbol. Set them directly in the Supabase Admin Panel > Authentication > Users, never in plaintext documentation.

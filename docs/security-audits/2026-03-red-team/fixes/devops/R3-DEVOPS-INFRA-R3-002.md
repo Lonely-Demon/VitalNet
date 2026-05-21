@@ -4,17 +4,17 @@
 - **Title:** Admin Control Plane Is Exposed on the Same Public API Edge
 - **Status:** completed
 
+## Evidence
+
+- `backend/app/main.py:124-127` — admin router is only mounted when env policy allows it.
+- `backend/app/main.py:235-248` — internal health route requires admin auth.
+
 ## Remediation
 
-Added runtime gate for admin router inclusion:
-
-- New config flag `ADMIN_API_ENABLED`
-- Admin routes are only mounted when explicitly enabled
-
-This enables deployment-time separation of admin control plane from public API surfaces.
+- Added admin route gate
+- Added internal health route for privileged diagnostics
 
 ## Files Modified
 
-- `backend/app/core/config.py`
 - `backend/app/main.py`
-- `backend/.env.example`
+- `backend/app/core/config.py`

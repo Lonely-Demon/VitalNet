@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useMemo } from 'react'
 
 const ToastContext = createContext(null)
 
@@ -23,14 +23,19 @@ export default function ToastProvider({ children }) {
     setToasts(prev => [...prev, { id, message, type }])
 
     // Determine toast duration based on type:
-    // - error/warning: stay until acknowledged (no auto-dismiss)
-    // - info/success: 5 seconds (slightly longer for readability)
+    // - error: stay until acknowledged (no auto-dismiss)
+    // - warning: 10 seconds 
+    // - info/success: 5 seconds
     // - custom duration: use provided value
-    const toastDuration = duration ?? (type === 'error' || type === 'warning' ? null : 5000)
+    let defaultDuration = 5000;
+    if (type === 'error') defaultDuration = null;
+    else if (type === 'warning') defaultDuration = 10000;
+    
+    const toastDuration = duration !== null ? duration : defaultDuration;
 
     if (toastDuration !== null) {
       setTimeout(() => {
-        setToasts(prev => prev.filter(t => t.id !== id))
+        setToasts(current => current.filter(t => t.id !== id))
       }, toastDuration)
     }
   }, [])
@@ -39,14 +44,22 @@ export default function ToastProvider({ children }) {
     setToasts(prev => prev.filter(t => t.id !== id))
   }, [])
 
+  // R3-PERF-RENDER-R3-001: keep provider value reference stable so toast list
+  // updates don't invalidate all useToast consumers.
+  const contextValue = useMemo(() => ({
+    showToast,
+    dismissToast,
+  }), [showToast, dismissToast])
+
   return (
-    <ToastContext.Provider value={{ showToast, dismissToast }}>
+    <ToastContext.Provider value={contextValue}>
       {children}
       {/* Fixed bottom-right toast container */}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm" aria-live="polite" aria-atomic="true">
         {toasts.map(t => (
           <div
             key={t.id}
+            role={t.type === 'error' || t.type === 'warning' ? 'alert' : 'status'}
             className={`px-4 py-3 rounded-lg shadow-card-hover text-sm font-medium animate-fade-up flex items-center justify-between gap-2 ${TYPE_STYLES[t.type] || TYPE_STYLES.info}`}
           >
             <span>{t.message}</span>

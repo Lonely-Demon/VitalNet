@@ -52,6 +52,8 @@ Case creation now stores consent timestamp when `consent_captured=true`.
 
 ## Files Modified
 - `frontend/src/pages/IntakeForm.jsx` - Added consent UI
+- `backend/app/models/schemas.py` - Added consent field validation
+- `backend/app/api/routes/cases.py` - Persist consent fields end-to-end
 - `backend/supabase/migrations/phase15_data_security_hardening.sql` - Added columns
 
 ## Risk Assessment

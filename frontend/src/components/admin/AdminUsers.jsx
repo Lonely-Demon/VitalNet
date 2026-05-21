@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, memo } from 'react'
+import { useState, useEffect } from 'react'
 import {
   adminListUsers,
   adminCreateUser,
@@ -7,7 +7,6 @@ import {
   adminReactivateUser,
   adminListFacilities,
 } from '../../lib/api'
-import { useToast } from '../ToastProvider'
 
 const ROLE_OPTIONS = ['asha_worker', 'doctor', 'admin']
 
@@ -23,88 +22,7 @@ const ROLE_COLORS = {
   admin:       'bg-surface3 text-text',
 }
 
-const UserRow = memo(function UserRow({ 
-  user, 
-  facilities, 
-  isEditing, 
-  editData, 
-  onEdit, 
-  onCancel, 
-  onUpdate, 
-  onDeactivate, 
-  onReactivate, 
-  setEditData,
-  roleOptions,
-  roleLabels,
-  roleColors
-}) {
-  return (
-    <tr className={user.is_active ? '' : 'opacity-50'}>
-      <td className="px-4 py-3 font-medium text-text">{user.full_name || '—'}</td>
-      <td className="px-4 py-3 text-text2">{user.email}</td>
-      <td className="px-4 py-3">
-        {isEditing ? (
-          <select
-            value={editData.role ?? user.role}
-            onChange={e => setEditData(d => ({ ...d, role: e.target.value }))}
-            className="border border-surface3 rounded px-2 py-1 text-xs bg-surface2 text-text"
-          >
-            {roleOptions.map(r => <option key={r} value={r}>{roleLabels[r]}</option>)}
-          </select>
-        ) : (
-          <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${roleColors[user.role] || roleColors.admin}`}>
-            {roleLabels[user.role] || user.role}
-          </span>
-        )}
-      </td>
-      <td className="px-4 py-3 text-text2">
-        {isEditing ? (
-          <select
-            value={editData.facility_id ?? user.facility_id ?? ''}
-            onChange={e => setEditData(d => ({ ...d, facility_id: e.target.value }))}
-            className="border border-surface3 rounded px-2 py-1 text-xs bg-surface2 text-text"
-          >
-            <option value="">— None —</option>
-            {facilities.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
-        ) : (
-          user.facility_name || '—'
-        )}
-      </td>
-      <td className="px-4 py-3 text-text3 font-mono">{user.asha_id || '—'}</td>
-      <td className="px-4 py-3">
-        <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${
-          user.is_active
-            ? 'bg-routine/10 text-routine'
-            : 'bg-surface3 text-text3'
-        }`}>
-          {user.is_active ? 'Active' : 'Inactive'}
-        </span>
-      </td>
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
-          {isEditing ? (
-            <>
-              <button onClick={() => onUpdate(user.id)} className="text-xs text-routine hover:text-forest font-medium">Save</button>
-              <button onClick={onCancel} className="text-xs text-text3 hover:text-text2">Cancel</button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={onEdit}
-                className="text-xs text-sage hover:text-forest font-medium"
-              >Edit</button>
-              {user.is_active
-                ? <button onClick={() => onDeactivate(user.id)} className="text-xs text-emergency hover:text-emergency/80 font-medium">Deactivate</button>
-                : <button onClick={() => onReactivate(user.id)} className="text-xs text-routine hover:text-forest font-medium">Reactivate</button>
-              }
-            </>
-          )}
-        </div>
-      </td>
-    </tr>
-  )
-})
+const EMPTY_CREATE = { email: '', password: '', full_name: '', role: 'asha_worker', facility_id: '', asha_id: '' }
 
 export default function AdminUsers() {
   const [users,          setUsers]          = useState([])
@@ -117,7 +35,8 @@ export default function AdminUsers() {
   const [creating,       setCreating]       = useState(false)
   const [editingId,      setEditingId]      = useState(null)
   const [editData,       setEditData]       = useState({})
-  const { showToast } = useToast()
+
+  const [confirmDeactivate, setConfirmDeactivate] = useState(null)
 
   useEffect(() => { loadAll() }, [])
 
@@ -126,7 +45,7 @@ export default function AdminUsers() {
     setError(null)
     try {
       const [u, f] = await Promise.all([adminListUsers(), adminListFacilities()])
-      setUsers(u.data || u)
+      setUsers(u)
       setFacilities(f)
     } catch (e) {
       setError(e.message)
@@ -155,36 +74,50 @@ export default function AdminUsers() {
     try {
       await adminUpdateUser(userId, editData)
       setEditingId(null)
-      setEditData({})
       await loadAll()
-      showToast('User updated', 'success')
     } catch (e) {
-      showToast(e.message || 'Update failed', 'error')
+      alert(e.message)
     }
   }
 
   async function handleDeactivate(userId) {
-    if (!window.confirm('Deactivate this user?')) return
+    setConfirmDeactivate(userId)
+  }
+
+  async function executeDeactivate() {
+    if (!confirmDeactivate) return
     try {
-      await adminDeactivateUser(userId)
+      await adminDeactivateUser(confirmDeactivate)
       await loadAll()
-      showToast('User deactivated', 'warning')
-    } catch (e) { showToast(e.message || 'Deactivation failed', 'error') }
+    } catch (e) { alert(e.message) }
+    finally { setConfirmDeactivate(null) }
   }
 
   async function handleReactivate(userId) {
     try {
       await adminReactivateUser(userId)
       await loadAll()
-      showToast('User reactivated', 'success')
-    } catch (e) { showToast(e.message || 'Reactivation failed', 'error') }
+    } catch (e) { alert(e.message) }
   }
 
-if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading users...</div>
+  if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading users...</div>
   if (error)   return <div className="bg-emergency/10 border border-emergency/30 rounded-lg px-4 py-3 text-emergency text-sm">{error}</div>
 
   return (
     <div>
+      {confirmDeactivate && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+          <div className="bg-surface p-6 rounded-lg shadow-card w-full max-w-sm">
+            <h3 className="text-lg font-bold text-text mb-2">Deactivate User</h3>
+            <p className="text-text2 text-sm mb-4">Are you sure you want to deactivate this user?</p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setConfirmDeactivate(null)} className="px-4 py-2 text-sm text-text2 hover:text-text">Cancel</button>
+              <button onClick={executeDeactivate} className="px-4 py-2 text-sm bg-emergency text-white rounded-pill hover:opacity-90">Deactivate</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-base font-semibold text-text font-display italic">Users <span className="text-text3 font-normal font-body">({users.length})</span></h2>
@@ -263,22 +196,70 @@ if (loading) return <div className="text-center py-16 text-text3 text-sm">Loadin
           </thead>
           <tbody className="divide-y divide-leaf/20">
             {users.map(u => (
-              <UserRow
-                key={u.id}
-                user={u}
-                facilities={facilities}
-                isEditing={editingId === u.id}
-                editData={editData}
-                onEdit={() => { setEditingId(u.id); setEditData({}) }}
-                onCancel={() => setEditingId(null)}
-                onUpdate={handleUpdate}
-                onDeactivate={handleDeactivate}
-                onReactivate={handleReactivate}
-                setEditData={setEditData}
-                roleOptions={ROLE_OPTIONS}
-                roleLabels={ROLE_LABELS}
-                roleColors={ROLE_COLORS}
-              />
+              <tr key={u.id} className={u.is_active ? '' : 'opacity-50'}>
+                <td className="px-4 py-3 font-medium text-text">{u.full_name || '—'}</td>
+                <td className="px-4 py-3 text-text2">{u.email}</td>
+                <td className="px-4 py-3">
+                  {editingId === u.id ? (
+                    <select
+                      value={editData.role ?? u.role}
+                      onChange={e => setEditData(d => ({ ...d, role: e.target.value }))}
+                      className="border border-surface3 rounded px-2 py-1 text-xs bg-surface2 text-text"
+                    >
+                      {ROLE_OPTIONS.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                    </select>
+                  ) : (
+                    <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${ROLE_COLORS[u.role] || ROLE_COLORS.admin}`}>
+                      {ROLE_LABELS[u.role] || u.role}
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-text2">
+                  {editingId === u.id ? (
+                    <select
+                      value={editData.facility_id ?? u.facility_id ?? ''}
+                      onChange={e => setEditData(d => ({ ...d, facility_id: e.target.value }))}
+                      className="border border-surface3 rounded px-2 py-1 text-xs bg-surface2 text-text"
+                    >
+                      <option value="">— None —</option>
+                      {facilities.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                    </select>
+                  ) : (
+                    u.facility_name || '—'
+                  )}
+                </td>
+                <td className="px-4 py-3 text-text3 font-mono">{u.asha_id || '—'}</td>
+                <td className="px-4 py-3">
+                  <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${
+                    u.is_active
+                      ? 'bg-routine/10 text-routine'
+                      : 'bg-surface3 text-text3'
+                  }`}>
+                    {u.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    {editingId === u.id ? (
+                      <>
+                        <button onClick={() => handleUpdate(u.id)} className="text-xs text-routine hover:text-forest font-medium">Save</button>
+                        <button onClick={() => setEditingId(null)} className="text-xs text-text3 hover:text-text2">Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => { setEditingId(u.id); setEditData({}) }}
+                          className="text-xs text-sage hover:text-forest font-medium"
+                        >Edit</button>
+                        {u.is_active
+                          ? <button onClick={() => handleDeactivate(u.id)} className="text-xs text-emergency hover:text-emergency/80 font-medium">Deactivate</button>
+                          : <button onClick={() => handleReactivate(u.id)} className="text-xs text-routine hover:text-forest font-medium">Reactivate</button>
+                        }
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
             ))}
           </tbody>
         </table>

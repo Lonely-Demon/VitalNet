@@ -2,7 +2,7 @@ import { useAuth } from '../store/authStore'
 import LoginPage from '../pages/LoginPage'
 
 export function RouteGuard({ children, requiredRole = null }) {
-  const { session, role, isLoading, hasProfileError, signOut } = useAuth()
+  const { session, role, isLoading } = useAuth()
 
   if (isLoading) {
     return (
@@ -16,24 +16,6 @@ export function RouteGuard({ children, requiredRole = null }) {
   }
 
   if (!session) return <LoginPage />
-
-  if (hasProfileError) {
-    return (
-      <div className="min-h-screen bg-bg flex items-center justify-center px-4">
-        <div className="bg-surface rounded-xl shadow-card border border-leaf/40 p-8 text-center max-w-sm">
-          <h2 className="text-xl font-bold text-text tracking-tight mb-2 font-display">Session verification failed</h2>
-          <p className="text-sm text-text2">We could not verify your profile. Please sign in again.</p>
-          <button
-            type="button"
-            onClick={signOut}
-            className="mt-4 text-sm bg-forest text-white px-4 py-2 rounded-pill"
-          >
-            Sign out
-          </button>
-        </div>
-      </div>
-    )
-  }
 
   if (requiredRole && role !== requiredRole && role !== 'admin') {
     return (

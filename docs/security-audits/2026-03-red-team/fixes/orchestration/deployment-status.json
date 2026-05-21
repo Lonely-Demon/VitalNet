@@ -1,0 +1,92 @@
+{
+  "generated": "2026-03-30T01:16:43.017287",
+  "root": "D:\\Southern_Ring_Nebula\\VitalNet",
+  "audit_dir": "D:\\Southern_Ring_Nebula\\VitalNet\\docs\\security-audits\\2026-03-red-team",
+  "server": {
+    "attach_url": "http://127.0.0.1:4174",
+    "host": "127.0.0.1",
+    "port": 4174,
+    "started": true,
+    "pid": 18748,
+    "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\local-server.log"
+  },
+  "sessions": [
+    {
+      "domain": "security",
+      "agent": "security-team-lead",
+      "pid": 21416,
+      "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\security.log",
+      "started_at": "2026-03-30T01:16:42.909694",
+      "prompt": "Execute full remediation for queues.security from docs/security-audits/2026-03-red-team/BLUE_TEAM_DOMAIN_QUEUES.json. For each queue unit, spawn security-fix-specialist (one unit per subagent), implement the fix, and log it. For combined_fix=true, treat root + extensions as one remediation bundle. Write per-unit logs to docs/security-audits/2026-03-red-team/fixes/security/<unit-id>.md. After all queue units are processed, run end-of-session validation commands and write docs/security-audits/2026-03-red-team/fixes/security/SESSION-REPORT.md with completed/blocked counts and command outputs. Create one domain commit: fix(security): remediate queue bundles for R1/R2/R3. Do not stop early; continue until queue exhaustion."
+    },
+    {
+      "domain": "data",
+      "agent": "data-team-lead",
+      "pid": 7460,
+      "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\data.log",
+      "started_at": "2026-03-30T01:16:42.920166",
+      "prompt": "Execute full remediation for queues.data from docs/security-audits/2026-03-red-team/BLUE_TEAM_DOMAIN_QUEUES.json. For each queue unit, spawn data-fix-specialist (one unit per subagent), implement the fix, and log it. For combined_fix=true, treat root + extensions as one remediation bundle. Write per-unit logs to docs/security-audits/2026-03-red-team/fixes/data/<unit-id>.md. After all queue units are processed, run end-of-session validation commands and write docs/security-audits/2026-03-red-team/fixes/data/SESSION-REPORT.md with completed/blocked counts and command outputs. Create one domain commit: fix(data): remediate queue bundles for R1/R2/R3. Do not stop early; continue until queue exhaustion."
+    },
+    {
+      "domain": "ml-clinical",
+      "agent": "ml-team-lead",
+      "pid": 21140,
+      "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\ml-clinical.log",
+      "started_at": "2026-03-30T01:16:42.929467",
+      "prompt": "Execute full remediation for queues.ml-clinical from docs/security-audits/2026-03-red-team/BLUE_TEAM_DOMAIN_QUEUES.json. For each queue unit, spawn ml-fix-specialist (one unit per subagent), implement the fix, and log it. For combined_fix=true, treat root + extensions as one remediation bundle. Write per-unit logs to docs/security-audits/2026-03-red-team/fixes/ml-clinical/<unit-id>.md. After all queue units are processed, run end-of-session validation commands and write docs/security-audits/2026-03-red-team/fixes/ml-clinical/SESSION-REPORT.md with completed/blocked counts and command outputs. Create one domain commit: fix(ml-clinical): remediate queue bundles for R1/R2/R3. Do not stop early; continue until queue exhaustion."
+    },
+    {
+      "domain": "reliability",
+      "agent": "reliability-team-lead",
+      "pid": 13212,
+      "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\reliability.log",
+      "started_at": "2026-03-30T01:16:42.940324",
+      "prompt": "Execute full remediation for queues.reliability from docs/security-audits/2026-03-red-team/BLUE_TEAM_DOMAIN_QUEUES.json. For each queue unit, spawn reliability-fix-specialist (one unit per subagent), implement the fix, and log it. For combined_fix=true, treat root + extensions as one remediation bundle. Write per-unit logs to docs/security-audits/2026-03-red-team/fixes/reliability/<unit-id>.md. After all queue units are processed, run end-of-session validation commands and write docs/security-audits/2026-03-red-team/fixes/reliability/SESSION-REPORT.md with completed/blocked counts and command outputs. Create one domain commit: fix(reliability): remediate queue bundles for R1/R2/R3. Do not stop early; continue until queue exhaustion."
+    },
+    {
+      "domain": "performance",
+      "agent": "performance-team-lead",
+      "pid": 5968,
+      "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\performance.log",
+      "started_at": "2026-03-30T01:16:42.954222",
+      "prompt": "Execute full remediation for queues.performance from docs/security-audits/2026-03-red-team/BLUE_TEAM_DOMAIN_QUEUES.json. For each queue unit, spawn performance-fix-specialist (one unit per subagent), implement the fix, and log it. For combined_fix=true, treat root + extensions as one remediation bundle. Write per-unit logs to docs/security-audits/2026-03-red-team/fixes/performance/<unit-id>.md. After all queue units are processed, run end-of-session validation commands and write docs/security-audits/2026-03-red-team/fixes/performance/SESSION-REPORT.md with completed/blocked counts and command outputs. Create one domain commit: fix(performance): remediate queue bundles for R1/R2/R3. Do not stop early; continue until queue exhaustion."
+    },
+    {
+      "domain": "devops",
+      "agent": "devops-team-lead",
+      "pid": 20780,
+      "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\devops.log",
+      "started_at": "2026-03-30T01:16:42.977168",
+      "prompt": "Execute full remediation for queues.devops from docs/security-audits/2026-03-red-team/BLUE_TEAM_DOMAIN_QUEUES.json. For each queue unit, spawn devops-fix-specialist (one unit per subagent), implement the fix, and log it. For combined_fix=true, treat root + extensions as one remediation bundle. Write per-unit logs to docs/security-audits/2026-03-red-team/fixes/devops/<unit-id>.md. After all queue units are processed, run end-of-session validation commands and write docs/security-audits/2026-03-red-team/fixes/devops/SESSION-REPORT.md with completed/blocked counts and command outputs. Create one domain commit: fix(devops): remediate queue bundles for R1/R2/R3. Do not stop early; continue until queue exhaustion."
+    },
+    {
+      "domain": "ux",
+      "agent": "ux-team-lead",
+      "pid": 21288,
+      "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\ux.log",
+      "started_at": "2026-03-30T01:16:42.989654",
+      "prompt": "Execute full remediation for queues.ux from docs/security-audits/2026-03-red-team/BLUE_TEAM_DOMAIN_QUEUES.json. For each queue unit, spawn ux-fix-specialist (one unit per subagent), implement the fix, and log it. For combined_fix=true, treat root + extensions as one remediation bundle. Write per-unit logs to docs/security-audits/2026-03-red-team/fixes/ux/<unit-id>.md. After all queue units are processed, run end-of-session validation commands and write docs/security-audits/2026-03-red-team/fixes/ux/SESSION-REPORT.md with completed/blocked counts and command outputs. Create one domain commit: fix(ux): remediate queue bundles for R1/R2/R3. Do not stop early; continue until queue exhaustion."
+    },
+    {
+      "domain": "qa",
+      "agent": "qa-team-lead",
+      "pid": 15944,
+      "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\qa.log",
+      "started_at": "2026-03-30T01:16:43.004660",
+      "prompt": "Execute full remediation for queues.qa from docs/security-audits/2026-03-red-team/BLUE_TEAM_DOMAIN_QUEUES.json. For each queue unit, spawn qa-fix-specialist (one unit per subagent), implement the fix, and log it. For combined_fix=true, treat root + extensions as one remediation bundle. Write per-unit logs to docs/security-audits/2026-03-red-team/fixes/qa/<unit-id>.md. After all queue units are processed, run end-of-session validation commands and write docs/security-audits/2026-03-red-team/fixes/qa/SESSION-REPORT.md with completed/blocked counts and command outputs. Create one domain commit: fix(qa): remediate queue bundles for R1/R2/R3. Do not stop early; continue until queue exhaustion."
+    },
+    {
+      "domain": "manual-triage",
+      "agent": "manual-triage-team-lead",
+      "pid": 20384,
+      "log_file": "docs\\security-audits\\2026-03-red-team\\fixes\\orchestration\\manual-triage.log",
+      "started_at": "2026-03-30T01:16:43.017209",
+      "prompt": "Process ALL queue items in queues.manual-triage from docs/security-audits/2026-03-red-team/BLUE_TEAM_DOMAIN_QUEUES.json. For each unit, spawn manual-triage-fix-specialist, recover missing evidence from archived artifacts, and classify each item as mapped, obsolete, or blocked with reason. Do NOT make speculative code edits. Write per-unit logs to docs/security-audits/2026-03-red-team/fixes/manual-triage/<unit-id>.md and write docs/security-audits/2026-03-red-team/fixes/manual-triage/SESSION-REPORT.md. Complete the full queue before ending."
+    }
+  ],
+  "notes": [
+    "Sessions were launched in parallel via opencode run.",
+    "Each domain lead is instructed to spawn its own fix specialist subagents.",
+    "After domain completion, run merge session manually: opencode run --agent merge-team-lead <prompt>"
+  ]
+}

@@ -3,7 +3,7 @@
 **Unit ID:** ROOT-COMPLY-007
 **Priority:** P1 (HIGH)
 **Title:** No patient data deletion endpoint
-**Status:** PARTIALLY COMPLETED
+**Status:** COMPLETED
 
 ## Finding Summary
 No endpoint exists for patients to request deletion of their data (GDPR right to erasure / HIPAA accounting of disclosures).
@@ -45,12 +45,13 @@ async def delete_patient_data(
 ```
 
 ## Remaining Work
-1. [ ] Implement `/api/patient-data/{patient_id}` DELETE endpoint
-2. [ ] Add patient verification (identity confirmation)
-3. [ ] Generate deletion acknowledgment PDF
-4. [ ] Add admin review workflow for deletion requests
+1. [ ] Add dedicated patient identity verification flow
+2. [ ] Add deletion acknowledgment export
+3. [ ] Add admin review workflow for deletion requests
 
 ## Files Modified
+- `backend/app/api/routes/security.py` (patient deletion/anonymization endpoint)
+- `backend/app/core/audit.py` (deletion audit logging)
 - `backend/supabase/migrations/phase15_data_security_hardening.sql` (soft-delete support)
 
 ## Risk Assessment

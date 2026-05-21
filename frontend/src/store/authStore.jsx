@@ -44,7 +44,8 @@ export function AuthProvider({ children }) {
       await clearAllQueues()
       console.log('[VitalNet] Device PHI cleared on logout')
     } catch (e) {
-      console.error('[VitalNet] Failed to clear PHI queues:', e)
+        // ROOT-COMPLY-008: Remove PHI from console logs
+        console.error('[VitalNet] Failed to clear PHI queues')
     }
     
     if (inactivityTimer.current) {

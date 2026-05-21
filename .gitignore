@@ -36,3 +36,13 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Agentic workflows (Claude Code, OpenCode, etc.)
+.agent/
+.opencode/
+.agentic-archive/
+opencode.json
+claude.json
+
+# Windows artifacts
+nul

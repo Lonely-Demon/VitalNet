@@ -4,15 +4,13 @@
 - **Title:** CI Frontend Build Is Staging-Pinned at Compile Time
 - **Status:** completed
 
+## Evidence
+
+- `.github/workflows/ci.yml:96-103` — push build uses `vars.VITE_API_BASE_URL` rather than a hardcoded staging URL.
+
 ## Remediation
 
-Removed hardcoded staging URL from CI and switched to environment-scoped variable:
-
-```yaml
-VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
-```
-
-This prevents forced staging pinning in build artifacts.
+- Replaced hardcoded staging endpoint with environment-scoped base URL variable
 
 ## Files Modified
 

@@ -6,7 +6,12 @@ The BriefingCard component was re-rendering on every parent Dashboard state chan
 **Bundled Source IDs**: PERF-005, PERF-RENDER-R3-004
 
 ## Fix Applied
-Wrapped the BriefingCard component export with `React.memo()`:
+Applied two complementary render-stability changes:
+
+1. Wrapped `BriefingCard` export with `memo(...)`.
+2. Removed unstable inline `onReviewed={() => {}}` props in `Dashboard` and replaced with stable `handleReviewed` callback (`useCallback`).
+
+### Code shape
 
 ```javascript
 // Before
@@ -14,10 +19,12 @@ export default function BriefingCard({ caseData, onReviewed }) { ... }
 
 // After
 function BriefingCard({ caseData, onReviewed }) { ... }
-export default React.memo(BriefingCard)
+export default memo(BriefingCard)
 ```
 
-This prevents the component from re-rendering when its parent re-renders, unless the `caseData` or `onReviewed` props actually change.
+`handleMarkReviewed` inside the card was also wrapped with `useCallback` keyed by `caseData.id` and `onReviewed`.
+
+This prevents card rerenders unless relevant props change.
 
 ## Why This Fix Was Chosen
 - `React.memo` is the standard pattern for preventing unnecessary re-renders
@@ -26,7 +33,8 @@ This prevents the component from re-rendering when its parent re-renders, unless
 - Significant performance improvement when many cards are rendered
 
 ## Files Changed
-- `frontend/src/components/BriefingCard.jsx` - Added React.memo wrapper
+- `frontend/src/components/BriefingCard.jsx` - Added `memo` export and callback stability
+- `frontend/src/pages/Dashboard.jsx` - Stable `onReviewed` callback for all card lists
 
 ## Verification
 After the fix:

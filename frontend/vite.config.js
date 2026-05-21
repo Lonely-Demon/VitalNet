@@ -14,35 +14,42 @@ export default defineConfig({
   },
 
   build: {
+    chunkSizeWarningLimit: 2000,
     rollupOptions: {
       output: {
+        // ROOT-PERF-001: deterministic chunking strategy for stable cache reuse.
         manualChunks(id) {
-          // React ecosystem
-          if (id.includes('node_modules/react') || 
-              id.includes('node_modules/react-dom') || 
-              id.includes('node_modules/react-router')) {
+          const moduleId = id.replace(/\\/g, '/')
+          if (!moduleId.includes('node_modules')) return undefined
+
+          if (
+            moduleId.includes('/react/') ||
+            moduleId.includes('/react-dom/') ||
+            moduleId.includes('/react-router')
+          ) {
             return 'vendor-react'
           }
-          // Supabase client
-          if (id.includes('node_modules/@supabase')) {
+
+          if (moduleId.includes('/@supabase/')) {
             return 'vendor-supabase'
           }
-          // ONNX runtime as separate chunk (lazy loaded)
-          if (id.includes('node_modules/onnxruntime-web')) {
+
+          if (moduleId.includes('/onnxruntime-web/')) {
             return 'vendor-onnx'
           }
-          // Chart libraries
-          if (id.includes('node_modules/recharts') || 
-              id.includes('node_modules/d3')) {
+
+          if (moduleId.includes('/recharts/') || moduleId.includes('/d3-')) {
             return 'vendor-charts'
           }
-          // Date utilities
-          if (id.includes('node_modules/date-fns')) {
+
+          if (moduleId.includes('/date-fns/')) {
             return 'vendor-date'
           }
-        }
-      }
-    }
+
+          return 'vendor-misc'
+        },
+      },
+    },
   },
 
   resolve: {
@@ -55,28 +62,32 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
 
-      // Precache the entire app shell
+      // Precache app shell only; heavy ML assets are runtime-cached below.
       workbox: {
-        // Precache the app shell - exclude large WASM/ONNX files
         globPatterns: [
           '**/*.{js,css,html,ico,png,svg,woff2}',
         ],
-        // Exclude ONNX/WASM from precache (too large), use runtimeCaching instead
-        globIgnores: ['**/*.onnx', '**/*.wasm', '**/ort.*.js'],
 
-        // Runtime caching strategies
         runtimeCaching: [
-          // WASM/ONNX assets - CacheFirst with 7-day expiration
           {
-            urlPattern: /\.(wasm|onnx)$/,
+            // R3-PERF-ASSET-R3-001: runtime caching policy for large ML assets.
+            urlPattern: ({ url }) =>
+              url.pathname.endsWith('.wasm') ||
+              url.pathname.endsWith('.onnx') ||
+              url.pathname.includes('/models/'),
             handler: 'CacheFirst',
             options: {
-              cacheName: 'vitalnet-ml-assets',
+              cacheName: 'ml-assets-cache',
               expiration: {
-                maxAgeSeconds: 7 * 24 * 60 * 60, // 7 days
+                maxEntries: 12,
+                maxAgeSeconds: 7 * 24 * 60 * 60,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
               },
             },
           },
+
           // Background Sync for POST /api/submit (in-flight failure recovery)
           {
             urlPattern: ({ url }) => url.pathname === '/api/submit',
@@ -86,7 +97,7 @@ export default defineConfig({
               backgroundSync: {
                 name: 'vitalnet_submission_queue',
                 options: {
-                  maxRetentionTime: 24 * 60,  // 24 hours in minutes
+                  maxRetentionTime: 24 * 60, // 24 hours in minutes
                 },
               },
             },
@@ -130,9 +141,10 @@ export default defineConfig({
       },
     }),
   ],
+
   server: {
     proxy: {
-      '/api': 'http://localhost:8000'
-    }
-  }
+      '/api': 'http://localhost:8000',
+    },
+  },
 })

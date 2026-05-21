@@ -4,10 +4,13 @@
 - **Title:** Staging/Prod Can Inherit Local `.env.local` State
 - **Status:** completed
 
+## Evidence
+
+- `backend/app/core/config.py:23-36` — startup fails if `.env.local` exists in staging/production.
+
 ## Remediation
 
-Added runtime guard to fail startup in `staging`/`production` when `.env.local` exists.
-This prevents accidental local-file inheritance in deployed environments.
+- Added startup guard against local `.env.local` inheritance in deployment envs
 
 ## Files Modified
 

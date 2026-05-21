@@ -4,12 +4,15 @@
 - **Title:** Public Health Check Becomes an Anonymous Internal-State Oracle
 - **Status:** completed
 
+## Evidence
+
+- `backend/app/main.py:220-232` — public `/api/health` returns only `status` and `version`, plus short-lived cache headers.
+- `backend/app/main.py:235-248` — internal health route is admin-authenticated and returns full diagnostics.
+
 ## Remediation
 
-Reduced sensitive health-surface disclosure by environment:
-
-- In production/staging, health details are sanitized to coarse status indicators (`connected` / `error`).
-- Added explicit schema and endpoint-status surface without exposing full internal exception strings.
+- Minimized anonymous health surface
+- Split internal diagnostics to `/api/internal/health`
 
 ## Files Modified
 

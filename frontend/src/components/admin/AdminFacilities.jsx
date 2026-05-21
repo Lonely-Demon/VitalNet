@@ -1,6 +1,5 @@
-import { useState, useEffect, useCallback, memo } from 'react'
+import { useState, useEffect } from 'react'
 import { adminListFacilities, adminCreateFacility, adminToggleFacility } from '../../lib/api'
-import { useToast } from '../ToastProvider'
 
 const TYPE_OPTIONS = ['PHC', 'CHC', 'District Hospital']
 
@@ -9,79 +8,16 @@ const EMPTY_FORM = {
   state: 'Tamil Nadu', pincode: '', phone: '',
 }
 
-// Memoized form component to prevent unnecessary re-renders
-const FacilityForm = memo(({ 
-  showCreateForm, 
-  setShowCreateForm, 
-  formData, 
-  setFormData, 
-  creating, 
-  setCreating,
-  formError,
-  setFormError
-}) => {
-  const handleCreate = useCallback(async (e) => {
-    e.preventDefault()
-    setCreating(true)
-    // Form submission would happen here
-    setCreating(false)
-  }, [setCreating])
-
-  return (
-    <form onSubmit={handleCreate} className="bg-surface border border-leaf/40 rounded-lg p-5 mb-5 shadow-card">
-      <h3 className="text-sm font-semibold text-text mb-4">New Facility</h3>
-      <div className="grid grid-cols-2 gap-3">
-        {[
-          { label: 'Name *',    key: 'name',     type: 'text',   required: true },
-          { label: 'District',  key: 'district',  type: 'text',   required: false },
-          { label: 'Address',   key: 'address',   type: 'text',   required: false },
-          { label: 'State',     key: 'state',     type: 'text',   required: false },
-          { label: 'Pincode',   key: 'pincode',   type: 'text',   required: false },
-          { label: 'Phone',     key: 'phone',     type: 'tel',    required: false },
-        ].map(f => (
-          <div key={f.key}>
-            <label className="block text-xs text-text3 mb-1 font-mono">{f.label}</label>
-            <input
-              type={f.type}
-              required={f.required}
-              value={formData[f.key]}
-              onChange={e => setFormData(d => ({ ...d, [f.key]: e.target.value }))}
-              className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
-            />
-          </div>
-        ))}
-        <div>
-          <label className="block text-xs text-text3 mb-1 font-mono">Type</label>
-          <select
-            value={formData.type}
-            onChange={e => setFormData(d => ({ ...d, type: e.target.value }))}
-            className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
-          >
-            {TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
-      </div>
-      {formError && <p className="text-emergency text-xs mt-2">{formError}</p>}
-      <button
-        type="submit"
-        disabled={creating}
-        className="mt-3 text-sm px-4 py-1.5 bg-routine text-white rounded-pill hover:shadow-btn disabled:opacity-50 transition-all"
-      >
-        {creating ? 'Creating...' : 'Add Facility'}
-      </button>
-    </form>
-  )
-})
-
 export default function AdminFacilities() {
-  const [facilities, setFacilities] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [facilities,     setFacilities]     = useState([])
+  const [loading,        setLoading]        = useState(true)
+  const [error,          setError]          = useState(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
-  const [formData, setFormData] = useState(EMPTY_FORM)
-  const [formError, setFormError] = useState(null)
-  const [creating, setCreating] = useState(false)
-  const { showToast } = useToast()
+  const [formData,       setFormData]       = useState(EMPTY_FORM)
+  const [formError,      setFormError]      = useState(null)
+  const [creating,       setCreating]       = useState(false)
+
+  const [confirmToggle, setConfirmToggle] = useState(null)
 
   useEffect(() => { loadFacilities() }, [])
 
@@ -117,8 +53,17 @@ export default function AdminFacilities() {
     try {
       await adminToggleFacility(id)
       await loadFacilities()
-      showToast('Facility status updated', 'success')
-    } catch (e) { showToast(e.message || 'Facility update failed', 'error') }
+    } catch (e) { alert(e.message) }
+  }
+
+  function confirmToggleAction(facility) {
+    setConfirmToggle(facility)
+  }
+
+  async function executeToggle() {
+    if (!confirmToggle) return
+    await handleToggle(confirmToggle.id)
+    setConfirmToggle(null)
   }
 
   if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading facilities...</div>
@@ -138,16 +83,48 @@ export default function AdminFacilities() {
 
       {/* Create Form */}
       {showCreateForm && (
-        <FacilityForm 
-          showCreateForm={showCreateForm}
-          setShowCreateForm={setShowCreateForm}
-          formData={formData}
-          setFormData={setFormData}
-          creating={creating}
-          setCreating={setCreating}
-          formError={formError}
-          setFormError={setFormError}
-        />
+        <form onSubmit={handleCreate} className="bg-surface border border-leaf/40 rounded-lg p-5 mb-5 shadow-card">
+          <h3 className="text-sm font-semibold text-text mb-4">New Facility</h3>
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: 'Name *',    key: 'name',     type: 'text',   required: true },
+              { label: 'District',  key: 'district',  type: 'text',   required: false },
+              { label: 'Address',   key: 'address',   type: 'text',   required: false },
+              { label: 'State',     key: 'state',     type: 'text',   required: false },
+              { label: 'Pincode',   key: 'pincode',   type: 'text',   required: false },
+              { label: 'Phone',     key: 'phone',     type: 'tel',    required: false },
+            ].map(f => (
+              <div key={f.key}>
+                <label className="block text-xs text-text3 mb-1 font-mono">{f.label}</label>
+                <input
+                  type={f.type}
+                  required={f.required}
+                  value={formData[f.key]}
+                  onChange={e => setFormData(d => ({ ...d, [f.key]: e.target.value }))}
+                  className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
+                />
+              </div>
+            ))}
+            <div>
+              <label className="block text-xs text-text3 mb-1 font-mono">Type</label>
+              <select
+                value={formData.type}
+                onChange={e => setFormData(d => ({ ...d, type: e.target.value }))}
+                className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
+              >
+                {TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+          {formError && <p className="text-emergency text-xs mt-2">{formError}</p>}
+          <button
+            type="submit"
+            disabled={creating}
+            className="mt-3 text-sm px-4 py-1.5 bg-routine text-white rounded-pill hover:shadow-btn disabled:opacity-50 transition-all"
+          >
+            {creating ? 'Creating...' : 'Add Facility'}
+          </button>
+        </form>
       )}
 
       {/* Table */}
@@ -176,7 +153,7 @@ export default function AdminFacilities() {
                 </td>
                 <td className="px-4 py-3">
                   <button
-                    onClick={() => handleToggle(f.id)}
+                    onClick={() => confirmToggleAction(f)}
                     className={`text-xs font-medium ${
                       f.is_active
                         ? 'text-emergency hover:text-emergency/80'
@@ -191,6 +168,38 @@ export default function AdminFacilities() {
           </tbody>
         </table>
       </div>
+
+      {/* Confirmation Modal */}
+      {confirmToggle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+          <div className="bg-surface border border-leaf/40 rounded-xl shadow-card w-full max-w-sm overflow-hidden">
+            <div className="p-5 border-b border-leaf/20">
+              <h3 id="modal-title" className="text-lg font-semibold text-text font-display">
+                Confirm {confirmToggle.is_active ? 'Deactivation' : 'Activation'}
+              </h3>
+              <p className="text-sm text-text2 mt-2 font-body">
+                Are you sure you want to {confirmToggle.is_active ? 'deactivate' : 'activate'} the facility <strong>{confirmToggle.name}</strong>?
+              </p>
+            </div>
+            <div className="p-4 bg-surface2 flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmToggle(null)}
+                className="px-4 py-2 text-sm font-medium text-text2 hover:text-text transition-colors rounded-lg hover:bg-surface3"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeToggle}
+                className={`px-4 py-2 text-sm font-medium text-white rounded-lg shadow-btn transition-all ${
+                  confirmToggle.is_active ? 'bg-emergency hover:bg-emergency/90' : 'bg-routine hover:bg-routine/90'
+                }`}
+              >
+                Yes, {confirmToggle.is_active ? 'Deactivate' : 'Activate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

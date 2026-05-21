@@ -35,4 +35,5 @@ CREATE INDEX IF NOT EXISTS idx_case_reviews_reviewer_id ON public.case_reviews(r
 - Audit trail for compliance
 
 ## Files Modified
-- `backend/supabase/migrations/phase15_data_security_hardening.sql` (Section 3)
+- `backend/app/api/routes/cases.py`
+- `backend/supabase/migrations/phase16_case_review_history.sql` (NEW)

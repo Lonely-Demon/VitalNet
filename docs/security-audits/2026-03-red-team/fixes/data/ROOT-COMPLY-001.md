@@ -32,6 +32,7 @@ While awaiting legal resolution, these technical controls are in place:
 - **Consent capture** (ROOT-COMPLY-005) - Patients informed of AI processing
 - **Audit logging** (ROOT-COMPLY-002) - All LLM calls logged
 - **Data minimization** - Only necessary fields sent to LLM
+- **Config gate** - `disable_phi_prompting` disables PHI prompting in restricted deployments
 
 ## Files Modified
 None (requires legal action)

@@ -3,6 +3,7 @@
 // Client-side ONNX triage inference using the enhanced 45-feature model.
 // Ports backend/clinical_features.py ClinicalFeatureEngineer to JavaScript.
 //
+
 import {
   CONFIDENCE_FLOOR,
   EXPECTED_ONNX_SHA256,
@@ -13,91 +14,35 @@ import {
   UNCERTAINTY_FLOOR,
 } from './modelContract'
 
-// ONNX Runtime will be loaded dynamically to avoid loading for non-ASHA users
-let ort = null
-let ortInitializationPromise = null
-
-async function initializeOnnxRuntime() {
-  if (ortInitializationPromise) {
-    return ortInitializationPromise
-  }
-  
-  ortInitializationPromise = (async () => {
-    if (ort) return ort
-    
-    // Dynamic import to avoid loading for non-ASHA users
-    ort = await import('onnxruntime-web')
-    
-    // Disable multi-threading — requires COOP/COEP headers that Vite dev server
-    // and many production hosts don't set. Single-threaded WASM is fast enough
-    // for a 45-feature model inference (<10 ms).
-    ort.env.wasm.numThreads = 1
-    return ort
-  })()
-  
-  return ortInitializationPromise
-}
-
 const MODEL_PATH = '/models/triage_classifier.onnx'
 const TRIAGE_LABELS = ['ROUTINE', 'URGENT', 'EMERGENCY']
 const NUM_FEATURES = 45
-const UNKNOWN_LABEL_MESSAGE = 'Unknown model label index — requiring human review'
 
 // ---------------------------------------------------------------------------
 // Session management
 // ---------------------------------------------------------------------------
 
-function normalizeSymptom(symptom) {
-  const raw = String(symptom || '').trim().toLowerCase()
-  if (!raw) return ''
+let _session = null
+let _loadPromise = null
+let _ort = null
+let _modelHash = null
 
-  const cleaned = raw
-    .replaceAll('_', ' ')
-    .replaceAll('/', ' ')
-    .replaceAll('-', ' ')
-    .replace(/[^a-z0-9 ]+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  return SYMPTOM_NORMALIZATION_MAP[cleaned] || cleaned.replaceAll(' ', '_')
-}
-
-function normalizeSymptoms(symptoms) {
-  const list = Array.isArray(symptoms) ? symptoms : []
-  const seen = new Set()
-  const normalized = []
-
-  for (const symptom of list) {
-    const canonical = normalizeSymptom(symptom)
-    if (canonical && !seen.has(canonical)) {
-      normalized.push(canonical)
-      seen.add(canonical)
-    }
-  }
-
-  return normalized
-}
-
-function coerceNumeric(value, fallback) {
-  if (value === '' || value == null) return fallback
-  const numeric = Number(value)
-  return Number.isFinite(numeric) ? numeric : fallback
-}
-
-function assessRedFlags(formData, symptoms) {
-  const complaint = String(formData.chief_complaint || '').toLowerCase()
-  const matched = []
-
-  for (const [ruleName, rule] of Object.entries(RED_FLAG_RULES)) {
-    const symptomHit = rule.symptoms.some((symptom) => symptoms.includes(symptom))
-    const complaintHit = rule.complaintTerms.some((term) => complaint.includes(term))
-    if (symptomHit || complaintHit) matched.push(ruleName)
-  }
-
-  return {
-    redFlags: matched,
-    mustEscalate: matched.length > 0,
-  }
+/**
+ * Dynamically import ONNX runtime and initialize it
+ */
+async function loadOrt() {
+  if (_ort) return _ort
+  
+  // Lazy load ONNX runtime only when needed
+  const ortModule = await import('onnxruntime-web')
+  _ort = ortModule
+  
+  // Disable multi-threading — requires COOP/COEP headers that Vite dev server
+  // and many production hosts don't set.  Single-threaded WASM is fast enough
+  // for a 45-feature model inference (<10 ms).
+  _ort.env.wasm.numThreads = 1
+  
+  return _ort
 }
 
 /**
@@ -105,19 +50,16 @@ function assessRedFlags(formData, symptoms) {
  * Called once on ASHA panel mount — not on every submission.
  * Retries on failure (resets _loadPromise so next call retries).
  */
-let _session = null
-let _loadPromise = null
-let _modelHash = null
-
 export async function loadModel() {
+  // Load ONNX runtime only when actually needed
+  await loadOrt()
+  
   if (_session) return _session
   if (_loadPromise) return _loadPromise
 
-  _loadPromise = initializeOnnxRuntime().then(loadedOrt => {
-    return loadedOrt.InferenceSession.create(MODEL_PATH, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all',
-    })
+  _loadPromise = _ort.InferenceSession.create(MODEL_PATH, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: 'all',
   }).then((session) => {
     _session = session
     _modelHash = EXPECTED_ONNX_SHA256
@@ -125,12 +67,12 @@ export async function loadModel() {
     console.log('[VitalNet] ONNX model loaded (enhanced 45-feature)')
     return session
   }).catch((err) => {
-    // Reset so next call can retry
+    // Reset so next call retries instead of returning the failed promise
     _loadPromise = null
     console.error('[VitalNet] ONNX model load failed:', err)
     throw err
   })
-  
+
   return _loadPromise
 }
 
@@ -144,11 +86,11 @@ export async function warmupModel() {
   if (_warmupPromise) return _warmupPromise
   _warmupPromise = (async () => {
     const session = await loadModel()
+    const ort = await loadOrt()
     const dummyInput = new Float32Array(NUM_FEATURES).fill(0)
-    await initializeOnnxRuntime().then(loadedOrt => {
-      const tensor = new loadedOrt.Tensor('float32', dummyInput, [1, NUM_FEATURES])
-      return session.run({ float_input: tensor })
-    })
+    const tensor = new ort.Tensor('float32', dummyInput, [1, NUM_FEATURES])
+    await session.run({ float_input: tensor })
+    console.log('[VitalNet] ONNX warmup complete — ready for offline triage')
   })()
   try {
     await _warmupPromise
@@ -205,6 +147,43 @@ function containsAny(text, termSet) {
     if (lower.includes(term)) return true
   }
   return false
+}
+
+function normalizeSymptom(symptom) {
+  const raw = String(symptom || '').trim().toLowerCase()
+  if (!raw) return ''
+  const cleaned = raw.replaceAll('_', ' ').replaceAll('/', ' ').replaceAll('-', ' ').replace(/[^a-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim()
+  return SYMPTOM_NORMALIZATION_MAP[cleaned] || cleaned.replaceAll(' ', '_')
+}
+
+function normalizeSymptoms(symptoms) {
+  const seen = new Set()
+  const normalized = []
+  for (const symptom of Array.isArray(symptoms) ? symptoms : []) {
+    const canonical = normalizeSymptom(symptom)
+    if (canonical && !seen.has(canonical)) {
+      normalized.push(canonical)
+      seen.add(canonical)
+    }
+  }
+  return normalized
+}
+
+function coerceNumeric(value, fallback) {
+  if (value === '' || value == null) return fallback
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function assessRedFlags(formData, symptoms) {
+  const complaint = String(formData.chief_complaint || '').toLowerCase()
+  const matched = []
+  for (const [ruleName, rule] of Object.entries(RED_FLAG_RULES)) {
+    const symptomHit = rule.symptoms.some((symptom) => symptoms.includes(symptom))
+    const complaintHit = rule.complaintTerms.some((term) => complaint.includes(term))
+    if (symptomHit || complaintHit) matched.push(ruleName)
+  }
+  return { redFlags: matched, mustEscalate: matched.length > 0 }
 }
 
 /**
@@ -456,11 +435,11 @@ function buildFeatureVector(formData) {
  * Returns { triageLevel, confidence, isLocal: true }
  */
 export async function runTriage(formData) {
+  const ort = await loadOrt()
   const session = await loadModel()
 
   const featureVector = buildFeatureVector(formData)
-  const loadedOrt = await initializeOnnxRuntime()
-  const tensor = new loadedOrt.Tensor('float32', featureVector, [1, NUM_FEATURES])
+  const tensor = new ort.Tensor('float32', featureVector, [1, NUM_FEATURES])
 
   const results = await session.run({ float_input: tensor })
 
@@ -479,11 +458,7 @@ export async function runTriage(formData) {
 
   const symptoms = normalizeSymptoms(formData.symptoms || [])
   const redFlags = assessRedFlags(formData, symptoms)
-  const uncertainty = {
-    high_uncertainty: false,
-    agreement_score: 1,
-    epistemic_uncertainty: 0,
-  }
+  const uncertainty = { high_uncertainty: false, agreement_score: 1, epistemic_uncertainty: 0 }
 
   if (triageLevel == null) {
     return {
@@ -491,7 +466,7 @@ export async function runTriage(formData) {
       confidence: null,
       isLocal: true,
       needsReview: true,
-      reviewReason: UNKNOWN_LABEL_MESSAGE,
+      reviewReason: 'Unknown ONNX label index — requiring human review',
       modelVersion: MODEL_VERSION,
       featureSchemaVersion: FEATURE_SCHEMA_VERSION,
       modelHash: _modelHash,
@@ -502,11 +477,10 @@ export async function runTriage(formData) {
   }
 
   const needsReview = confidence == null || confidence < CONFIDENCE_FLOOR || uncertainty.high_uncertainty || redFlags.mustEscalate
-  const confidenceDisplay = needsReview ? null : confidence
 
   return {
     triageLevel,
-    confidence: confidenceDisplay,
+    confidence: needsReview ? null : confidence,
     isLocal: true, // flags this as a preliminary local result
     needsReview,
     reviewReason: needsReview ? 'Low-confidence or red-flag case needs human review' : null,

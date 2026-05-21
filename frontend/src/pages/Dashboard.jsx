@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { getCases } from '../lib/api'
 import BriefingCard from '../components/BriefingCard'
 import { useAuth } from '../store/authStore'
@@ -11,6 +11,8 @@ export default function Dashboard({ filter = 'all' }) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore]     = useState(false)
   const [nextCursor, setNextCursor] = useState(null)
+  const [nextPriority, setNextPriority] = useState(null)
+  const [nextId, setNextId] = useState(null)
   const [error, setError]         = useState(null)
   const { profile } = useAuth()
   const { showToast } = useToast()
@@ -29,6 +31,8 @@ export default function Dashboard({ filter = 'all' }) {
       setCases(data.cases)
       setHasMore(data.hasMore)
       setNextCursor(data.nextCursor)
+      setNextPriority(data.nextTriagePriority ?? null)
+      setNextId(data.nextId ?? null)
     } catch (e) {
       setError(e.message || 'Failed to load cases. Check backend connection.')
     } finally {
@@ -41,9 +45,15 @@ export default function Dashboard({ filter = 'all' }) {
     if (!nextCursor || loadingMore) return
     setLoadingMore(true)
     try {
-      const data = await getCases({ before: nextCursor })
+      const data = await getCases({
+        before: {
+          time: nextCursor,
+          priority: nextPriority,
+          id: nextId,
+        },
+      })
       if (!data || !Array.isArray(data.cases)) return
-      // Deduplicate in case realtime already inserted a row
+      // Deduplicate in case realtime already inserted a row / prior page overlap
       setCases(prev => {
         const existingIds = new Set(prev.map(c => c.id))
         const fresh = data.cases.filter(c => !existingIds.has(c.id))
@@ -51,6 +61,8 @@ export default function Dashboard({ filter = 'all' }) {
       })
       setHasMore(data.hasMore)
       setNextCursor(data.nextCursor)
+      setNextPriority(data.nextTriagePriority ?? null)
+      setNextId(data.nextId ?? null)
     } catch (e) {
       showToast('Failed to load more cases', 'error')
     } finally {
@@ -60,33 +72,61 @@ export default function Dashboard({ filter = 'all' }) {
 
   useEffect(() => { fetchCases() }, [fetchCases])
 
+  const handleReviewed = useCallback((caseId) => {
+    setCases((prev) => prev.map((c) => (
+      c.id === caseId
+        ? { ...c, reviewed_at: c.reviewed_at || new Date().toISOString() }
+        : c
+    )))
+  }, [])
+
   // Real-time: prepend new inserts; update reviewed cases in place
   useRealtimeCases({
     facilityId,
     onInsert: (newCase) => {
-      setCases((prev) => {
-        if (prev.find((c) => c.id === newCase.id)) return prev
-        return [newCase, ...prev]
-      })
-      if (newCase.triage_level === 'EMERGENCY') {
-        showToast('New EMERGENCY case received', 'error')
+      // Only add non-deleted cases to prevent soft-deleted records from appearing
+      if (!newCase.deleted_at) {
+        setCases((prev) => {
+          if (prev.find((c) => c.id === newCase.id)) return prev
+          return [newCase, ...prev]
+        })
+        if (newCase.triage_level === 'EMERGENCY') {
+          showToast('New EMERGENCY case received', 'error')
+        }
       }
     },
     onUpdate: (updatedCase) => {
-      setCases((prev) =>
-        prev.map((c) => (c.id === updatedCase.id ? updatedCase : c))
-      )
+      setCases((prev) => {
+        // If the case has been soft-deleted, remove it from the dashboard
+        if (updatedCase.deleted_at) {
+          return prev.filter((c) => c.id !== updatedCase.id)
+        }
+        // Otherwise, update the case in place
+        return prev.map((c) => (c.id === updatedCase.id ? updatedCase : c))
+      })
     },
   })
 
-  // Client-side filter
-  const visibleCases = filter === 'pending'
-    ? cases.filter(c => !c.reviewed_at)
-    : cases
+  // Client-side filtering and section derivation memoized for render stability.
+  // R3-DATA-LIFECYCLE-R3-006: Consistent soft-delete filtering.
+  const visibleCases = useMemo(() => (
+    filter === 'pending'
+      ? cases.filter(c => !c.reviewed_at && !c.deleted_at)
+      : cases.filter(c => !c.deleted_at)
+  ), [cases, filter])
 
-  const emergency = visibleCases.filter(c => c.triage_level === 'EMERGENCY')
-  const urgent    = visibleCases.filter(c => c.triage_level === 'URGENT')
-  const routine   = visibleCases.filter(c => c.triage_level === 'ROUTINE')
+  const emergency = useMemo(
+    () => visibleCases.filter(c => c.triage_level === 'EMERGENCY'),
+    [visibleCases]
+  )
+  const urgent = useMemo(
+    () => visibleCases.filter(c => c.triage_level === 'URGENT'),
+    [visibleCases]
+  )
+  const routine = useMemo(
+    () => visibleCases.filter(c => c.triage_level === 'ROUTINE'),
+    [visibleCases]
+  )
 
   if (loading) {
     return (
@@ -129,7 +169,7 @@ export default function Dashboard({ filter = 'all' }) {
           <h2 className="text-xs font-mono font-bold text-emergency uppercase tracking-widest mb-3 flex items-center gap-2">
             Emergency <span className="bg-emergency/10 text-emergency px-2 py-0.5 rounded-pill">{emergency.length}</span>
           </h2>
-          {emergency.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={() => {}} />)}
+          {emergency.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={handleReviewed} />)}
         </div>
       )}
 
@@ -138,7 +178,7 @@ export default function Dashboard({ filter = 'all' }) {
           <h2 className="text-xs font-mono font-bold text-urgent uppercase tracking-widest mb-3 flex items-center gap-2">
             Urgent <span className="bg-urgent/10 text-urgent px-2 py-0.5 rounded-pill">{urgent.length}</span>
           </h2>
-          {urgent.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={() => {}} />)}
+          {urgent.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={handleReviewed} />)}
         </div>
       )}
 
@@ -147,7 +187,7 @@ export default function Dashboard({ filter = 'all' }) {
           <h2 className="text-xs font-mono font-bold text-routine uppercase tracking-widest mb-3 flex items-center gap-2">
             Routine <span className="bg-routine/10 text-routine px-2 py-0.5 rounded-pill">{routine.length}</span>
           </h2>
-          {routine.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={() => {}} />)}
+          {routine.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={handleReviewed} />)}
         </div>
       )}
 

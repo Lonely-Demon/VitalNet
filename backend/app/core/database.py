@@ -17,6 +17,9 @@ Reliability (CHAOS-005 to CHAOS-010):
 - Query timeouts handled at route level to prevent hanging requests
 - Graceful degradation patterns in analytics endpoints
 """
+import base64
+import hmac
+import json
 from typing import Optional
 import threading
 
@@ -74,15 +77,69 @@ def get_supabase_for_user(raw_token: str) -> Client:
     return client
 
 
+ALLOWED_JWT_ALGS = {"HS256", "RS256", "ES256"}
+
+
+def _decode_jwt_part(part: str) -> dict:
+    padded = part + "=" * (-len(part) % 4)
+    decoded = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
+    return json.loads(decoded)
+
+
+def extract_bearer_token(authorization: Optional[str]) -> str:
+    """
+    Extract and validate bearer token signature algorithm and format.
+    Raises HTTP 401 on missing or malformed header.
+    """
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    parts = authorization.strip().split(" ", 1)
+    if len(parts) != 2 or not hmac.compare_digest(parts[0].lower(), "bearer"):
+        raise HTTPException(
+            status_code=401,
+            detail="Malformed Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = parts[1].strip()
+    if token.count(".") != 2:
+        raise HTTPException(
+            status_code=401,
+            detail="Malformed bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        header = _decode_jwt_part(token.split(".", 1)[0])
+        alg = (header.get("alg") or "").upper()
+        if alg not in ALLOWED_JWT_ALGS:
+            raise HTTPException(
+                status_code=401,
+                detail="Unsupported token algorithm",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Malformed bearer token header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return token
+
+
 def get_db_session(authorization: Optional[str] = Header(None)) -> Client:
     """
     FastAPI Depends()-compatible dependency that extracts the Bearer token
     from the Authorization header and returns a user-scoped Supabase client.
     Raises HTTP 401 if the header is missing.
     """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    raw_token = authorization.split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     return get_supabase_for_user(raw_token)
 
 

@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Processed **54 queue items** from the data domain security audit. Created comprehensive remediation including database migration (phase15), audit logging module, and frontend security enhancements.
+Processed **54 queue items** from the data domain security audit. This addendum completes the remaining high-priority data backlog items with end-to-end audit wiring, consent persistence, patient-data deletion/anonymization, PHI log cleanup, review-history capture, schema integrity checks, and soft-delete consistency fixes.
 
 ---
 
@@ -34,9 +34,8 @@ Processed **54 queue items** from the data domain security audit. Created compre
 
 | Unit ID | Title | Blocker |
 |---------|-------|---------|
-| ROOT-COMPLY-001 | PHI to LLM without BAA | Legal: Need Groq BAA or alternative |
+| ROOT-COMPLY-001 | PHI to LLM without BAA | Legal: Need Groq BAA or alternative (technical fail-safe added) |
 | ROOT-COMPLY-006 | No data retention policy | Legal: Define retention periods |
-| ROOT-COMPLY-007 | No patient deletion endpoint | Partial: Endpoint implementation pending |
 
 ---
 
@@ -65,6 +64,47 @@ Processed **54 queue items** from the data domain security audit. Created compre
 - Explicit column projection in analytics queries
 - Parallel query execution with asyncio.gather
 - Soft-delete protection in review endpoint
+
+---
+
+## 2026-04-03 Addendum
+
+### Completed Backlog IDs
+- ROOT-COMPLY-001 (technical mitigation)
+- ROOT-COMPLY-002
+- ROOT-COMPLY-005
+- ROOT-COMPLY-007
+- ROOT-COMPLY-008
+- R3-DATA-REF-R3-006
+- R3-DATA-REF-R3-008
+- R3-DATA-SCHEMA-R3-004
+- R3-DATA-SCHEMA-R3-005
+- R3-DATA-MIGRATE-R3-004
+- R3-DATA-MIGRATE-R3-009
+- R3-DATA-LIFECYCLE-R3-006
+
+### Validation Results
+- `python -m ruff check ...` — passed
+- `python -m compileall app` — passed
+- `python tests/test_data_smoke.py` — passed
+- `python tests/test_health_endpoint.py` — passed
+- `npm run build` — passed
+
+### Files Added/Updated in This Addendum
+- `backend/app/api/routes/cases.py`
+- `backend/app/api/routes/security.py`
+- `backend/app/api/routes/admin_routes.py`
+- `backend/app/core/config.py`
+- `backend/app/core/database.py`
+- `backend/app/main.py`
+- `backend/app/models/schemas.py`
+- `backend/app/services/llm.py`
+- `frontend/src/hooks/useRealtimeCases.js`
+- `frontend/src/lib/offlineQueue.js`
+- `frontend/src/pages/Dashboard.jsx`
+- `frontend/src/store/authStore.jsx`
+- `backend/supabase/migrations/phase16_case_review_history.sql`
+- `backend/tests/test_data_smoke.py`
 
 ---
 

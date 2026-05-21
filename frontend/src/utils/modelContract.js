@@ -1,8 +1,6 @@
 export const MODEL_VERSION = '2.0.0'
 export const FEATURE_SCHEMA_VERSION = 'v45-2026-03-30'
-
 export const EXPECTED_ONNX_SHA256 = '3e26c57592b7312667fcaa8d01c7d46f7b350718ba2d6795de103d6a25530a68'
-
 export const CONFIDENCE_FLOOR = 0.72
 export const UNCERTAINTY_FLOOR = 0.1
 

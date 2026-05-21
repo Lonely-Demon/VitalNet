@@ -211,6 +211,7 @@ create table public.case_records (
     submitted_by         uuid references public.profiles(id),
     facility_id          uuid references public.facilities(id),
     -- Patient demographics
+    patient_name         text,
     patient_age          integer,
     patient_sex          text check (patient_sex in ('male','female','other')),
     patient_location     text,

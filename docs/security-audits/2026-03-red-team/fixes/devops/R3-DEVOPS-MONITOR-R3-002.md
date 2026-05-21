@@ -4,18 +4,16 @@
 - **Title:** Health coverage misses the clinician write path and RLS-scoped auth path
 - **Status:** completed
 
+## Evidence
+
+- `backend/app/main.py:176-199` — schema probe + optional RLS probe in health logic.
+
 ## Remediation
 
-Expanded health checks to include:
-
-- Schema compatibility probe for clinician-path-required columns
-- Optional RLS-scoped auth path probe using a dedicated health probe token
-
-This gives monitoring visibility into both baseline DB connectivity and auth-scoped path integrity.
+- Added schema compatibility probe for restore safety
+- Added optional RLS-scoped auth-path probe
 
 ## Files Modified
 
-- `backend/app/core/config.py`
-- `backend/app/core/database.py`
 - `backend/app/main.py`
-- `backend/.env.example`
+- `backend/app/core/database.py`

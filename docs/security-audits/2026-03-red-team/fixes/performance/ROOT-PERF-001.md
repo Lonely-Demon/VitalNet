@@ -1,49 +1,48 @@
 # Fix Log: ROOT-PERF-001
 
 ## Issue Solved
-The entire app bundle was loaded upfront (~2MB) without code splitting, affecting initial load performance especially on slow connections common in rural healthcare settings.
+The frontend chunking/layout strategy was incomplete:
+- vendor splitting was not deterministic across all dependency paths,
+- role panels were lazy in `App.jsx`, but heavy panel internals were still eagerly imported.
 
-**Bundled Source IDs**: PERF-001, PERF-BUNDLE-R3-001, PERF-BUNDLE-R3-002
+This increased cold-start JS and reduced cache reuse for repeat loads.
+
+**Bundled Source IDs**: `PERF-001`, `PERF-BUNDLE-R3-001`, `PERF-BUNDLE-R3-002`
 
 ## Fix Applied
-Added manual chunk splitting configuration in `vite.config.js`:
 
-```javascript
-build: {
-  rollupOptions: {
-    output: {
-      manualChunks: {
-        'vendor-react': ['react', 'react-dom'],
-        'vendor-charts': ['recharts'],
-        'vendor-supabase': ['@supabase/supabase-js'],
-        'vendor-date': ['date-fns'],
-      },
-    },
-  },
-  chunkSizeWarningLimit: 2000,
-},
-```
+### 1) Deterministic manual chunking in Vite
+Updated `frontend/vite.config.js` to use function-based `manualChunks(id)` with normalized module paths (`id.replace(/\\/g, '/')`) and stable bucket names:
+- `vendor-react`
+- `vendor-supabase`
+- `vendor-onnx`
+- `vendor-charts`
+- `vendor-date`
+- `vendor-misc`
 
-This separates:
-1. **vendor-react**: Core React libraries (~140KB gzipped) - loaded immediately
-2. **vendor-charts**: Recharts (~45KB gzipped) - only loaded on analytics pages
-3. **vendor-supabase**: Supabase client (~30KB gzipped) - loaded for authenticated users
-4. **vendor-date**: Date-fns utilities (~10KB gzipped) - loaded on demand
+Also kept `chunkSizeWarningLimit: 2000`.
 
-Note: ONNX runtime is NOT included in manual chunks because it's now dynamically imported (see ROOT-PERF-002).
+### 2) Lazy role panel loading in App
+`frontend/src/App.jsx` now lazy-loads role panels with explicit suspense fallback:
+- `ASHAPanel`, `DoctorPanel`, `AdminPanel` via `lazy(() => import(...))`
+- `<Suspense fallback={<PanelFallback />}>`
+
+### 3) Lazy heavy tab/page content inside panels
+To avoid pulling all admin/new-case code immediately:
+- `frontend/src/panels/AdminPanel.jsx` lazy-loads `AdminUsers`, `AdminFacilities`, `AdminStats`, `AnalyticsDashboard`
+- `frontend/src/panels/ASHAPanel.jsx` lazy-loads `IntakeForm`
 
 ## Why This Fix Was Chosen
-- Vite's rollup-based bundler supports `manualChunks` for explicit code splitting
-- Separating vendor chunks allows browser caching of stable dependencies
-- Chart libraries are only needed on analytics pages, not the intake form
-- This approach doesn't require route-based lazy loading changes in React
+- Deterministic chunk grouping improves long-term browser cache hit rates.
+- Lazy loading aligns shipped JS with current user role/tab intent.
+- Changes are isolated to bundling/import boundaries (low regression risk).
 
 ## Files Changed
-- `frontend/vite.config.js` - Added build.rollupOptions.output.manualChunks configuration
+- `frontend/vite.config.js`
+- `frontend/src/App.jsx`
+- `frontend/src/panels/AdminPanel.jsx`
+- `frontend/src/panels/ASHAPanel.jsx`
 
 ## Verification
-After the fix:
-- Run `npm run build` in the frontend directory
-- Check dist folder for separate chunk files (vendor-react-*.js, vendor-charts-*.js, etc.)
-- Initial page load should be faster as only required chunks are loaded
-- Use browser DevTools Network tab to verify chunks are loaded on demand
+- `npm run build` (frontend)
+- Build output confirms separate chunks: `vendor-react`, `vendor-supabase`, `vendor-onnx`, and split panel/tab chunks (`AdminPanel-*`, `IntakeForm-*`, etc.)
