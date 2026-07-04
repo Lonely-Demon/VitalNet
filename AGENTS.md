@@ -55,7 +55,7 @@ The backend currently uses standalone Python scripts under `backend/tests/` for 
 - **Imports**: 
   1. Standard library imports
   2. Third-party library imports (`fastapi`, `pydantic`, `supabase`)
-  3. Local application imports, using the full `app.*` package path (e.g. `from app.core.database import ...`, `from app.ml.classifier import ...`) — the backend is a proper `app/` package (see `ARCHITECTURE_RESTRUCTURE.md`), not flat files
+  3. Local application imports, using the full `app.*` package path (e.g. `from app.core.database import ...`, `from app.ml.classifier import ...`) — the backend is a proper `app/` package (see `docs/ARCHITECTURE_RESTRUCTURE.md`), not flat files
 - **Naming**: 
   - `snake_case` for variables, functions, and file names.
   - `PascalCase` for Pydantic models and classes.

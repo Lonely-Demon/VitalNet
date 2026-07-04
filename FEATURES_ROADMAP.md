@@ -66,7 +66,7 @@ system is unauditable from this repository.
    directly again except in a genuine emergency, and if you do, immediately
    follow up with `supabase db pull` to reconcile.
 6. Update `AGENTS.md`'s Database section to state this as the required
-   workflow (mirroring what `ARCHITECTURE_RESTRUCTURE.md` §3.3 already
+   workflow (mirroring what `docs/ARCHITECTURE_RESTRUCTURE.md` §3.3 already
    proposed but was apparently never executed).
 7. Add a CI job (or at minimum a documented manual step before merging any
    PR that touches `supabase/migrations/`) that runs `supabase db lint` and

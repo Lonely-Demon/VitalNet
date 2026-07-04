@@ -43,25 +43,30 @@ VitalNet/
 ├── frontend/           React 19 + Vite PWA — see §4
 ├── docs/
 │   ├── DISASTER_RECOVERY.md   Ops runbook: RTO/RPO targets, restore procedures
-│   └── security-audits/       Historical red-team audit trail (dated folders).
-│                       Read-only historical record — do not treat findings as
-│                       current state without cross-checking the code.
+│   ├── security-audits/       Historical red-team audit trail (dated folders).
+│   │                     Read-only historical record — do not treat findings as
+│   │                     current state without cross-checking the code.
+│   └── {ARCHITECTURE_RESTRUCTURE,REBUILD_INSTRUCTIONS,IMPROVEMENTS}.md
+│                         Historical execution logs from past hardening phases — all
+│                         marked [!NOTE] superseded-by-this-file at the top. Useful
+│                         for "why is it built this way" archaeology, not "what does
+│                         it do today." (Relocated here from repo root to declutter it —
+│                         still linked from AGENTS.md/FEATURES_ROADMAP.md where cited.)
 ├── colab/              Legacy Google Colab training script — historical reference only,
 │                       NOT wired into the app, trains on only 14 raw features (predates
 │                       ClinicalFeatureEngineer). Do not use its output as a production model.
-├── Context/            Historical phase-by-phase planning documents from earlier
-│                       development sprints. Read for history/rationale, not current state.
+├── Context/            Only test_credentials.md remains (linked from AGENTS.md/
+│                       README.md for E2E test account setup). The rest of this
+│                       directory's historical phase-by-phase planning documents was
+│                       removed as fully superseded by this file / FEATURES_ROADMAP.md —
+│                       recoverable from git history if ever needed.
 ├── .github/
 │   ├── workflows/ci.yml  Lint (PR) + pytest/build (push) on main and dev
 │   └── dependabot.yml    Daily pip/npm/actions update PRs, targeting dev
 ├── README.md           Setup, features, deployment — start here
 ├── AGENTS.md           Conventions for coding agents working in this repo
 ├── CODEBASE_MAP.md     This file
-├── FEATURES_ROADMAP.md Proposed feature backlog with implementation-ready specs
-└── {ARCHITECTURE_RESTRUCTURE,REBUILD_INSTRUCTIONS,IMPROVEMENTS}.md
-                        Historical execution logs from past hardening phases — all marked
-                        [!NOTE] superseded-by-this-file at the top. Useful for "why is it
-                        built this way" archaeology, not for "what does it do today."
+└── FEATURES_ROADMAP.md Proposed feature backlog with implementation-ready specs
 ```
 
 ## 3. Backend (`backend/`)
@@ -139,19 +144,38 @@ backend/
 │   │   │                             policy, orphan rollback on profile-provisioning
 │   │   │                             failure, profile/auth-metadata rollback on
 │   │   │                             partial failure), facility CRUD (optimistic-
-│   │   │                             concurrency toggle), system stats. All
+│   │   │                             concurrency toggle), system stats, audit-log
+│   │   │                             view, and POST /api/admin/users/bulk (CSV
+│   │   │                             onboarding — reuses _provision_user() per row,
+│   │   │                             one bad row doesn't fail the batch). All
 │   │   │                             admin-only (require_role('admin')), all
 │   │   │                             rate-limited and PHI-audit-logged.
 │   │   ├── analytics_routes.py       /api/analytics/* — aggregate stats, EMERGENCY
-│   │   │                             rate trend. Facility-scoped for 'doctor',
-│   │   │                             global for 'admin' (GLOBAL_SCOPE_ROLE constant).
-│   │   │                             Queries run concurrently (asyncio.gather over
-│   │   │                             asyncio.to_thread) with a per-query timeout and
-│   │   │                             graceful degradation (_degraded flag) instead of
-│   │   │                             failing the whole dashboard on one slow query.
-│   │   └── security.py               DELETE /api/security/cases/{id} — soft-delete
-│   │                                  (sets deleted_at, requires X-Device-Id), reuses
-│   │                                  cases.py's row-level authz helper. PHI-audit-logged.
+│   │   │                             rate trend, response-time SLA (median/p90/
+│   │   │                             overdue per tier), ML/doctor agreement rate,
+│   │   │                             and a case CSV export (streamed, PHI-audit-
+│   │   │                             logged as bulk egress). Facility-scoped for
+│   │   │                             'doctor', global for 'admin' (GLOBAL_SCOPE_ROLE
+│   │   │                             constant). Queries run concurrently
+│   │   │                             (asyncio.gather over asyncio.to_thread) with a
+│   │   │                             per-query timeout and graceful degradation
+│   │   │                             (_degraded flag) instead of failing the whole
+│   │   │                             dashboard on one slow query.
+│   │   ├── security.py               DELETE /api/security/cases/{id} — soft-delete
+│   │   │                             (sets deleted_at, requires X-Device-Id), reuses
+│   │   │                             cases.py's row-level authz helper. PHI-audit-logged.
+│   │   ├── push_routes.py            Web Push subscribe/unsubscribe, GET
+│   │   │                             /api/facilities (doctor-accessible target
+│   │   │                             picker), and the unreviewed-EMERGENCY re-alert
+│   │   │                             endpoint (POST /api/push/check-emergency-
+│   │   │                             escalations — idempotent, meant to be driven by
+│   │   │                             an external scheduler/cron). Send logic lives
+│   │   │                             in app/services/push.py to avoid a circular
+│   │   │                             import with cases.py.
+│   │   └── referral_routes.py        Inter-facility referral workflow — POST
+│   │                                  /api/cases/{id}/refer, GET /api/referrals,
+│   │                                  PATCH /api/referrals/{id}/status (forward-only
+│   │                                  state machine, receiving-facility-only).
 │   ├── models/schemas.py            Pydantic request/response models. IntakeForm is
 │   │                                 the case-submission contract — every field is
 │   │                                 bounded (min/max length, numeric ranges, enums),
@@ -341,9 +365,15 @@ Realtime on `case_records`; `phase15_data_security_hardening.sql` — CHECK
 constraints, FKs, indexes, the `case_reviews` and `phi_audit_log` tables,
 consent-capture columns, RLS policies, a `submitted_by`-immutability trigger;
 `phase16_llm_review_fields.sql` — `low_confidence`/`llm_status`/
-`needs_review`/`human_review_requested`/`human_review_reason` columns). Run
-them in order against the live Supabase project's SQL editor (or via the
-Supabase CLI) — they're written to be safe to re-run.
+`needs_review`/`human_review_requested`/`human_review_reason` columns;
+`phase17_triage_provenance_and_override.sql` — `triage_model_version`,
+doctor-override columns, the `case_outcomes` table; `phase18_
+push_subscriptions.sql` — `push_subscriptions` table, `case_records.
+last_escalated_at`; `phase19_referrals.sql` — the `referrals` table + RLS +
+Realtime; `phase20_case_attachments.sql` — the `case_attachments` schema
+scaffold, SELECT/INSERT RLS only, no live upload endpoint yet). Run them in
+order against the live Supabase project's SQL editor (or via the Supabase
+CLI) — they're written to be safe to re-run.
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`
@@ -360,16 +390,36 @@ Supabase CLI) — they're written to be safe to re-run.
   (unique, idempotency key), `submitted_by` (immutable — trigger-enforced),
   `facility_id`, `reviewed_by`, `reviewed_at`, `created_offline`,
   `client_submitted_at`, `deleted_at` (soft delete via
-  `DELETE /api/security/cases/{id}`), `created_at`.
+  `DELETE /api/security/cases/{id}`), `triage_model_version`,
+  `overridden_triage`/`override_reason`/`overridden_by`/`overridden_at`,
+  `last_escalated_at` (EMERGENCY re-alert tracking), `created_at`.
 - `case_reviews` — append-only per-review audit trail (`case_id`,
   `reviewer_id`, `reviewed_at`, `note`), one row inserted per
   `PATCH /api/cases/{id}/review`.
 - `phi_audit_log` — `event_type`, `user_id`, `user_role`, `resource_type`,
   `resource_id`, `facility_id`, `ip_address`, `details` (JSONB),
-  `created_at`. INSERT-only via RLS; SELECT restricted to `admin`. Currently
-  a prepared destination — `app/core/audit.py` logs structured lines to the
-  `vitalnet.audit` logger but does not write rows here yet (future
-  log-shipper integration point).
+  `created_at`. INSERT-only via RLS; SELECT restricted to `admin`.
+  `app/core/audit.py::log_phi_access()` writes here (best-effort, non-
+  blocking) in addition to the `vitalnet.audit` structured logger — viewable
+  via `GET /api/admin/audit-log` / `AdminAuditLog.jsx`.
+- `case_outcomes` — real-world patient outcome per case (`case_id`,
+  `recorded_by`, `actual_severity`, `patient_disposition`, `outcome_notes`,
+  `recorded_at`). Insert-only (immutable — corrections are new rows), the
+  real-label source for `retrain_from_outcomes.py` and the ML-agreement
+  analytics endpoint.
+- `push_subscriptions` — Web Push endpoint/keys per user (`user_id`,
+  `facility_id`, `endpoint` unique, `p256dh_key`, `auth_key`). Deleted
+  automatically on a 410-Gone send response (stale subscription cleanup).
+- `referrals` — inter-facility referral workflow (`case_id`, `referred_by`,
+  `referring_facility_id`, `receiving_facility_id`, `reason`, `urgency`,
+  `status` — `pending`/`acknowledged`/`patient_arrived`/`completed`/
+  `cancelled`, forward-only transitions). RLS: visible to admin or either
+  facility side; insert by the referring side; status updates by the
+  receiving side only. Realtime-enabled.
+- `case_attachments` — **schema scaffolding only** (FEATURES_ROADMAP §3.2),
+  no live upload endpoint yet. `case_id`, `uploaded_by`, `storage_path`
+  (generic string, storage-backend-agnostic), `content_type`, `size_bytes`.
+  RLS mirrors `case_outcomes`; immutable by omission.
 
 **Role scoping model** (enforced consistently in application code — see §3's
 route descriptions): `admin` = global scope (sees/manages everything). `doctor`
