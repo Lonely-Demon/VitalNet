@@ -29,10 +29,18 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await supabase
         .from('profiles')
-        .select('*')
+        .select('*, facilities(phone)')
         .eq('id', userId)
         .single()
-      if (data) setProfile(data)
+      if (data) {
+        setProfile(data)
+        // Cached to localStorage (not just React state) so the facility
+        // contact number survives an offline reload — the offline-emergency
+        // SMS alert (IntakeForm.jsx) needs it precisely when there's no
+        // network to re-fetch it.
+        const phone = data.facilities?.phone
+        if (phone) localStorage.setItem('vn_facility_phone', phone)
+      }
     } catch {
       // Offline or network error — keep existing profile (don't blank the page)
       console.warn('[VitalNet] Profile fetch failed (offline?), keeping cached state')

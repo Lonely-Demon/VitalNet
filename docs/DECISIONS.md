@@ -269,3 +269,36 @@ correct syntax.
 **Consequences**: if a future PR shows a CodeQL alert on a line you believe
 is already-reviewed/accepted, check the suppression comment's syntax and
 exact placement before assuming the finding is new.
+
+### 14. Offline-emergency SMS alert carries no PHI, by design
+
+**Context**: VitalNet's original design intent (predating this repo's
+current hardening passes) included an offline fallback: if an ASHA
+worker's device is offline and the on-device triage is EMERGENCY, the case
+sits in the sync queue until connectivity returns — which in a low-signal
+area could be hours. That gap was never closed until this pass
+(`EmergencySmsAlert.jsx`, wired into `IntakeForm.jsx`'s queued-result view).
+
+**Decision**: the alert is a plain `sms:` URI intent (an `<a>` tag, not a
+network call) pre-filled with a **fixed, generic workflow-ping message**
+that names no patient, no vitals, and no diagnosis — just "an
+EMERGENCY-classified case is queued offline, please check the queue." SMS
+is unencrypted and often visible in a shared device's default messaging
+app, so no PHI is ever placed in the body, matching the third guardrail
+layer in `docs/CLINICAL_GOVERNANCE.md` (mandatory uncertainty/limits
+signalling) and the fifth (accountability separation — this is a workflow
+ping, explicitly not a clinical handoff). The facility's contact number is
+fetched once (joined onto the profile fetch in `authStore.jsx`) and cached
+to `localStorage` (`vn_facility_phone`) specifically so it survives an
+offline reload; if it's missing (first-ever offline session before any
+online profile fetch), the `sms:` URI is left without a number and the UI
+tells the ASHA worker to pick a contact manually — the button still works,
+it just can't pre-address it.
+
+**Consequences**: this is a best-effort convenience, not a guaranteed
+delivery channel (no signal at all means no SMS either — that's a physical
+limit no software fixes) and it is one-way and unconfirmed (no delivery
+receipt is tracked). It is deliberately separate from both the Web Push
+re-alert (online-only) and the Tier-3 SMS-inbound scaffolding
+(`app/services/sms.py`, ASHA→backend submission direction) — three
+different features that happen to share the same underlying transport.

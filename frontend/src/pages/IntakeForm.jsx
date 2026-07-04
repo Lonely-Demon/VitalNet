@@ -8,6 +8,7 @@ import { useLocalTriage } from '../hooks/useLocalTriage'
 import { useDraftSave } from '../hooks/useDraftSave'
 import { validateForm } from '../utils/validation'
 import VoiceInputButton from '../components/VoiceInputButton'
+import { EmergencySmsAlert } from '../components/EmergencySmsAlert'
 
 // Stable English identifiers — these are the actual values submitted to the
 // API (chief_complaint is a free-text-ish field, not a coded enum server-
@@ -274,6 +275,7 @@ export default function IntakeForm() {
                   )}
                 </div>
               )}
+              {offlineTriage?.triageLevel === 'EMERGENCY' && <EmergencySmsAlert />}
               <div className="mb-6">
                 <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide shadow-sm bg-sand text-urgent border border-urgent/20 font-mono">
                   {t('intakeForm.result.savedOfflineBadge')}

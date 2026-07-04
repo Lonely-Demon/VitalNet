@@ -118,7 +118,12 @@
       "savedLocallyNoTriage": "It will be submitted automatically when connectivity is restored.",
       "savedOfflineBadge": "SAVED OFFLINE",
       "lowConfidenceShort": "Model uncertain — human review required",
-      "successTitle": "Case Successfully Logged"
+      "successTitle": "Case Successfully Logged",
+      "emergencySmsTitle": "Facility offline — sent an alert instead?",
+      "emergencySmsDescription": "This case is offline and classified EMERGENCY. If the facility has cell signal, send a workflow alert by SMS so staff know to check the queue as soon as this device reconnects. This message carries no patient details.",
+      "emergencySmsButton": "Alert facility by SMS",
+      "emergencySmsBody": "VitalNet ALERT: an EMERGENCY-classified case is queued offline at this facility's ASHA worker device. Please check the VitalNet queue as soon as possible. This is an automated workflow alert, not a clinical recommendation.",
+      "emergencySmsNoNumber": "No facility phone number on file — choose a contact manually in your messaging app."
     },
     "preliminary": {
       "label": "Preliminary triage",

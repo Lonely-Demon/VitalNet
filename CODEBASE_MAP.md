@@ -442,6 +442,10 @@ frontend/src/
 │                              branching). Panels are React.lazy()-loaded per role so a
 │                              given user only downloads their own panel's code.
 ├── store/authStore.jsx       AuthProvider/useAuth — Supabase session + profile state.
+│                              Profile fetch joins facilities(phone) and caches it to
+│                              localStorage (vn_facility_phone) — the one piece of
+│                              profile data that must survive an offline reload, for
+│                              EmergencySmsAlert.jsx (docs/DECISIONS.md §14).
 ├── lib/
 │   ├── supabase.js            Supabase client — IndexedDB-backed session storage
 │   │                          (survives memory pressure better than localStorage on
@@ -510,7 +514,11 @@ frontend/src/
 │   │                          VoiceInputButton (mic button, renders nothing on
 │   │                          unsupported browsers), ReferralsPanel (outgoing/incoming
 │   │                          referral list with live status-advance actions),
-│   │                          AnalyticsDashboard (includes the CSV export control).
+│   │                          AnalyticsDashboard (includes the CSV export control),
+│   │                          EmergencySmsAlert (offline-emergency sms: URI intent —
+│   │                          shown in IntakeForm's queued-result view when the local
+│   │                          triage is EMERGENCY; PHI-free fixed message body, see
+│   │                          docs/DECISIONS.md §14).
 │   └── admin/                 AdminUsers (includes the CSV bulk-import upload/preview
 │                              flow), AdminFacilities, AdminStats, AdminAuditLog.
 public/
