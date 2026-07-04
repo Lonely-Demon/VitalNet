@@ -287,6 +287,41 @@ concurrent-update race.
 
 ---
 
+## Data-subject requests (`app/api/routes/dsr_routes.py`, prefix `/api/admin/cases`)
+
+DPDP Act 2023 data-principal rights (`docs/COMPLIANCE_DPDP.md`). Admin-only
+and scoped to a single `case_id` — VitalNet has no cross-visit patient
+identifier (`docs/DECISIONS.md` §6), so locating every case for one
+real-world patient is a manual admin-search step, not something these
+endpoints automate.
+
+### `GET /{case_id}/export` — 10/min — `admin`
+Right to access. Returns `{ case_id, exported_at, case, outcomes,
+attachments, referrals }` — every row across `case_records`,
+`case_outcomes`, `case_attachments`, and `referrals` tied to that case.
+Not filtered on `deleted_at` — applies regardless of soft-delete state.
+Audit-logged as `PHI_EXPORT`.
+
+### `POST /{case_id}/erase` — 10/min — `admin`
+Right to erasure. Redacts `case_records`' identifying free-text fields
+(`patient_name`, `patient_location`, `chief_complaint`, `observations`,
+`known_conditions`, `current_medications`) and `referrals.reason` to a
+fixed marker, and soft-deletes the case if not already. Vitals, symptoms,
+triage output, and timestamps are preserved (de-identified clinical
+signal). `case_outcomes` is never touched — it's immutable-by-design and
+carries no direct identifier. **Response**: `{ status: "erased", case_id,
+redacted_fields }`. Audit-logged as `PHI_ERASURE`.
+
+### `POST /purge-expired` — 6/min — `admin`
+Retention-policy sweep, meant to be invoked on a schedule by an external
+scheduler — same pattern as `POST /api/push/check-emergency-escalations`.
+Applies the same redaction as `/erase` to every not-yet-redacted case older
+than `settings.data_retention_days`. No-op (`{ enabled: false, purged: 0 }`)
+when `data_retention_days` is `0`, the default. **Response**: `{ enabled,
+checked, purged }`.
+
+---
+
 ## Security (`app/api/routes/security.py`, prefix `/api/security`)
 
 ### `DELETE /cases/{case_id}` — 30/min

@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:admin@example.com"
 
+    # ── Data retention (docs/COMPLIANCE_DPDP.md) ──────────────────────────────
+    # POST /api/admin/cases/purge-expired anonymises (not hard-deletes)
+    # case_records older than this window, applying the same redaction as
+    # POST /api/admin/cases/{id}/erase. Not wired to an automatic cron here —
+    # an operator or external scheduler hits the endpoint, same pattern as
+    # the existing re-alert job (push_routes.py). 0 disables the endpoint.
+    data_retention_days: int = 0
+
     @property
     def allowed_origins(self) -> list[str]:
         origins: list[str] = []

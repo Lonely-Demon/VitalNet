@@ -232,10 +232,18 @@ backend/
 │   │   │                             an external scheduler/cron). Send logic lives
 │   │   │                             in app/services/push.py to avoid a circular
 │   │   │                             import with cases.py.
-│   │   └── referral_routes.py        Inter-facility referral workflow — POST
-│   │                                  /api/cases/{id}/refer, GET /api/referrals,
-│   │                                  PATCH /api/referrals/{id}/status (forward-only
-│   │                                  state machine, receiving-facility-only).
+│   │   ├── referral_routes.py        Inter-facility referral workflow — POST
+│   │   │                             /api/cases/{id}/refer, GET /api/referrals,
+│   │   │                             PATCH /api/referrals/{id}/status (forward-only
+│   │   │                             state machine, receiving-facility-only).
+│   │   └── dsr_routes.py             DPDP data-subject-request lifecycle
+│   │                                 (docs/COMPLIANCE_DPDP.md), admin-only, scoped
+│   │                                 to a single case_id: GET .../export (right to
+│   │                                 access), POST .../erase (right to erasure —
+│   │                                 redacts identifying fields, never touches the
+│   │                                 immutable case_outcomes table), POST
+│   │                                 .../purge-expired (retention sweep, external-
+│   │                                 scheduler-driven like the re-alert endpoint).
 │   ├── models/schemas.py            Pydantic request/response models. IntakeForm is
 │   │                                 the case-submission contract — every field is
 │   │                                 bounded (min/max length, numeric ranges, enums),
@@ -322,9 +330,11 @@ backend/
 │   ├── test_classifier_safety.py     Property tests for the safety guarantees (extreme
 │   │                                 vitals → EMERGENCY; concerning vital never ROUTINE;
 │   │                                 low_confidence present). Run in CI.
-│   ├── test_admin_authz.py           Asserts every /api/admin route is require_role
-│   │                                 ('admin')-guarded (the only boundary on the RLS-
-│   │                                 bypassing service-role client). Run in CI.
+│   ├── test_admin_authz.py           Asserts every /api/admin route — across
+│   │                                 admin_routes.py AND dsr_routes.py (see
+│   │                                 ADMIN_ROUTE_MODULES) — is require_role('admin')-
+│   │                                 guarded (the only boundary on the RLS-bypassing
+│   │                                 service-role client). Run in CI.
 │   ├── test_feature_parity.py        Python half of the online/offline ML parity
 │   │                                 guarantee — replays golden_feature_vectors.json
 │   │                                 through ClinicalFeatureEngineer. JS half is
@@ -336,6 +346,10 @@ backend/
 │   ├── test_sms_parser.py            Unit tests for the SMS scaffolding's fixed-format
 │   │                                 parser (app/services/sms.py) — pure logic, no
 │   │                                 DB/network mocking needed.
+│   ├── test_dsr_routes.py            Unit tests for dsr_routes.py's plain helper
+│   │                                 functions — redaction field coverage, deleted_at
+│   │                                 idempotency, and that case_outcomes is never
+│   │                                 written (immutable-by-design invariant).
 │   └── test_e2e.py                   Full integration test against a running server +
 │                                     real Supabase auth (needs seeded test users).
 │                                     NOT run in unit CI (needs a live server).

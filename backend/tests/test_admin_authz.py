@@ -1,12 +1,13 @@
 """
 Authorization regression test for the admin surface.
 
-Every route under app/api/routes/admin_routes.py uses the RLS-bypassing
-service-role client (supabase_admin). Its ONLY access-control boundary is
-require_role('admin') — there is no RLS backstop (see the SECURITY NOTE in
-app/core/database.py). This test asserts that boundary is present on every admin
-route, so a future route added without it fails CI instead of silently exposing
-cross-tenant data.
+Every route under /api/admin/* (across admin_routes.py and dsr_routes.py)
+uses the RLS-bypassing service-role client (supabase_admin). Its ONLY
+access-control boundary is require_role('admin') — there is no RLS backstop
+(see the SECURITY NOTE in app/core/database.py). This test asserts that
+boundary is present on every admin route, so a future route (in either
+module, or a new one added to ADMIN_ROUTE_MODULES below) fails CI instead of
+silently exposing cross-tenant data.
 
 Sets fake JWT-format Supabase creds in the environment before import so the
 module-level client construction in database.py succeeds without a real project
@@ -28,7 +29,11 @@ os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret-at-least-32-chars-long
 os.environ.setdefault("GROQ_API_KEY", "test-key")
 
 from fastapi.routing import APIRoute  # noqa: E402
-from app.api.routes import admin_routes  # noqa: E402
+from app.api.routes import admin_routes, dsr_routes  # noqa: E402
+
+# Every router module that owns /api/admin/* routes. Add new ones here so
+# this test keeps covering the whole admin surface as it grows.
+ADMIN_ROUTE_MODULES = [admin_routes, dsr_routes]
 
 
 def _enforced_roles(route: APIRoute) -> set:
@@ -52,7 +57,12 @@ def _enforced_roles(route: APIRoute) -> set:
 
 
 def test_all_admin_routes_require_admin_only():
-    routes = [r for r in admin_routes.router.routes if isinstance(r, APIRoute)]
+    routes = [
+        r
+        for module in ADMIN_ROUTE_MODULES
+        for r in module.router.routes
+        if isinstance(r, APIRoute)
+    ]
     assert routes, "no admin routes discovered — test wiring is wrong"
 
     failures = []
@@ -69,5 +79,8 @@ def test_all_admin_routes_require_admin_only():
 
 if __name__ == "__main__":
     test_all_admin_routes_require_admin_only()
-    n = len([r for r in admin_routes.router.routes if isinstance(r, APIRoute)])
+    n = sum(
+        len([r for r in module.router.routes if isinstance(r, APIRoute)])
+        for module in ADMIN_ROUTE_MODULES
+    )
     print(f"PASS test_all_admin_routes_require_admin_only — all {n} admin routes are admin-only")

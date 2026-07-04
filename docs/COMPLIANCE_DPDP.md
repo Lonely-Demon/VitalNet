@@ -88,14 +88,14 @@ captured at the point of intake:
   guidance with counsel at the time of any real incident).
   `docs/INCIDENT_RESPONSE.md` documents the operational runbook this
   triggers.
-- **Retention limitation:** `scripts/purge_expired_records.py` (operator or
-  external-scheduler run, mirroring the existing re-alert pattern in
-  `docs/DECISIONS.md`) implements a configurable retention window
-  (`DATA_RETENTION_DAYS` setting) — anonymising records past that window
-  the same way the erasure endpoint does. It is not wired to an automatic
-  cron inside this codebase (this repo has no infrastructure-managed
-  scheduler); a deployment must invoke it on a schedule (cron/Railway
-  scheduled job/etc.) appropriate to its own retention policy.
+- **Retention limitation:** `POST /api/admin/cases/purge-expired` implements
+  a configurable retention window (`data_retention_days` setting) —
+  anonymising records past that window the same way the erasure endpoint
+  does. Like the existing unreviewed-EMERGENCY re-alert endpoint
+  (`docs/DECISIONS.md`), it is meant to be hit on a schedule by an external
+  scheduler (cron/Railway scheduled job/Supabase pg_cron/etc.), not run
+  automatically inside this codebase; `data_retention_days = 0` (the
+  default) disables it.
 - **Data Protection Officer / significant data fiduciary obligations:**
   whether VitalNet's operator is a "Significant Data Fiduciary" under the
   Act (triggering DPO appointment, data protection impact assessments, and

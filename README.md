@@ -147,7 +147,9 @@ Optional but worth knowing about (all documented in `backend/.env.example`):
 `GEMINI_API_KEY`, `FRONTEND_URL`/`CORS_ALLOWED_ORIGINS`, `ENVIRONMENT`,
 `API_DOCS_ENABLED`, `RATE_LIMIT_STORAGE_URI` (Redis for multi-instance
 deployments), `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` (Web
-Push — omit to disable push notifications entirely, Realtime still works).
+Push — omit to disable push notifications entirely, Realtime still works),
+`DATA_RETENTION_DAYS` (DPDP retention sweep, `docs/COMPLIANCE_DPDP.md` —
+0 disables it).
 
 Run the server:
 ```bash
