@@ -7,12 +7,16 @@ degradation: one slow/failing query returns partial data with a `_degraded`
 flag instead of taking the whole dashboard down.
 """
 import asyncio
+import csv
+import io
 import logging
 import statistics
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Header, Depends, Request
+from fastapi import APIRouter, Header, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
+from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.auth import require_role
 from app.core.database import get_supabase_for_user
 from app.api.routes.cases import limiter
@@ -349,3 +353,95 @@ async def get_ml_agreement(
     if failures:
         response["_degraded"] = True
     return response
+
+
+# ── Case CSV Export (FEATURES_ROADMAP §1b.3) ──────────────────────────────────
+
+EXPORT_MAX_RANGE_DAYS = 366
+EXPORT_COLUMNS = [
+    "id", "created_at", "reviewed_at", "triage_level", "triage_confidence",
+    "overridden_triage", "override_reason", "risk_driver", "chief_complaint",
+    "patient_age", "patient_sex", "patient_location", "facility_id",
+    "submitted_by", "reviewed_by", "needs_review", "triage_model_version",
+]
+
+
+@router.get("/export")
+@limiter.limit("10/minute")
+async def export_cases(
+    request: Request,
+    date_from: str,
+    date_to: str,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("doctor", "admin")),
+):
+    """
+    Streams a CSV of case records in [date_from, date_to] for facility
+    reporting, scoped the same way as the other analytics endpoints (admin:
+    all facilities; doctor: own facility only). Columns match exactly what
+    these roles already see via GET /api/cases — this is a different export
+    format of already-authorized data, not a new access grant. Every export
+    is logged via the PHI audit trail (this is bulk PHI egress).
+    """
+    try:
+        parsed_from = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+        parsed_to = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be ISO 8601 dates")
+    if parsed_from.tzinfo is None:
+        parsed_from = parsed_from.replace(tzinfo=timezone.utc)
+    if parsed_to.tzinfo is None:
+        parsed_to = parsed_to.replace(tzinfo=timezone.utc)
+    if parsed_to < parsed_from:
+        raise HTTPException(status_code=400, detail="date_to must be after date_from")
+    if (parsed_to - parsed_from).days > EXPORT_MAX_RANGE_DAYS:
+        raise HTTPException(status_code=400, detail=f"Date range cannot exceed {EXPORT_MAX_RANGE_DAYS} days")
+
+    raw_token = (authorization or "").split(" ", 1)[-1]
+    db = get_supabase_for_user(raw_token)
+
+    role = user.get("resolved_role") or ""
+    facility_id = user.get("resolved_facility_id")
+    scoped = role != GLOBAL_SCOPE_ROLE and facility_id
+
+    def build_query():
+        q = (
+            db.table("case_records")
+            .select(",".join(EXPORT_COLUMNS))
+            .is_("deleted_at", "null")
+            .gte("created_at", parsed_from.isoformat())
+            .lte("created_at", parsed_to.isoformat())
+            .order("created_at", desc=False)
+        )
+        return (q.eq("facility_id", facility_id) if scoped else q).execute()
+
+    failures: list[str] = []
+    res = await _run_query(build_query, "export", failures)
+    if failures:
+        raise HTTPException(status_code=502, detail="Export query failed — try a narrower date range")
+    rows = (res.data if res else []) or []
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    buffer.seek(0)
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_EXPORT,
+        user_id=user.get("sub", "unknown"),
+        user_role=role,
+        resource_type="case_records",
+        resource_id=None,
+        facility_id=facility_id if scoped else None,
+        ip_address=get_client_ip(request),
+        details={"row_count": len(rows), "date_from": date_from, "date_to": date_to},
+    )
+
+    filename = f"vitalnet_cases_{parsed_from.date()}_{parsed_to.date()}.csv"
+    return StreamingResponse(
+        buffer,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

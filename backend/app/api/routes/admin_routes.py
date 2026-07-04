@@ -53,6 +53,10 @@ class CreateUserRequest(BaseModel):
     asha_id: Optional[str] = Field(None, max_length=50)
 
 
+class BulkCreateUsersRequest(BaseModel):
+    users: list[CreateUserRequest] = Field(min_length=1, max_length=100)
+
+
 class UpdateUserRequest(BaseModel):
     role: Optional[Literal['asha_worker', 'doctor', 'admin']] = None
     facility_id: Optional[str] = None
@@ -136,18 +140,13 @@ async def list_users(
     return {"data": result, "page": page, "limit": limit}
 
 
-@router.post('/users')
-@limiter.limit("10/minute")
-async def create_user(
-    request: Request,
-    body: CreateUserRequest,
-    authorization: str = Header(None),
-    user: dict = Depends(require_role('admin')),
-):
+def _provision_user(body: CreateUserRequest) -> dict:
     """
-    Creates a new auth user and their profile row.
-    email_confirm=True so new users can log in immediately without
-    going through email verification flow.
+    Core create-user logic shared by create_user (single) and
+    bulk_create_users (§1b.4). email_confirm=True so new users can log in
+    immediately without going through the email verification flow.
+    Raises HTTPException exactly as the single-user endpoint always has —
+    bulk creation catches it per-row so one bad row can't fail the batch.
     """
     _validate_password(body.password)
 
@@ -191,18 +190,75 @@ async def create_user(
             detail="Failed to initialize user profile. The created account was rolled back.",
         )
 
+    return {'id': new_user_id, 'email': body.email}
+
+
+@router.post('/users')
+@limiter.limit("10/minute")
+async def create_user(
+    request: Request,
+    body: CreateUserRequest,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role('admin')),
+):
+    result = _provision_user(body)
+
     log_phi_access(
         event_type=AuditEventType.PHI_CREATE,
         user_id=user.get("sub", "unknown"),
         user_role=user.get("resolved_role"),
         resource_type="profiles",
-        resource_id=new_user_id,
+        resource_id=result['id'],
         facility_id=body.facility_id,
         ip_address=get_client_ip(request),
         details={"created_role": body.role},
     )
 
-    return {'id': new_user_id, 'email': body.email}
+    return result
+
+
+@router.post('/users/bulk')
+@limiter.limit("3/minute")
+async def bulk_create_users(
+    request: Request,
+    body: BulkCreateUsersRequest,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role('admin')),
+):
+    """
+    Bulk ASHA/doctor onboarding via CSV import (FEATURES_ROADMAP §1b.4).
+    Reuses _provision_user per row so each row gets the same password-policy
+    enforcement and profile-provisioning rollback as the single-user
+    endpoint; one bad row (duplicate email, weak password, etc.) is reported
+    per-row rather than failing the whole batch. Passwords are never echoed
+    back in the report.
+    """
+    results = []
+    for i, row in enumerate(body.users):
+        try:
+            created = _provision_user(row)
+        except HTTPException as e:
+            results.append({"row": i, "email": row.email, "status": "error", "detail": e.detail})
+            continue
+        except Exception as e:
+            logger.error("Bulk user creation failed for row %d (%s): %s", i, row.email, e)
+            results.append({"row": i, "email": row.email, "status": "error", "detail": "Unexpected error creating this user"})
+            continue
+
+        log_phi_access(
+            event_type=AuditEventType.PHI_CREATE,
+            user_id=user.get("sub", "unknown"),
+            user_role=user.get("resolved_role"),
+            resource_type="profiles",
+            resource_id=created['id'],
+            facility_id=row.facility_id,
+            ip_address=get_client_ip(request),
+            details={"created_role": row.role, "bulk": True},
+        )
+        results.append({"row": i, "email": row.email, "status": "created", "id": created['id']})
+
+    succeeded = sum(1 for r in results if r["status"] == "created")
+    return {"results": results, "succeeded": succeeded, "failed": len(results) - succeeded}
 
 
 @router.patch('/users/{user_id}')

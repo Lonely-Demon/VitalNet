@@ -28,6 +28,9 @@ export default defineConfig({
           'models/triage_trees.json',
           'models/features_config.json',
         ],
+        // Web Push handler (FEATURES_ROADMAP §1.4) — a small standalone
+        // script rather than switching to injectManifest mode.
+        importScripts: ['sw-push.js'],
 
         // Background Sync for POST /api/submit (in-flight failure recovery)
         runtimeCaching: [{

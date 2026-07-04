@@ -21,10 +21,11 @@ export {
   adminUpdateUser,
   adminDeactivateUser,
   adminReactivateUser,
+  adminBulkCreateUsers,
   adminListFacilities,
   adminCreateFacility,
   adminToggleFacility,
   adminGetStats,
   adminGetAuditLog,
 } from '@/api/admin'
-export { getAnalyticsSummary, getEmergencyRate, getResponseTimes, getMlAgreement } from '@/api/analytics'
+export { getAnalyticsSummary, getEmergencyRate, getResponseTimes, getMlAgreement, exportCases } from '@/api/analytics'

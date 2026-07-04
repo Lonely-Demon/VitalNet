@@ -8,7 +8,7 @@ import uuid as uuid_lib
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from slowapi import Limiter
 
 from app.core.auth import require_role, verify_sub_for_rate_limit
@@ -18,6 +18,7 @@ from app.core.database import get_supabase_for_user
 from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput
 from app.ml.classifier import run_triage
 from app.services.llm import generate_briefing
+from app.services.push import push_emergency_alert
 
 logger = logging.getLogger("vitalnet")
 
@@ -113,6 +114,7 @@ def _authorize_case_row_access(user: dict, row: dict) -> None:
 async def submit_case(
     request: Request,       # required first positional param for slowapi
     form: IntakeForm,
+    background_tasks: BackgroundTasks,
     authorization: str = Header(None),
     user: dict = Depends(require_role("asha_worker", "admin")),
 ):
@@ -209,6 +211,18 @@ async def submit_case(
             ip_address=get_client_ip(request),
             details={"created_offline": bool(form.created_offline), "needs_review": bool(record.get("needs_review"))},
         )
+
+        # Genuinely new EMERGENCY case (not a retried duplicate) — notify the
+        # facility's subscribed doctors. Background task: never adds latency
+        # to the ASHA worker's submission response, and push_emergency_alert()
+        # itself no-ops safely if VAPID isn't configured.
+        if bool(result.data) and triage_result["triage_level"] == "EMERGENCY":
+            background_tasks.add_task(
+                push_emergency_alert,
+                facility_id,
+                "EMERGENCY case submitted",
+                f"{form_data.get('chief_complaint', form.chief_complaint)} — {triage_result['risk_driver']}"[:150],
+            )
 
         return response
     except HTTPException:

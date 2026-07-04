@@ -240,9 +240,31 @@ produces a model that measurably shifts toward the recorded outcomes.
 
 ---
 
-### 1.4 Web Push notifications for EMERGENCY cases
+### 1.4 Web Push notifications for EMERGENCY cases — ✅ DONE
 
-**Why**: Today, a doctor only learns about a new EMERGENCY case if their
+**Status**: Implemented. New `push_subscriptions` table (migration
+`phase18_push_subscriptions.sql`), `POST`/`DELETE /api/push/subscribe`
+(`require_role('doctor', 'admin')`) in `app/api/routes/push_routes.py`, VAPID
+settings (`vapid_public_key`/`vapid_private_key`/`vapid_subject`) in
+`config.py`. `app/services/push.py` holds the actual send logic (kept in a
+separate module from `push_routes.py` to avoid a circular import with
+`cases.py`, which calls it) — it no-ops cleanly if VAPID keys are unconfigured,
+and deletes a subscription on a `410 Gone` response (expired subscription).
+`cases.py::submit_case` fires `push_emergency_alert` via FastAPI
+`BackgroundTasks` after a successful EMERGENCY-tier submission, so the push
+send never adds latency to the ASHA worker's response. Frontend:
+`frontend/src/lib/push.js` (permission request + `pushManager.subscribe()` +
+POST to the backend), `frontend/src/components/PushPrompt.jsx` (a dismissible
+bottom-left prompt, shown once per browser via `localStorage`, mounted from
+`DoctorPanel.jsx` — never forced, since Realtime-while-open remains the
+primary channel), and `frontend/public/sw-push.js` (the `push` /
+`notificationclick` handlers, injected into the Workbox-generated service
+worker via `workbox.importScripts` in `vite.config.js` — no `injectManifest`
+mode needed for this one script). New env vars: `VAPID_PUBLIC_KEY` /
+`VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` (backend `.env.example`) and
+`VITE_VAPID_PUBLIC_KEY` (frontend `.env.example`).
+
+**Why (original)**: Today, a doctor only learns about a new EMERGENCY case if their
 dashboard tab is open and they notice the toast (`Dashboard.jsx`'s
 `useRealtimeCases` `onInsert` handler). If the tablet's screen is off, the
 browser tab is backgrounded or closed, or the doctor is away from the
@@ -599,7 +621,23 @@ tool uses it more readily than one who cannot.
 4. This is the data source `retrain_from_outcomes.py` (§1.3) reads — the two
    specs are designed to compose.
 
-### 1b.2 Unreviewed-EMERGENCY deterioration re-alert
+### 1b.2 Unreviewed-EMERGENCY deterioration re-alert — ✅ DONE
+
+**Status**: Implemented as `POST /api/push/check-emergency-escalations`
+(`require_role('admin')`, rate-limited) in `push_routes.py`. It scans
+`case_records` for `triage_level = 'EMERGENCY' AND reviewed_at IS NULL AND
+deleted_at IS NULL AND created_at < now() - 15 min`, re-emits a push via
+`push_emergency_alert` for each candidate not already escalated within the
+current threshold window, and stamps `last_escalated_at` (new column, same
+migration as §1.4) so a case is escalated at most once per
+`ESCALATION_THRESHOLD_MINUTES` interval rather than on every scheduler tick.
+This is deliberately an idempotent, repeatedly-safe-to-call endpoint rather
+than an in-process cron — intended to be invoked on a schedule by an external
+scheduler (a plain cron job, a Supabase `pg_cron` job, or a Railway cron
+add-on), since the backend itself has no persistent scheduler process. Wiring
+up that external scheduler call is an ops/deployment step, not application
+code — document the chosen scheduler and its cadence (5–15 min recommended)
+in the deployment runbook.
 
 **Why**: An EMERGENCY case that sits unreviewed past a threshold is the exact
 failure the tool exists to prevent. §1.5 surfaces this as a dashboard metric;
@@ -614,9 +652,30 @@ this turns it into an active escalation.
    duplicate spam.
 3. No new user-facing surface required beyond the existing dashboard + push.
 
-### 1b.3 Case CSV / PDF export for facility reporting
+### 1b.3 Case CSV / PDF export for facility reporting — ✅ DONE (CSV only)
 
-**Why**: PHC/district administrators must submit periodic reports up the
+**Status**: Implemented for CSV. `GET /api/analytics/export?date_from=&date_to=`
+(`require_role('doctor', 'admin')`, 10/minute rate limit, facility-scoped
+exactly like the other analytics endpoints, capped to a 366-day range)
+streams a CSV via the stdlib `csv` module (no new dependency) with columns
+matching what these same roles already see through `GET /api/cases` — this
+is a different export *format* of already-authorized data, not a new access
+grant, so the earlier "line-list needs separate authorization" concern in
+the spec below doesn't add a new exposure here. Every export is logged via
+`log_phi_access(AuditEventType.PHI_EXPORT, ...)` with the row count and date
+range. Frontend: `exportCases()` in `api/analytics.js` (triggers a browser
+file download from the streamed response), a date-range picker + "Download
+CSV" button in `AnalyticsDashboard.jsx`.
+
+**PDF is deliberately deferred**: it needs a real rendering dependency
+(`reportlab` or similar) that isn't in `requirements.txt` yet and deserves
+its own vetting (size, license, pinned version, a golden-output test) rather
+than being rushed into this pass. CSV covers the actual stated need — feeding
+a PHC/district report — without that cost. Re-open this as a small, scoped
+follow-on if a PDF-specific requirement (e.g. an official reporting template)
+shows up.
+
+**Why (original)**: PHC/district administrators must submit periodic reports up the
 health-system chain. Today that means manual re-entry from the dashboard. A
 scoped export is low-effort and removes a real recurring chore.
 
@@ -632,9 +691,27 @@ scoped export is low-effort and removes a real recurring chore.
 3. Governance: document who may export line-level (patient) data vs aggregates,
    and log every export via the §2.4 audit log.
 
-### 1b.4 Bulk ASHA onboarding via CSV
+### 1b.4 Bulk ASHA onboarding via CSV — ✅ DONE
 
-**Why**: Standing up a new facility means creating many ASHA accounts. The admin
+**Status**: Implemented. `POST /api/admin/users/bulk` (`require_role('admin')`,
+3/minute rate limit — much stricter than the single-user endpoint's 10/minute
+since one request can create up to 100 accounts, capped via
+`BulkCreateUsersRequest.users: list[..., max_length=100]`) reuses the exact
+same `_provision_user()` logic the single-user endpoint calls (extracted from
+what was previously `create_user`'s inline body) per row, so every row gets
+the identical password-policy enforcement and orphaned-auth-user rollback on
+profile-provisioning failure. One bad row (duplicate email, weak password,
+missing facility) is caught and reported per-row rather than failing the
+whole batch; a `PHI_CREATE` audit entry is still logged per successfully
+created user. Frontend: a CSV upload + client-side preview/validate step in
+`AdminUsers.jsx` (a small hand-rolled RFC4180-ish parser — handles quoted
+fields, no new dependency) showing which rows will succeed/fail *before*
+committing, with a `facility` column matched by name against the already-
+loaded facilities list (falling back to a raw `facility_id` if provided) so
+admins don't need to know facility UUIDs. Passwords are never echoed back in
+the per-row result report.
+
+**Why (original)**: Standing up a new facility means creating many ASHA accounts. The admin
 UI creates them one at a time. A CSV import makes facility rollout practical.
 
 **Implementation**:
