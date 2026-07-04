@@ -589,9 +589,33 @@ the product, not by asking a DBA to grep Postgres logs.
 
 ## Tier 3 — Large scope, needs a product decision first
 
-### 3.1 SMS-based zero-connectivity fallback submission
+### 3.1 SMS-based zero-connectivity fallback submission — 🔶 SCAFFOLDING ONLY (per user decision)
 
-**Why**: The offline-first PWA queue (`offlineQueue.js`/`syncStore.js`)
+**Status**: `backend/app/services/sms.py` provides exactly the parts that
+don't need a vendor/product decision: an `SmsGateway` Protocol (a real
+vendor adapter — Twilio, MSG91, a licensed Indian aggregator — implements
+`send()` and nothing else changes), a `NullSmsGateway` default that logs
+what it would send (mirrors `push.py`'s no-op-when-unconfigured pattern),
+and a strict fixed-format inbound parser (`TRIAGE <age> <M/F>
+<symptom_id,...>`, reusing `schemas.py`'s existing `ALLOWED_SYMPTOMS`
+allow-list) that raises an actionable `SmsParseError` — never silently
+drops a malformed message — with 11 unit tests in `tests/test_sms_parser.py`.
+
+**Deliberately NOT built**: a live inbound webhook wired to `case_records`.
+That needs two decisions this scaffolding cannot make: (1) the SMS
+aggregator, which determines the actual webhook payload shape and that
+vendor's signature-verification scheme (e.g. Twilio's HMAC signature) — a
+webhook without equivalent protection would let anyone who finds the URL
+inject arbitrary submissions; (2) the trust model for a channel that can't
+carry a Bearer JWT. The natural candidate — authenticating by a
+pre-registered ASHA worker phone number — is a real change to the auth
+model (a new `profiles.phone_number` column, admin UI to register it, and
+a security review of "trust whoever controls that SIM") and deserves that
+review before going live, not to be slipped in as a side effect of
+scaffolding. Wiring the endpoint is a small, well-scoped follow-on once
+both decisions are made — the parser and gateway interface are ready for it.
+
+**Why (original)**: The offline-first PWA queue (`offlineQueue.js`/`syncStore.js`)
 handles "no connectivity right now, will sync later" well — but it
 assumes the device eventually regains internet connectivity. In genuinely
 remote areas, a worker's device may go days without data connectivity
@@ -623,9 +647,30 @@ triage-logic problem), and an SMS reply carrying the triage result.
 
 ---
 
-### 3.2 Patient photo attachments
+### 3.2 Patient photo attachments — 🔶 SCAFFOLDING ONLY (per user decision)
 
-**Why**: Visual symptoms (rashes, wounds, swelling) are hard to describe
+**Status**: The vendor-independent parts are built. Migration
+`phase20_case_attachments.sql` adds `case_attachments` (`case_id`,
+`uploaded_by`, `storage_path` — a generic string so this works with
+whichever backend gets chosen, `content_type`, `size_bytes`, `created_at`)
+with RLS mirroring `case_outcomes`: visible to admin/the case's facility
+doctor/the submitting ASHA worker, insert-only by the same set, immutable
+by omission (no update/delete policies). `frontend/src/utils/
+imageCompression.js` is a real, working, vendor-independent client-side
+utility (canvas-based resize to 1024px max dimension + JPEG re-encode at
+quality 0.6) that runs before an image would ever touch IndexedDB.
+
+**Deliberately NOT built**: a live upload endpoint or the queued-upload path
+in `syncStore.js`. The spec itself flags the blocking decisions — storage
+backend (Supabase Storage vs external), and retention/consent policy for
+patient photographs specifically, a materially more sensitive data category
+likely triggering stricter handling under Indian health-data rules than
+structured vitals. Wiring `compressImage()` + the `case_attachments` schema
+into an actual upload flow is mechanical once those two decisions are made;
+building it now would mean guessing at a storage vendor's API or leaving
+dead code that calls a non-existent endpoint.
+
+**Why (original)**: Visual symptoms (rashes, wounds, swelling) are hard to describe
 in a structured form and a photo meaningfully helps the reviewing doctor.
 
 **Why Tier 3, not Tier 2**: Needs product decisions on: storage (Supabase
