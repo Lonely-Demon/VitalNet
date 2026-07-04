@@ -98,6 +98,10 @@ VitalNet/
 ├── frontend/           React 19 + Vite PWA — see §4
 ├── docs/
 │   ├── DISASTER_RECOVERY.md   Ops runbook: RTO/RPO targets, restore procedures
+│   ├── CLINICAL_GOVERNANCE.md Regulatory posture (CDSCO SaMD), model lifecycle
+│   │                     governance, five-layer guardrail architecture
+│   ├── COMPLIANCE_DPDP.md     India DPDP Act 2023 mapping — data-principal
+│   │                     rights, fiduciary obligations, honest gap list
 │   ├── security-audits/       Historical red-team audit trail (dated folders).
 │   │                     Read-only historical record — do not treat findings as
 │   │                     current state without cross-checking the code.
