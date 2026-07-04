@@ -1,5 +1,15 @@
 # VitalNet — System Improvement Instructions
 
+> [!NOTE]
+> **This document is historical.** Most items below have been executed
+> (the file paths referenced — `backend/main.py`, `backend/classifier.py` —
+> predate the Phase 12 `app/` package restructuring; see
+> `ARCHITECTURE_RESTRUCTURE.md`). Section 1.3's `features_config.json`
+> plan and Section 2.1's composite-cursor pagination are both now
+> implemented, for example. Kept for historical record. For the current,
+> accurate state of the codebase, see **[CODEBASE_MAP.md](./CODEBASE_MAP.md)**
+> at the repo root.
+
 > **Version:** 1.2 — March 2026 (Phase 11 PWA Hardening)  
 > **Scope:** Targeted improvements to the Phase 10 codebase addressing security, reliability, accuracy, and code health. All changes are grounded in direct reading of the current source files. This document should be executed after the rebuild defined in `REBUILD_INSTRUCTIONS.md` is complete and verified.  
 > **Intended reader:** An AI coding agent or developer. Follow each section in order; later sections may depend on earlier ones.

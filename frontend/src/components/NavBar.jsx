@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '../store/authStore'
 
 const ROLE_LABELS = {
@@ -12,8 +13,11 @@ const ROLE_COLORS = {
   admin:       'bg-surface3 text-text',
 }
 
+const LANGUAGES = ['en', 'hi', 'ta']
+
 export default function NavBar({ tabs, activeTab, onTabChange }) {
   const { profile, signOut } = useAuth()
+  const { t, i18n } = useTranslation()
 
   return (
     <nav className="sticky top-0 z-10 bg-surface/80 backdrop-blur-md border-b border-leaf/60 shadow-card">
@@ -43,6 +47,16 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
 
         {/* User identity */}
         <div className="flex items-center gap-3 shrink-0">
+          <select
+            value={i18n.language}
+            onChange={(e) => i18n.changeLanguage(e.target.value)}
+            aria-label={t('common.language')}
+            className="text-xs font-mono bg-surface2 border border-leaf/40 rounded-pill px-2 py-1 text-text2 hidden sm:block"
+          >
+            {LANGUAGES.map((lng) => (
+              <option key={lng} value={lng}>{t(`common.languages.${lng}`)}</option>
+            ))}
+          </select>
           <span className="text-sm text-text2 hidden sm:block font-body">
             {profile?.full_name || profile?.id?.slice(0, 8)}
           </span>

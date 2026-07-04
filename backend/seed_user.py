@@ -1,6 +1,9 @@
-import os
+# WARNING: one-off maintenance script. It creates/resets a TEST doctor account
+# with a hardcoded plaintext password and mutates your Supabase project's auth
+# users directly via the service-role key. Never run it against a project that
+# holds real patient data, and never let this test account exist in production.
 from supabase import create_client
-from config import settings
+from app.core.config import settings
 
 supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
 

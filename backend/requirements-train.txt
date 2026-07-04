@@ -1,0 +1,10 @@
+# Training-only dependencies — NOT required by the running API server.
+# Install these only when regenerating the classifier:
+#   pip install -r requirements.txt -r requirements-train.txt
+#   python scripts/train_classifier.py
+#
+# Kept out of requirements.txt so production deploys (Railway, or any
+# resource-constrained rural-clinic server) don't install ~150MB of ONNX
+# tooling that the running app never imports.
+skl2onnx>=1.18.0
+onnxruntime>=1.20.0
