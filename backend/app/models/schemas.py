@@ -86,6 +86,35 @@ class IntakeForm(BaseModel):
         return "".join(ch for ch in v if ch == "\n" or ch == "\t" or ch.isprintable()).strip()
 
 
+class TriageOverride(BaseModel):
+    """A doctor's correction of the ML triage tier, with a required reason.
+    Feeds the outcome-retraining loop (FEATURES_ROADMAP §1.3, §1b.1)."""
+    overridden_triage: Literal["ROUTINE", "URGENT", "EMERGENCY"]
+    override_reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("override_reason")
+    @classmethod
+    def _strip_control_chars(cls, v: str) -> str:
+        return "".join(ch for ch in v if ch == "\n" or ch == "\t" or ch.isprintable()).strip()
+
+
+class CaseOutcomeInput(BaseModel):
+    """A doctor's record of what actually happened to a patient after triage —
+    the real-outcome label the retraining loop (FEATURES_ROADMAP §1.3) reads."""
+    actual_severity: Literal["ROUTINE", "URGENT", "EMERGENCY"]
+    patient_disposition: Literal[
+        "treated_discharged", "admitted", "referred_higher_facility", "deceased", "unknown"
+    ]
+    outcome_notes: Optional[str] = Field(None, max_length=1000)
+
+    @field_validator("outcome_notes")
+    @classmethod
+    def _strip_control_chars(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return "".join(ch for ch in v if ch == "\n" or ch == "\t" or ch.isprintable()).strip()
+
+
 class BriefingOutput(BaseModel):
     triage_level: str
     primary_risk_driver: str

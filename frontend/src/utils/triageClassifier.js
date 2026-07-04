@@ -20,8 +20,8 @@
 //   4. If the tree JSON can't load at all, rules-only triage still returns a
 //      safe result — triage never fails.
 
-import { evaluateTrees } from './treeEvaluator'
-import { safetyNetCheck, news2ConcerningVital } from './clinicalRules'
+import { evaluateTrees } from './treeEvaluator.js'
+import { safetyNetCheck, news2ConcerningVital } from './clinicalRules.js'
 
 const TREES_PATH = '/models/triage_trees.json'
 const FEATURES_CONFIG_PATH = '/models/features_config.json'
@@ -150,7 +150,7 @@ function containsAny(text, termSet) {
  * orderFeatureVector() using features_config.json, so key order in the
  * returned object here does not need to match the model's input order.
  */
-function buildFeatureMap(formData) {
+export function buildFeatureMap(formData) {
   const symptoms = formData.symptoms || []
   const age = formData.patient_age ?? -1
   const sex = formData.patient_sex === 'male' ? 1 : 0
@@ -171,6 +171,16 @@ function buildFeatureMap(formData) {
   const safeSpo2 = spo2 > 0 ? spo2 : 97
   const safeTemp = temp > 0 ? temp : 37.0
   const safeAge = age > 0 ? age : 40
+  // Python's risk-scoring helper methods default age via `.get('patient_age',
+  // 40)` — only when the field is truly absent, NOT when it's a real 0 (a
+  // newborn). `safeAge` clamps any non-positive value to 40, which silently
+  // reclassified real newborns as 40-year-old adults for every age-gated risk
+  // score below (caught by the JS/Python feature-parity test). Use this for
+  // every age comparison Python makes via that pattern; safeAge is kept only
+  // for spo2_age_ratio, whose Python source uses the clamp-on-falsy form.
+  const ageOrDefault = (formData.patient_age === null || formData.patient_age === undefined)
+    ? 40
+    : formData.patient_age
 
   // Symptom flags
   const chestPain = symptoms.includes('chest_pain') ? 1 : 0
@@ -185,16 +195,21 @@ function buildFeatureMap(formData) {
   // (indices 0-13)
 
   // --- Vital sign derived features (12) ---
-  const pulsePressure = (bpSys > 0 && bpDia > 0) ? safeBpSys - safeBpDia : 40
-  const meanArterialPressure = (bpSys > 0 && bpDia > 0) ? (safeBpSys + 2 * safeBpDia) / 3 : 93
+  // Gated on the SAFE (already-defaulted) values, matching Python exactly —
+  // clinical_features.py's bp_sys/bp_dia are `raw_data.get(...) or <default>`
+  // before this check, so the condition there is effectively always true;
+  // gating on the raw (possibly -1/missing) value here made this branch
+  // diverge from Python whenever a vital was missing (parity-test caught it).
+  const pulsePressure = (safeBpSys > 0 && safeBpDia > 0) ? safeBpSys - safeBpDia : 40
+  const meanArterialPressure = (safeBpSys > 0 && safeBpDia > 0) ? (safeBpSys + 2 * safeBpDia) / 3 : 93
   const shockIndex = (safeBpSys > 0 && safeHr > 0) ? safeHr / safeBpSys : 0.6
   const spo2AgeRatio = (safeSpo2 > 0 && safeAge > 0) ? safeSpo2 / Math.max(safeAge, 1) : 2.4
   const tempDeviation = safeTemp > 0 ? Math.abs(safeTemp - 37.0) : 0.0
 
   // Cardiac risk score
   let cardiacRisk = 0
-  if (safeAge > 65) cardiacRisk += 2
-  else if (safeAge > 45) cardiacRisk += 1
+  if (ageOrDefault > 65) cardiacRisk += 2
+  else if (ageOrDefault > 45) cardiacRisk += 1
   if (safeBpSys > 160) cardiacRisk += 2
   if (safeHr > 100 || safeHr < 60) cardiacRisk += 1.5
   if (chestPain) cardiacRisk += 3
@@ -230,12 +245,12 @@ function buildFeatureMap(formData) {
 
   // Pediatric adjustment
   let pediatricAdj = 0
-  if (safeAge < 18) {
-    if (safeAge < 2) {
+  if (ageOrDefault < 18) {
+    if (ageOrDefault < 2) {
       if (safeHr > 160 || safeHr < 100) pediatricAdj += 2
-    } else if (safeAge < 6) {
+    } else if (ageOrDefault < 6) {
       if (safeHr > 140 || safeHr < 80) pediatricAdj += 1.5
-    } else if (safeAge < 12) {
+    } else if (ageOrDefault < 12) {
       if (safeHr > 120 || safeHr < 70) pediatricAdj += 1
     }
     if (safeTemp > 38.5) pediatricAdj += 2
@@ -243,15 +258,15 @@ function buildFeatureMap(formData) {
 
   // Geriatric adjustment
   let geriatricAdj = 0
-  if (safeAge >= 65) {
+  if (ageOrDefault >= 65) {
     if (safeTemp < 36.5) geriatricAdj += 1.5
     if (safeBpSys < 100) geriatricAdj += 2
-    if (safeAge > 80) geriatricAdj += 1
+    if (ageOrDefault > 80) geriatricAdj += 1
   }
 
   // Pregnancy adjustment
   let pregnancyAdj = 0
-  if (formData.patient_sex === 'female' && safeAge >= 15 && safeAge <= 45) {
+  if (formData.patient_sex === 'female' && ageOrDefault >= 15 && ageOrDefault <= 45) {
     if (conditions.includes('pregnan') || conditions.includes('expecting')) pregnancyAdj += 1
     if (containsAny(complaint, OBSTETRIC_COMPLAINTS)) pregnancyAdj += 2
   }
@@ -297,31 +312,31 @@ function buildFeatureMap(formData) {
   // --- Age-specific features (6) ---
   // Pediatric fever risk
   let pediatricFeverRisk = 0
-  if (safeAge < 18) {
-    if (safeAge < 0.25 && safeTemp > 38.0) pediatricFeverRisk += 4
-    else if (safeAge < 2 && safeTemp > 39.0) pediatricFeverRisk += 3
+  if (ageOrDefault < 18) {
+    if (ageOrDefault < 0.25 && safeTemp > 38.0) pediatricFeverRisk += 4
+    else if (ageOrDefault < 2 && safeTemp > 39.0) pediatricFeverRisk += 3
     else if (safeTemp > 40.0) pediatricFeverRisk += 2
     if (highFever) pediatricFeverRisk += 1
   }
 
   // Elderly fall risk
   let elderlyFallRisk = 0
-  if (safeAge >= 65) {
-    if (safeAge > 75) elderlyFallRisk += 1
-    if (safeAge > 85) elderlyFallRisk += 2
+  if (ageOrDefault >= 65) {
+    if (ageOrDefault > 75) elderlyFallRisk += 1
+    if (ageOrDefault > 85) elderlyFallRisk += 2
     const fallKeywords = ['fall', 'fell', 'slip', 'trip', 'dizzy', 'weakness']
     if (fallKeywords.some(k => complaint.includes(k))) elderlyFallRisk += 3
   }
 
   // Adult cardiac risk
   let adultCardiacRisk = 0
-  if (safeAge >= 18 && safeAge <= 65) {
+  if (ageOrDefault >= 18 && ageOrDefault <= 65) {
     adultCardiacRisk = cardiacRisk * 0.8
   }
 
   // Obstetric emergency risk
   let obstetricRisk = 0
-  if (formData.patient_sex === 'female' && safeAge >= 15 && safeAge <= 45) {
+  if (formData.patient_sex === 'female' && ageOrDefault >= 15 && ageOrDefault <= 45) {
     for (const term of OBSTETRIC_COMPLAINTS) {
       if (complaint.includes(term)) { obstetricRisk += 2; break }
     }

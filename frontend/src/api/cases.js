@@ -29,6 +29,26 @@ export async function reviewCase(caseId) {
   return res.json()
 }
 
+export async function overrideTriage(caseId, { overridden_triage, override_reason }) {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE}/api/cases/${caseId}/triage-override`, {
+    method: 'PATCH', headers,
+    body: JSON.stringify({ overridden_triage, override_reason }),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function recordCaseOutcome(caseId, { actual_severity, patient_disposition, outcome_notes }) {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE}/api/cases/${caseId}/outcome`, {
+    method: 'PATCH', headers,
+    body: JSON.stringify({ actual_severity, patient_disposition, outcome_notes }),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
 export async function getMySubmissions({ before, before_id } = {}) {
   const headers = await authHeaders()
   const url = new URL(`${BASE}/api/cases/mine`)

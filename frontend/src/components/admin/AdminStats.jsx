@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { adminGetStats } from '../../lib/api'
+import { adminGetStats, getMlAgreement } from '../../lib/api'
 
 function StatCard({ title, main, sub, children }) {
   return (
@@ -22,15 +22,17 @@ function SubStat({ label, value, color }) {
 }
 
 export default function AdminStats() {
-  const [stats,   setStats]   = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error,   setError]   = useState(null)
+  const [stats,      setStats]      = useState(null)
+  const [agreement,  setAgreement]  = useState(null)
+  const [loading,    setLoading]    = useState(true)
+  const [error,      setError]      = useState(null)
 
   useEffect(() => {
     adminGetStats()
       .then(setStats)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
+    getMlAgreement().then(setAgreement).catch(() => {})
   }, [])
 
   if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading stats...</div>
@@ -64,13 +66,20 @@ export default function AdminStats() {
         </StatCard>
 
         <StatCard
-          title="Analytics"
-          main="—"
-          sub="Coming in Phase 10"
+          title="ML Triage Agreement"
+          main={agreement?.overall_agreement_rate != null ? `${Math.round(agreement.overall_agreement_rate * 100)}%` : '—'}
+          sub={agreement ? `${agreement.overall_count} recorded outcome${agreement.overall_count === 1 ? '' : 's'}` : 'No outcomes recorded yet'}
         >
-          <p className="text-xs text-text3">
-            Advanced analytics dashboard, trend charts, and facility heatmaps will be available in a future phase.
-          </p>
+          {agreement && ['EMERGENCY', 'URGENT', 'ROUTINE'].map((tier) => (
+            <SubStat
+              key={tier}
+              label={tier}
+              value={agreement.by_tier[tier]?.agreement_rate != null
+                ? `${Math.round(agreement.by_tier[tier].agreement_rate * 100)}% (${agreement.by_tier[tier].count})`
+                : '—'}
+              color={tier === 'EMERGENCY' ? 'text-emergency' : tier === 'URGENT' ? 'text-urgent' : 'text-routine'}
+            />
+          ))}
         </StatCard>
 
       </div>

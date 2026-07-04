@@ -59,6 +59,12 @@ jobs:
         # triage as the server model on the committed golden vectors. If this
         # fails, offline triage would diverge from online — block the merge.
         run: npm run test:parity --prefix frontend
+      - name: Feature-engineering parity (JS == Python)
+        # Guards that triageClassifier.js::buildFeatureMap mirrors
+        # clinical_features.py::ClinicalFeatureEngineer exactly. Catches the
+        # class of bug where offline triage silently uses different engineered
+        # features than the server for the same patient (see FEATURES_ROADMAP §1.2).
+        run: npm run test:feature-parity --prefix frontend
       - name: Build
         run: npm run build --prefix frontend
         env:
@@ -112,6 +118,8 @@ jobs:
         run: npm ci --prefix frontend --ignore-scripts
       - name: Offline-model parity (JS == server model)
         run: npm run test:parity --prefix frontend
+      - name: Feature-engineering parity (JS == Python)
+        run: npm run test:feature-parity --prefix frontend
       - name: Build
         run: npm run build --prefix frontend
         env:
