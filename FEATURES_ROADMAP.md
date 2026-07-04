@@ -692,11 +692,12 @@ parallel to the existing case-submission queue.
 
 ---
 
-## Tier 1b — Round-2 additions (specs; not yet built)
+## Tier 1b — Round-2 additions — ✅ ALL DONE
 
-These emerged from the second hardening pass. They are documented as
-ready-to-execute specs (per the decision to keep new features as specs this
-round). 1b.1 is the highest-value follow-on to the round-2 ML work.
+These emerged from the second hardening pass. Originally documented as
+specs-only per that round's decision; all five were subsequently built (see
+the ✅ DONE status on each below). 1b.1 was the highest-value follow-on to
+the round-2 ML work.
 
 ### 1b.1 Doctor triage-override + reason capture (unlocks real-label collection) — ✅ DONE
 
