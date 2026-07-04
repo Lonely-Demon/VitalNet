@@ -1,10 +1,26 @@
+import { lazy, Suspense } from 'react'
 import { AuthProvider, useAuth } from './store/authStore'
 import { RouteGuard } from './components/RouteGuard'
 import ToastProvider from './components/ToastProvider'
 import { UpdatePrompt } from './components/UpdatePrompt'
-import ASHAPanel   from './panels/ASHAPanel'
-import DoctorPanel from './panels/DoctorPanel'
-import AdminPanel  from './panels/AdminPanel'
+
+// Lazy-loaded per role — a given user only ever renders ONE of these three
+// panels (their own role), so bundling all three into the main chunk makes
+// every user download and parse code paths (e.g. AdminUsers, AnalyticsDashboard)
+// they will never use. This matters on the low-end Android tablets ASHA
+// workers use in the field: smaller main bundle = faster first interactive
+// paint, especially over rural 2G/3G connections.
+const ASHAPanel   = lazy(() => import('./panels/ASHAPanel'))
+const DoctorPanel = lazy(() => import('./panels/DoctorPanel'))
+const AdminPanel  = lazy(() => import('./panels/AdminPanel'))
+
+function PanelLoadingFallback() {
+  return (
+    <div className="min-h-screen bg-bg flex items-center justify-center">
+      <div className="w-8 h-8 border-3 border-forest border-t-transparent rounded-full animate-spin" />
+    </div>
+  )
+}
 
 function AppInner() {
   const { profile, signOut } = useAuth()
@@ -27,10 +43,13 @@ function AppInner() {
     )
   }
 
-  if (profile?.role === 'admin')       return <AdminPanel />
-  if (profile?.role === 'doctor')      return <DoctorPanel />
-  if (profile?.role === 'asha_worker') return <ASHAPanel />
-  return null
+  return (
+    <Suspense fallback={<PanelLoadingFallback />}>
+      {profile?.role === 'admin'       && <AdminPanel />}
+      {profile?.role === 'doctor'      && <DoctorPanel />}
+      {profile?.role === 'asha_worker' && <ASHAPanel />}
+    </Suspense>
+  )
 }
 
 export default function App() {
