@@ -83,8 +83,9 @@ export default function AdminFacilities() {
               { label: 'Phone',     key: 'phone',     type: 'tel',    required: false },
             ].map(f => (
               <div key={f.key}>
-                <label className="block text-xs text-text3 mb-1 font-mono">{f.label}</label>
+                <label htmlFor={`facility-${f.key}`} className="block text-xs text-text3 mb-1 font-mono">{f.label}</label>
                 <input
+                  id={`facility-${f.key}`}
                   type={f.type}
                   required={f.required}
                   value={formData[f.key]}
@@ -94,8 +95,9 @@ export default function AdminFacilities() {
               </div>
             ))}
             <div>
-              <label className="block text-xs text-text3 mb-1 font-mono">Type</label>
+              <label htmlFor="facility-type" className="block text-xs text-text3 mb-1 font-mono">Type</label>
               <select
+                id="facility-type"
                 value={formData.type}
                 onChange={e => setFormData(d => ({ ...d, type: e.target.value }))}
                 className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"

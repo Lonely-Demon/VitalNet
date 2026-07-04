@@ -322,26 +322,29 @@ export default function IntakeForm() {
 
       {/* Patient Location */}
       <Section title={t('intakeForm.sections.location')}>
-        <Field label={t('intakeForm.fields.location')} error={fieldErrors.location}>
-          <input name="location" value={form.location} onChange={handleChange} required
+        <Field label={t('intakeForm.fields.location')} error={fieldErrors.location} id="location">
+          <input id="location" name="location" value={form.location} onChange={handleChange} required
+            aria-describedby={fieldErrors.location ? "location-error" : undefined}
             placeholder={t('intakeForm.placeholders.location')} maxLength={200} className={`${inputClass} ${fieldErrors.location ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
       </Section>
 
       {/* Patient */}
       <Section title={t('intakeForm.sections.patientDetails')}>
-        <Field label={t('intakeForm.fields.patientName')} error={fieldErrors.patient_name}>
-          <input name="patient_name" value={form.patient_name} onChange={handleChange}
+        <Field label={t('intakeForm.fields.patientName')} error={fieldErrors.patient_name} id="patient_name">
+          <input id="patient_name" name="patient_name" value={form.patient_name} onChange={handleChange}
+            aria-describedby={fieldErrors.patient_name ? "patient_name-error" : undefined}
             placeholder={t('intakeForm.placeholders.patientName')} className={`${inputClass} ${fieldErrors.patient_name ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} maxLength={100} />
         </Field>
-        <Field label={t('intakeForm.fields.patientAge')} error={fieldErrors.patient_age}>
-          <input name="patient_age" type="number" value={form.patient_age}
-            onChange={handleChange} placeholder={t('intakeForm.placeholders.patientAge')} className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+        <Field label={t('intakeForm.fields.patientAge')} error={fieldErrors.patient_age} id="patient_age">
+          <input id="patient_age" name="patient_age" type="number" value={form.patient_age}
+            onChange={handleChange} aria-describedby={fieldErrors.patient_age ? "patient_age-error" : undefined}
+            placeholder={t('intakeForm.placeholders.patientAge')} className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
-        <Field label={t('intakeForm.fields.patientSex')} error={fieldErrors.patient_sex}>
+        <Field label={t('intakeForm.fields.patientSex')} error={fieldErrors.patient_sex} id="patient_sex">
           <fieldset className="mt-1">
             <legend className="sr-only">{t('intakeForm.fields.patientSex')}</legend>
-            <div className="flex gap-4" aria-describedby={fieldErrors.patient_sex ? "patient_sex_error" : undefined}>
+            <div className="flex gap-4" aria-describedby={fieldErrors.patient_sex ? "patient_sex-error" : undefined}>
               {SEX_OPTIONS.map(s => (
                 <label key={s} className="flex items-center gap-2 cursor-pointer group p-2 min-w-[44px] min-h-[44px]">
                   <input type="radio" name="patient_sex" value={s}
@@ -357,9 +360,10 @@ export default function IntakeForm() {
 
       {/* Complaint */}
       <Section title={t('intakeForm.sections.chiefComplaint')}>
-        <Field label={t('intakeForm.fields.chiefComplaint')} error={fieldErrors.chief_complaint}>
-          <select name="chief_complaint" value={form.chief_complaint}
-            onChange={handleChange} className={`${inputClass} ${fieldErrors.chief_complaint ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
+        <Field label={t('intakeForm.fields.chiefComplaint')} error={fieldErrors.chief_complaint} id="chief_complaint">
+          <select id="chief_complaint" name="chief_complaint" value={form.chief_complaint}
+            onChange={handleChange} aria-describedby={fieldErrors.chief_complaint ? "chief_complaint-error" : undefined}
+            className={`${inputClass} ${fieldErrors.chief_complaint ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
             <option value="">{t('intakeForm.placeholders.selectComplaint')}</option>
             {COMPLAINT_IDS.map(id => (
               <option key={id} value={id}>{t(`intakeForm.complaints.${COMPLAINT_LABEL_KEYS[id]}`)}</option>
@@ -367,20 +371,23 @@ export default function IntakeForm() {
           </select>
         </Field>
         {form.chief_complaint === "Other" && (
-          <Field label={t('intakeForm.fields.customComplaint')} error={fieldErrors.chief_complaint}>
+          <Field label={t('intakeForm.fields.customComplaint')} error={fieldErrors.chief_complaint} id="custom_complaint">
             <input
+              id="custom_complaint"
               name="custom_complaint"
               value={form.custom_complaint}
               onChange={handleChange}
+              aria-describedby={fieldErrors.chief_complaint ? "custom_complaint-error" : undefined}
               placeholder={t('intakeForm.placeholders.customComplaint')}
               className={inputClass}
               maxLength={200}
             />
           </Field>
         )}
-        <Field label={t('intakeForm.fields.duration')} error={fieldErrors.complaint_duration}>
-          <select name="complaint_duration" value={form.complaint_duration}
-            onChange={handleChange} className={`${inputClass} ${fieldErrors.complaint_duration ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
+        <Field label={t('intakeForm.fields.duration')} error={fieldErrors.complaint_duration} id="complaint_duration">
+          <select id="complaint_duration" name="complaint_duration" value={form.complaint_duration}
+            onChange={handleChange} aria-describedby={fieldErrors.complaint_duration ? "complaint_duration-error" : undefined}
+            className={`${inputClass} ${fieldErrors.complaint_duration ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
             <option value="">{t('intakeForm.placeholders.selectDuration')}</option>
             {DURATION_IDS.map(id => (
               <option key={id} value={id}>{t(`intakeForm.durations.${DURATION_LABEL_KEYS[id]}`)}</option>
@@ -392,25 +399,30 @@ export default function IntakeForm() {
       {/* Vitals */}
       <Section title={t('intakeForm.sections.vitals')}>
         <div className="grid grid-cols-2 gap-3">
-          <Field label={t('intakeForm.fields.bpSystolic')} error={fieldErrors.bp_systolic}>
-            <input name="bp_systolic" type="number" value={form.bp_systolic}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.bpSystolic')} className={`${inputClass} ${fieldErrors.bp_systolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.bpSystolic')} error={fieldErrors.bp_systolic} id="bp_systolic">
+            <input id="bp_systolic" name="bp_systolic" type="number" value={form.bp_systolic}
+              onChange={handleChange} aria-describedby={fieldErrors.bp_systolic ? "bp_systolic-error" : undefined}
+              placeholder={t('intakeForm.placeholders.bpSystolic')} className={`${inputClass} ${fieldErrors.bp_systolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label={t('intakeForm.fields.bpDiastolic')} error={fieldErrors.bp_diastolic}>
-            <input name="bp_diastolic" type="number" value={form.bp_diastolic}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.bpDiastolic')} className={`${inputClass} ${fieldErrors.bp_diastolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.bpDiastolic')} error={fieldErrors.bp_diastolic} id="bp_diastolic">
+            <input id="bp_diastolic" name="bp_diastolic" type="number" value={form.bp_diastolic}
+              onChange={handleChange} aria-describedby={fieldErrors.bp_diastolic ? "bp_diastolic-error" : undefined}
+              placeholder={t('intakeForm.placeholders.bpDiastolic')} className={`${inputClass} ${fieldErrors.bp_diastolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label={t('intakeForm.fields.spo2')} error={fieldErrors.spo2}>
-            <input name="spo2" type="number" value={form.spo2}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.spo2')} className={`${inputClass} ${fieldErrors.spo2 ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.spo2')} error={fieldErrors.spo2} id="spo2">
+            <input id="spo2" name="spo2" type="number" value={form.spo2}
+              onChange={handleChange} aria-describedby={fieldErrors.spo2 ? "spo2-error" : undefined}
+              placeholder={t('intakeForm.placeholders.spo2')} className={`${inputClass} ${fieldErrors.spo2 ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label={t('intakeForm.fields.heartRate')} error={fieldErrors.heart_rate}>
-            <input name="heart_rate" type="number" value={form.heart_rate}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.heartRate')} className={`${inputClass} ${fieldErrors.heart_rate ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.heartRate')} error={fieldErrors.heart_rate} id="heart_rate">
+            <input id="heart_rate" name="heart_rate" type="number" value={form.heart_rate}
+              onChange={handleChange} aria-describedby={fieldErrors.heart_rate ? "heart_rate-error" : undefined}
+              placeholder={t('intakeForm.placeholders.heartRate')} className={`${inputClass} ${fieldErrors.heart_rate ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label={t('intakeForm.fields.temperature')} error={fieldErrors.temperature}>
-            <input name="temperature" type="number" step="0.1" value={form.temperature}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.temperature')} className={`${inputClass} ${fieldErrors.temperature ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.temperature')} error={fieldErrors.temperature} id="temperature">
+            <input id="temperature" name="temperature" type="number" step="0.1" value={form.temperature}
+              onChange={handleChange} aria-describedby={fieldErrors.temperature ? "temperature-error" : undefined}
+              placeholder={t('intakeForm.placeholders.temperature')} className={`${inputClass} ${fieldErrors.temperature ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
         </div>
       </Section>
@@ -442,23 +454,25 @@ export default function IntakeForm() {
 
       {/* Observations */}
       <Section title={t('intakeForm.sections.observations')}>
-        <div className="flex items-start gap-2">
-          <textarea name="observations" value={form.observations} onChange={handleChange}
-            placeholder={t('intakeForm.placeholders.observations')}
-            rows={3} className={`${inputClass} resize-none flex-1`} maxLength={500} />
-          <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('observations')} />
-        </div>
-        <Field label={t('intakeForm.fields.knownConditions')}>
+        <Field label={t('intakeForm.fields.observations')} id="observations">
+          <div className="flex items-start gap-2">
+            <textarea id="observations" name="observations" value={form.observations} onChange={handleChange}
+              placeholder={t('intakeForm.placeholders.observations')}
+              rows={3} className={`${inputClass} resize-none flex-1`} maxLength={500} />
+            <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('observations')} />
+          </div>
+        </Field>
+        <Field label={t('intakeForm.fields.knownConditions')} id="known_conditions">
           <div className="flex items-center gap-2">
-            <input name="known_conditions" value={form.known_conditions}
+            <input id="known_conditions" name="known_conditions" value={form.known_conditions}
               onChange={handleChange} placeholder={t('intakeForm.placeholders.knownConditions')}
               maxLength={300} className={`${inputClass} flex-1`} />
             <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('known_conditions')} />
           </div>
         </Field>
-        <Field label={t('intakeForm.fields.currentMedications')}>
+        <Field label={t('intakeForm.fields.currentMedications')} id="current_medications">
           <div className="flex items-center gap-2">
-            <input name="current_medications" value={form.current_medications}
+            <input id="current_medications" name="current_medications" value={form.current_medications}
               onChange={handleChange} placeholder={t('intakeForm.placeholders.currentMedications')}
               maxLength={300} className={`${inputClass} flex-1`} />
             <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('current_medications')} />
@@ -475,6 +489,7 @@ export default function IntakeForm() {
               name="consent_captured"
               checked={form.consent_captured}
               onChange={(e) => setForm(prev => ({ ...prev, consent_captured: e.target.checked }))}
+              aria-describedby={fieldErrors.consent_captured ? "consent_captured-error" : undefined}
               className="mt-1 w-5 h-5 accent-forest rounded"
             />
             <span className="text-sm text-text2 leading-relaxed">
@@ -489,7 +504,7 @@ export default function IntakeForm() {
             </span>
           </label>
           {fieldErrors.consent_captured && (
-            <p className="text-emergency text-xs mt-2 font-medium">{fieldErrors.consent_captured}</p>
+            <p id="consent_captured-error" role="alert" className="text-emergency text-xs mt-2 font-medium">{fieldErrors.consent_captured}</p>
           )}
         </div>
       </Section>
@@ -517,6 +532,7 @@ export default function IntakeForm() {
               value={form.human_review_reason}
               onChange={handleChange}
               placeholder={t('intakeForm.placeholders.reviewReason')}
+              aria-label={t('intakeForm.placeholders.reviewReason')}
               rows={2}
               maxLength={500}
               className={`${inputClass} mt-3 resize-none`}
@@ -590,12 +606,16 @@ function Section({ title, children }) {
   )
 }
 
-function Field({ label, error, children }) {
+function Field({ label, error, id, children }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-text2 mb-2 ml-1">{label}</label>
+      <label htmlFor={id} className="block text-sm font-medium text-text2 mb-2 ml-1">{label}</label>
       {children}
-      {error && <p className="text-emergency text-xs mt-1.5 ml-1 animate-fade-up font-medium">{error}</p>}
+      {error && (
+        <p id={id ? `${id}-error` : undefined} role="alert" className="text-emergency text-xs mt-1.5 ml-1 animate-fade-up font-medium">
+          {error}
+        </p>
+      )}
     </div>
   )
 }

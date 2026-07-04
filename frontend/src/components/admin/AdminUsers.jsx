@@ -341,8 +341,9 @@ export default function AdminUsers() {
               { label: 'ASHA ID',   key: 'asha_id',   type: 'text', required: false },
             ].map(f => (
               <div key={f.key}>
-                <label className="block text-xs text-text3 mb-1 font-mono">{f.label}{f.required && ' *'}</label>
+                <label htmlFor={`create-${f.key}`} className="block text-xs text-text3 mb-1 font-mono">{f.label}{f.required && ' *'}</label>
                 <input
+                  id={`create-${f.key}`}
                   type={f.type}
                   required={f.required}
                   value={createData[f.key]}
@@ -352,8 +353,9 @@ export default function AdminUsers() {
               </div>
             ))}
             <div>
-              <label className="block text-xs text-text3 mb-1 font-mono">Role *</label>
+              <label htmlFor="create-role" className="block text-xs text-text3 mb-1 font-mono">Role *</label>
               <select
+                id="create-role"
                 required value={createData.role}
                 onChange={e => setCreateData(d => ({ ...d, role: e.target.value }))}
                 className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
@@ -362,8 +364,9 @@ export default function AdminUsers() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-text3 mb-1 font-mono">Facility</label>
+              <label htmlFor="create-facility" className="block text-xs text-text3 mb-1 font-mono">Facility</label>
               <select
+                id="create-facility"
                 value={createData.facility_id}
                 onChange={e => setCreateData(d => ({ ...d, facility_id: e.target.value }))}
                 className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"

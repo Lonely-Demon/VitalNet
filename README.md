@@ -27,6 +27,7 @@ docs — start with whichever matches what you're trying to do:
 | **[docs/INCIDENT_RESPONSE.md](./docs/INCIDENT_RESPONSE.md)** | Security incident runbook — detection through post-incident review |
 | **[docs/CLINICAL_GOVERNANCE.md](./docs/CLINICAL_GOVERNANCE.md)** | Regulatory posture (CDSCO), model lifecycle governance, guardrail architecture |
 | **[docs/COMPLIANCE_DPDP.md](./docs/COMPLIANCE_DPDP.md)** | India DPDP Act 2023 mapping — data-principal rights, fiduciary obligations, gaps |
+| **[docs/ACCESSIBILITY.md](./docs/ACCESSIBILITY.md)** | WCAG 2.1 AA audit — what's fixed, what's verified, what's an honest known gap |
 | **[backend/app/ml/README.md](./backend/app/ml/README.md)** + **[MODEL_CARD.md](./backend/app/ml/MODEL_CARD.md)** | ML architecture, clinical grounding, intended use/limitations |
 | **[CHANGELOG.md](./CHANGELOG.md)** | Version history |
 | **[AGENTS.md](./AGENTS.md)** | Conventions specifically for AI coding agents working in this repo |

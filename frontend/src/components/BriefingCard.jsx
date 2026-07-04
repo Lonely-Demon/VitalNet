@@ -252,13 +252,14 @@ export default function BriefingCard({ caseData, onReviewed }) {
           {/* Triage override */}
           {!overrideState.triage && (
             showOverride ? (
-              <div className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
-                <label className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
+              <fieldset className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
+                <legend className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
                   Correct triage tier
-                </label>
+                </legend>
                 <select
                   value={overrideTier}
                   onChange={(e) => setOverrideTier(e.target.value)}
+                  aria-label="Correct triage tier"
                   className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
                 >
                   {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
@@ -267,6 +268,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                   value={overrideReason}
                   onChange={(e) => setOverrideReason(e.target.value)}
                   placeholder="Why does this case need a different tier?"
+                  aria-label="Why does this case need a different tier?"
                   rows={2}
                   maxLength={500}
                   className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
@@ -286,7 +288,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                     Cancel
                   </button>
                 </div>
-              </div>
+              </fieldset>
             ) : (
               <button
                 onClick={() => setShowOverride(true)}
@@ -300,13 +302,14 @@ export default function BriefingCard({ caseData, onReviewed }) {
           {/* Record outcome — shown only after review */}
           {reviewed && !outcomeRecorded && (
             showOutcome ? (
-              <div className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
-                <label className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
+              <fieldset className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
+                <legend className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
                   Record patient outcome
-                </label>
+                </legend>
                 <select
                   value={outcomeSeverity}
                   onChange={(e) => setOutcomeSeverity(e.target.value)}
+                  aria-label="Actual severity"
                   className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
                 >
                   {TIERS.map(t => <option key={t} value={t}>Actual severity: {t}</option>)}
@@ -314,6 +317,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                 <select
                   value={outcomeDisposition}
                   onChange={(e) => setOutcomeDisposition(e.target.value)}
+                  aria-label="Patient disposition"
                   className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
                 >
                   {DISPOSITIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
@@ -322,6 +326,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                   value={outcomeNotes}
                   onChange={(e) => setOutcomeNotes(e.target.value)}
                   placeholder="Outcome notes (optional)"
+                  aria-label="Outcome notes (optional)"
                   rows={2}
                   maxLength={1000}
                   className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
@@ -341,7 +346,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                     Cancel
                   </button>
                 </div>
-              </div>
+              </fieldset>
             ) : (
               <button
                 onClick={() => setShowOutcome(true)}
@@ -360,10 +365,10 @@ export default function BriefingCard({ caseData, onReviewed }) {
             <p className="text-xs text-forest font-medium">✓ Referred to {referred.facilityName}</p>
           ) : (
             showReferral ? (
-              <div className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
-                <label className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
+              <fieldset className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
+                <legend className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
                   Refer to another facility
-                </label>
+                </legend>
                 {facilitiesError && <p className="text-xs text-emergency">{facilitiesError}</p>}
                 {facilities === null ? (
                   <p className="text-xs text-text3">Loading facilities…</p>
@@ -371,6 +376,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                   <select
                     value={referralFacilityId}
                     onChange={(e) => setReferralFacilityId(e.target.value)}
+                    aria-label="Receiving facility"
                     className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
                   >
                     {facilities.map((f) => (
@@ -381,6 +387,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                 <select
                   value={referralUrgency}
                   onChange={(e) => setReferralUrgency(e.target.value)}
+                  aria-label="Referral urgency"
                   className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
                 >
                   {TIERS.map(t => <option key={t} value={t}>Urgency: {t}</option>)}
@@ -389,6 +396,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                   value={referralReason}
                   onChange={(e) => setReferralReason(e.target.value)}
                   placeholder="Reason for referral"
+                  aria-label="Reason for referral"
                   rows={2}
                   maxLength={1000}
                   className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
@@ -408,7 +416,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                     Cancel
                   </button>
                 </div>
-              </div>
+              </fieldset>
             ) : (
               <button
                 onClick={handleOpenReferral}

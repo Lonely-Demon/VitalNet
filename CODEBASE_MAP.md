@@ -106,6 +106,8 @@ VitalNet/
 │   │                     governance, five-layer guardrail architecture
 │   ├── COMPLIANCE_DPDP.md     India DPDP Act 2023 mapping — data-principal
 │   │                     rights, fiduciary obligations, honest gap list
+│   ├── ACCESSIBILITY.md       WCAG 2.1 AA audit — label association, live
+│   │                     regions, color-contrast fixes, honest known gaps
 │   ├── security-audits/       Historical red-team audit trail (dated folders).
 │   │                     Read-only historical record — do not treat findings as
 │   │                     current state without cross-checking the code.
