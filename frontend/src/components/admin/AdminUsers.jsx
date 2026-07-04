@@ -36,8 +36,6 @@ export default function AdminUsers() {
   const [editingId,      setEditingId]      = useState(null)
   const [editData,       setEditData]       = useState({})
 
-  const [confirmDeactivate, setConfirmDeactivate] = useState(null)
-
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
@@ -45,7 +43,7 @@ export default function AdminUsers() {
     setError(null)
     try {
       const [u, f] = await Promise.all([adminListUsers(), adminListFacilities()])
-      setUsers(u)
+      setUsers(u.data || [])
       setFacilities(f)
     } catch (e) {
       setError(e.message)
@@ -81,16 +79,11 @@ export default function AdminUsers() {
   }
 
   async function handleDeactivate(userId) {
-    setConfirmDeactivate(userId)
-  }
-
-  async function executeDeactivate() {
-    if (!confirmDeactivate) return
+    if (!confirm('Deactivate this user?')) return
     try {
-      await adminDeactivateUser(confirmDeactivate)
+      await adminDeactivateUser(userId)
       await loadAll()
     } catch (e) { alert(e.message) }
-    finally { setConfirmDeactivate(null) }
   }
 
   async function handleReactivate(userId) {
@@ -105,19 +98,6 @@ export default function AdminUsers() {
 
   return (
     <div>
-      {confirmDeactivate && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-          <div className="bg-surface p-6 rounded-lg shadow-card w-full max-w-sm">
-            <h3 className="text-lg font-bold text-text mb-2">Deactivate User</h3>
-            <p className="text-text2 text-sm mb-4">Are you sure you want to deactivate this user?</p>
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setConfirmDeactivate(null)} className="px-4 py-2 text-sm text-text2 hover:text-text">Cancel</button>
-              <button onClick={executeDeactivate} className="px-4 py-2 text-sm bg-emergency text-white rounded-pill hover:opacity-90">Deactivate</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-base font-semibold text-text font-display italic">Users <span className="text-text3 font-normal font-body">({users.length})</span></h2>

@@ -17,8 +17,6 @@ export default function AdminFacilities() {
   const [formError,      setFormError]      = useState(null)
   const [creating,       setCreating]       = useState(false)
 
-  const [confirmToggle, setConfirmToggle] = useState(null)
-
   useEffect(() => { loadFacilities() }, [])
 
   async function loadFacilities() {
@@ -54,16 +52,6 @@ export default function AdminFacilities() {
       await adminToggleFacility(id)
       await loadFacilities()
     } catch (e) { alert(e.message) }
-  }
-
-  function confirmToggleAction(facility) {
-    setConfirmToggle(facility)
-  }
-
-  async function executeToggle() {
-    if (!confirmToggle) return
-    await handleToggle(confirmToggle.id)
-    setConfirmToggle(null)
   }
 
   if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading facilities...</div>
@@ -153,7 +141,7 @@ export default function AdminFacilities() {
                 </td>
                 <td className="px-4 py-3">
                   <button
-                    onClick={() => confirmToggleAction(f)}
+                    onClick={() => handleToggle(f.id)}
                     className={`text-xs font-medium ${
                       f.is_active
                         ? 'text-emergency hover:text-emergency/80'
@@ -168,38 +156,6 @@ export default function AdminFacilities() {
           </tbody>
         </table>
       </div>
-
-      {/* Confirmation Modal */}
-      {confirmToggle && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-          <div className="bg-surface border border-leaf/40 rounded-xl shadow-card w-full max-w-sm overflow-hidden">
-            <div className="p-5 border-b border-leaf/20">
-              <h3 id="modal-title" className="text-lg font-semibold text-text font-display">
-                Confirm {confirmToggle.is_active ? 'Deactivation' : 'Activation'}
-              </h3>
-              <p className="text-sm text-text2 mt-2 font-body">
-                Are you sure you want to {confirmToggle.is_active ? 'deactivate' : 'activate'} the facility <strong>{confirmToggle.name}</strong>?
-              </p>
-            </div>
-            <div className="p-4 bg-surface2 flex justify-end gap-3">
-              <button
-                onClick={() => setConfirmToggle(null)}
-                className="px-4 py-2 text-sm font-medium text-text2 hover:text-text transition-colors rounded-lg hover:bg-surface3"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={executeToggle}
-                className={`px-4 py-2 text-sm font-medium text-white rounded-lg shadow-btn transition-all ${
-                  confirmToggle.is_active ? 'bg-emergency hover:bg-emergency/90' : 'bg-routine hover:bg-routine/90'
-                }`}
-              >
-                Yes, {confirmToggle.is_active ? 'Deactivate' : 'Activate'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

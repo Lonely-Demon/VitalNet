@@ -10,11 +10,10 @@ This file is responsible ONLY for:
 
 All route logic lives in app/api/routes/.
 """
-import logging
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Header, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -24,7 +23,8 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.logging import setup_logging, set_correlation_id
+from app.core.logging import setup_logging
+from app.core.correlation import set_correlation_id
 from app.core.config import settings
 from app.ml.classifier import load_classifier
 from app.api.routes import cases, admin_routes, analytics_routes, security
@@ -37,29 +37,27 @@ logger = setup_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the ML classifier once at startup; release on shutdown."""
+    """Verify DB schema compatibility, then load the ML classifier (degraded/rules-only boot on ML failure)."""
     from app.core.database import validate_schema_compatibility
 
-    # 1. Database schema compatibility gate
     try:
         validate_schema_compatibility()
-        logger.info("Database schema compatibility check passed successfully")
+        logger.info("Database schema compatibility check passed")
     except RuntimeError as e:
         logger.critical("CRITICAL: Schema compatibility check failed: %s", e)
-        raise e
+        raise
     except Exception as e:
         logger.critical("CRITICAL: Unexpected database schema check failure: %s", e)
         raise RuntimeError(f"Unexpected database schema check failure: {e}") from e
 
-    # 2. ML loading fallback (graceful degraded mode startup)
     try:
         loaded = load_classifier()
         if not loaded:
-            logger.warning("WARNING: ML classifier failed to load. Booting in degraded mode (rules-based fallback).")
+            logger.warning("ML classifier failed to load. Booting in degraded mode (rules-based fallback).")
         else:
             logger.info("ML classifier loaded successfully")
     except Exception as e:
-        logger.warning("WARNING: Unexpected error loading ML classifier: %s. Booting in degraded mode.", e)
+        logger.warning("Unexpected error loading ML classifier: %s. Booting in degraded mode.", e)
 
     logger.info("VitalNet API started")
     yield
@@ -73,7 +71,7 @@ _state_changing_methods = {"POST", "PUT", "PATCH", "DELETE"}
 
 app = FastAPI(
     title="VitalNet API",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
     docs_url="/docs" if _docs_enabled else None,
     redoc_url="/redoc" if _docs_enabled else None,
@@ -84,15 +82,22 @@ app = FastAPI(
 # ── 4. Rate limiter ───────────────────────────────────────────────────────────
 
 app.state.limiter = cases.limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
-# ── 5. Response compression ───────────────────────────────────────────────────
+# ── 5. Response compression — cheap win for weak-hardware / low-bandwidth clients ──
 
 app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
 
 
-# ── 6. CSRF and Device Guard Middleware ───────────────────────────────────────
+# ── 6. CSRF + device-guard middleware ─────────────────────────────────────────
+# Bearer-token auth already stops cross-site forms from acting as an
+# authenticated user, but requiring a custom header on every mutating request
+# adds defense in depth: a browser only sends a custom header after a CORS
+# preflight, and the preflight only succeeds from an allow_origins match. The
+# header value itself is not a secret — the protection is the preflight gate.
+# X-Device-Id lets future abuse/anomaly detection distinguish devices per user.
 
 @app.middleware("http")
 async def csrf_and_device_guard(request: Request, call_next):
@@ -102,60 +107,45 @@ async def csrf_and_device_guard(request: Request, call_next):
             csrf_header = request.headers.get("x-csrf-token", "")
             if csrf_header != settings.csrf_token:
                 return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
-
             if not request.headers.get("x-device-id"):
                 return JSONResponse(status_code=400, content={"detail": "Missing X-Device-Id header"})
-
     return await call_next(request)
 
 
-# ── 7. Security Headers Middleware ────────────────────────────────────────────
+# ── 7. Security headers — applied to every response ───────────────────────────
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    """
+    Standard hardening headers. Cache-Control: no-store is deliberate — API
+    responses carry patient data and must never be cached by intermediaries or
+    the browser. HSTS is only added outside local development.
+    """
     response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
     response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
     response.headers.setdefault("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'self'")
-    if settings.environment.lower() != "development":
-        response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+    if settings.environment != "development":
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
     return response
 
 
-# ── 8. Correlation ID Middleware ──────────────────────────────────────────────
+# ── 8. Correlation ID middleware ──────────────────────────────────────────────
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to generate/extract and propagate X-Request-ID for request tracing.
-    - Extracts X-Request-ID from incoming request headers if present
-    - Generates a new UUID if not provided
-    - Adds correlation ID to request state for access in route handlers
-    - Includes correlation ID in response headers
-    - Sets correlation ID in logging context for all log entries
-    """
+    """Propagates/generates X-Request-ID for request tracing across logs and responses."""
 
     async def dispatch(self, request: Request, call_next):
-        # Extract correlation ID from header or generate new one
-        correlation_id = request.headers.get("X-Request-ID")
-        if not correlation_id:
-            correlation_id = str(uuid.uuid4())
-
-        # Set correlation ID in request state for route handlers
+        correlation_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.correlation_id = correlation_id
-
-        # Set correlation ID in logging context
         set_correlation_id(correlation_id)
-
-        # Process the request
         response = await call_next(request)
-
-        # Add correlation ID to response headers
         response.headers["X-Request-ID"] = correlation_id
-
         return response
 
 
@@ -183,71 +173,69 @@ app.include_router(security.router)
 
 # ── 11. Global exception handlers — emit structured JSON, never raw tracebacks ─
 
-@app.exception_handler(RateLimitExceeded)
-async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
-    correlation_id = getattr(request.state, "correlation_id", "unknown")
-    logger.warning(
-        "Rate limit exceeded",
-        extra={"path": str(request.url.path), "correlation_id": correlation_id},
-    )
-    return _rate_limit_exceeded_handler(request, exc)
-
-
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    correlation_id = getattr(request.state, "correlation_id", "unknown")
-    logger.exception(
-        "Unhandled server error",
-        extra={"path": str(request.url.path), "correlation_id": correlation_id},
-    )
+    logger.exception("Unhandled server error", extra={"path": str(request.url.path)})
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal Server Error"},
     )
 
 
+def _scrub_validation_errors(errors: list) -> list:
+    """
+    Pydantic v2 error dicts include an 'input' field carrying the value that
+    failed validation — for this API that value is patient PII (names, vitals).
+    Strip 'input' (and the noisy 'url'/'ctx') so validation errors can be
+    logged and returned without leaking patient data into logs or responses.
+    """
+    return [{k: v for k, v in err.items() if k not in ("input", "url", "ctx")} for err in errors]
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    correlation_id = getattr(request.state, "correlation_id", "unknown")
+    safe_errors = _scrub_validation_errors(exc.errors())
     logger.warning(
         "Validation error",
-        extra={"path": str(request.url.path), "errors": exc.errors(), "correlation_id": correlation_id},
+        extra={"path": str(request.url.path), "errors": safe_errors},
     )
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
 
 
 # ── 12. Health Check ──────────────────────────────────────────────────────────
 
 @app.get("/api/health")
-async def health(authorization: str = Header(default=None)):
+@cases.limiter.limit("120/minute")
+async def health(request: Request, authorization: str = Header(default=None)):
     from app.core.database import supabase_anon
     from app.ml.classifier import get_classifier_info
     from app.core.auth import get_current_user
 
-    # 1. Quick Database connectivity check
+    # 1. Database connectivity check. The exception detail is logged
+    # server-side only — never put exception text in the HTTP response, even
+    # for the authenticated-diagnostics path below (CodeQL: information
+    # exposure through an exception).
     try:
         supabase_anon.table("facilities").select("id").limit(1).execute()
         db_status = "connected"
     except Exception as e:
-        db_status = f"error: {str(e)[:80]}"  # Truncate — never expose full errors
+        logger.warning("Health check DB connectivity failed: %s", e)
+        db_status = "error"
 
-    # 2. Classifier state check
+    # 2. Classifier state
     info = get_classifier_info()
     classifier_loaded = bool(info.get("classifier_type"))
-
-    # Determine if overall healthy
     is_healthy = db_status == "connected" and classifier_loaded
 
-    # 3. Check authorization for detailed diagnostics
+    # 3. Detailed diagnostics only for authenticated clinician/admin callers
     show_diagnostics = False
     if authorization:
         try:
-            # Re-use our robust JWT extraction & profile lookup flow
             user = await get_current_user(authorization)
-            if user and user.get("resolved_role") in {"clinician", "admin", "super_admin"}:
+            if user and user.get("resolved_role") in {"doctor", "admin"}:
                 show_diagnostics = True
         except Exception:
-            pass  # Fallback to anonymous (basic) response on auth failure
+            pass  # Fall back to the anonymous (basic) response on auth failure
 
     if show_diagnostics:
         classifier_status = (
@@ -259,16 +247,14 @@ async def health(authorization: str = Header(default=None)):
             "status": "ok" if is_healthy else "degraded",
             "database": db_status,
             "classifier": classifier_status,
-            "version": "0.2.0",
+            "version": "0.3.0",
         }
     else:
-        # Anonymous or basic response
         response_body = {
             "status": "ok" if is_healthy else "degraded",
-            "version": "0.2.0",
+            "version": "0.3.0",
         }
 
-    # Return 503 Service Unavailable when degraded
     if not is_healthy:
         return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=response_body)
     return response_body

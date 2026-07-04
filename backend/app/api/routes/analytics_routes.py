@@ -1,171 +1,122 @@
 """
 Analytics Routes — aggregate statistics and trends for facility dashboards.
 
-Security Fixes Applied:
-- R3-DATA-QUERY-R3-002: Explicit column projection (no SELECT *)
-- R3-DATA-QUERY-R3-003: Parallel query execution via asyncio.gather
-
-Reliability Fixes (CHAOS-005 to CHAOS-010):
-- Graceful degradation: Returns fallback data when queries fail
-- Query timeout: Prevents hanging requests from blocking resources
-- Error isolation: Individual query failures don't break entire endpoint
+Queries run concurrently (asyncio.gather over asyncio.to_thread, since the
+supabase-py client is synchronous) with a per-query timeout and graceful
+degradation: one slow/failing query returns partial data with a `_degraded`
+flag instead of taking the whole dashboard down.
 """
-from fastapi import APIRouter, Header, Depends
-from fastapi.responses import JSONResponse
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Header, Depends, Request
 
 from app.core.auth import require_role
 from app.core.database import get_supabase_for_user
-from datetime import datetime, timedelta, timezone
-import asyncio
-import logging
+from app.api.routes.cases import limiter
 
 logger = logging.getLogger("vitalnet")
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
-# Query timeout in seconds (prevents hanging requests)
+# VitalNet's actual role model is exactly three roles: asha_worker, doctor,
+# admin (see app/api/routes/admin_routes.py and AGENTS.md). 'admin' is the
+# global-scope role — it is never restricted to a single facility, matching
+# the behaviour of GET /api/admin/stats. 'doctor' accounts are scoped to
+# their own facility_id.
+GLOBAL_SCOPE_ROLE = "admin"
+
 QUERY_TIMEOUT_SECONDS = 10
 
-# Explicit column list for case_records queries (R3-DATA-QUERY-R3-002 fix)
-# Only select columns actually needed for analytics — avoids exposing PHI unnecessarily
-ANALYTICS_COLUMNS = "id, triage_level, triage_priority, created_at, reviewed_at, submitted_by, facility_id, deleted_at"
+
+async def _run_query(query_fn, label: str, failures: list[str]):
+    """Runs a synchronous supabase query off-thread with a timeout. Returns
+    None (rather than raising) on timeout/failure, appending to `failures` so
+    the caller can degrade gracefully instead of failing the whole endpoint."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(query_fn), timeout=QUERY_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        failures.append(label)
+        logger.warning("Analytics: %s query timed out", label)
+        return None
+    except Exception as e:
+        failures.append(label)
+        logger.warning("Analytics: %s query failed: %s", label, e)
+        return None
 
 
 @router.get("/summary")
+@limiter.limit("60/minute")
 async def get_summary(
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "facility_admin", "admin", "super_admin")),
+    user: dict = Depends(require_role("doctor", "admin")),
 ):
     """
     Returns aggregate stats scoped to the user's facility.
-    super_admin gets system-wide stats.
-
-    Security: R3-DATA-QUERY-R3-002, R3-DATA-QUERY-R3-003 fixes applied.
-    Reliability: Graceful degradation - returns partial data if some queries fail.
+    admin accounts get system-wide stats (global scope), matching
+    the admin dashboard's other endpoints.
     """
-    raw_token = authorization.split(" ", 1)[1] if authorization else ""
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
 
-    role = user.get("user_metadata", {}).get("role")
-    facility_id = user.get("user_metadata", {}).get("facility_id")
+    role = user.get("resolved_role") or ""
+    facility_id = user.get("resolved_facility_id")
+    scoped = role != GLOBAL_SCOPE_ROLE and facility_id
 
-    # Prepare time filters
     since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     month_since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 
-    # Track which queries failed for observability
-    query_failures = []
+    def scope(q):
+        return q.eq("facility_id", facility_id) if scoped else q
 
-    # R3-DATA-QUERY-R3-003: Execute all queries in parallel using asyncio.gather
-    # R3-DATA-QUERY-R3-002: Use explicit column projection instead of SELECT *
-    # Each query has its own try-catch for graceful degradation
-    async def query_total():
-        try:
-            q = db.table("case_records").select("id", count="exact").is_("deleted_at", "null")
-            if role not in ("super_admin",) and facility_id:
-                q = q.eq("facility_id", facility_id)
-            return await asyncio.wait_for(asyncio.to_thread(lambda: q.execute()), timeout=QUERY_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            query_failures.append("total")
-            logger.warning("Analytics: total query timeout")
-            return type('obj', (object,), {'count': 0, 'data': []})()
-        except Exception as e:
-            query_failures.append("total")
-            logger.warning(f"Analytics: total query failed: {e}")
-            return type('obj', (object,), {'count': 0, 'data': []})()
-
-    async def query_triage_dist():
-        try:
-            q = db.table("case_records").select("triage_level").is_("deleted_at", "null")
-            if role not in ("super_admin",) and facility_id:
-                q = q.eq("facility_id", facility_id)
-            return await asyncio.wait_for(asyncio.to_thread(lambda: q.execute()), timeout=QUERY_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            query_failures.append("triage_dist")
-            logger.warning("Analytics: triage_dist query timeout")
-            return type('obj', (object,), {'data': []})()
-        except Exception as e:
-            query_failures.append("triage_dist")
-            logger.warning(f"Analytics: triage_dist query failed: {e}")
-            return type('obj', (object,), {'data': []})()
-
-    async def query_week_cases():
-        try:
-            q = db.table("case_records").select("created_at").is_("deleted_at", "null").gte("created_at", since)
-            if role not in ("super_admin",) and facility_id:
-                q = q.eq("facility_id", facility_id)
-            return await asyncio.wait_for(asyncio.to_thread(lambda: q.execute()), timeout=QUERY_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            query_failures.append("week_cases")
-            logger.warning("Analytics: week_cases query timeout")
-            return type('obj', (object,), {'data': []})()
-        except Exception as e:
-            query_failures.append("week_cases")
-            logger.warning(f"Analytics: week_cases query failed: {e}")
-            return type('obj', (object,), {'data': []})()
-
-    async def query_reviewed():
-        try:
-            q = db.table("case_records").select("id", count="exact").is_("deleted_at", "null").not_.is_("reviewed_at", "null")
-            if role not in ("super_admin",) and facility_id:
-                q = q.eq("facility_id", facility_id)
-            return await asyncio.wait_for(asyncio.to_thread(lambda: q.execute()), timeout=QUERY_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            query_failures.append("reviewed")
-            logger.warning("Analytics: reviewed query timeout")
-            return type('obj', (object,), {'count': 0, 'data': []})()
-        except Exception as e:
-            query_failures.append("reviewed")
-            logger.warning(f"Analytics: reviewed query failed: {e}")
-            return type('obj', (object,), {'count': 0, 'data': []})()
-
-    async def query_asha_workers():
-        try:
-            q = db.table("case_records").select("submitted_by, profiles!submitted_by(full_name)").is_("deleted_at", "null").gte("created_at", month_since)
-            if role not in ("super_admin",) and facility_id:
-                q = q.eq("facility_id", facility_id)
-            return await asyncio.wait_for(asyncio.to_thread(lambda: q.execute()), timeout=QUERY_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            query_failures.append("asha_workers")
-            logger.warning("Analytics: asha_workers query timeout")
-            return type('obj', (object,), {'data': []})()
-        except Exception as e:
-            query_failures.append("asha_workers")
-            logger.warning(f"Analytics: asha_workers query failed: {e}")
-            return type('obj', (object,), {'data': []})()
-
-    # Execute all queries in parallel — significant latency improvement
-    # Individual query failures don't break the entire endpoint
+    failures: list[str] = []
     total_res, dist_res, week_res, reviewed_res, asha_res = await asyncio.gather(
-        query_total(),
-        query_triage_dist(),
-        query_week_cases(),
-        query_reviewed(),
-        query_asha_workers(),
+        _run_query(
+            lambda: scope(db.table("case_records").select("id", count="exact").is_("deleted_at", "null")).execute(),
+            "total", failures,
+        ),
+        _run_query(
+            lambda: scope(db.table("case_records").select("triage_level").is_("deleted_at", "null")).execute(),
+            "triage_dist", failures,
+        ),
+        _run_query(
+            lambda: scope(db.table("case_records").select("created_at").is_("deleted_at", "null").gte("created_at", since)).execute(),
+            "week_cases", failures,
+        ),
+        _run_query(
+            lambda: scope(db.table("case_records").select("id", count="exact").is_("deleted_at", "null").not_.is_("reviewed_at", "null")).execute(),
+            "reviewed", failures,
+        ),
+        _run_query(
+            lambda: scope(
+                db.table("case_records")
+                .select("submitted_by, profiles!submitted_by(full_name)")
+                .is_("deleted_at", "null")
+                .gte("created_at", month_since)
+            ).execute(),
+            "asha_workers", failures,
+        ),
     )
 
-    # Process total cases
-    total = total_res.count or 0
+    total = total_res.count if total_res else 0
 
-    # Process triage distribution
     dist = {"ROUTINE": 0, "URGENT": 0, "EMERGENCY": 0}
-    for row in (dist_res.data or []):
+    for row in (dist_res.data if dist_res else []) or []:
         level = row.get("triage_level")
         if level in dist:
             dist[level] += 1
 
-    # Process daily volume
     daily = {}
-    for row in (week_res.data or []):
+    for row in (week_res.data if week_res else []) or []:
         day = row["created_at"][:10]  # YYYY-MM-DD
         daily[day] = daily.get(day, 0) + 1
 
-    # Process reviewed count
-    reviewed = reviewed_res.count or 0
+    reviewed = reviewed_res.count if reviewed_res else 0
 
-    # Process ASHA worker counts
     asha_counts = {}
-    for row in (asha_res.data or []):
+    for row in (asha_res.data if asha_res else []) or []:
         uid = row.get("submitted_by")
         name = (row.get("profiles") or {}).get("full_name", "Unknown")
         key = f"{uid}::{name}"
@@ -185,57 +136,44 @@ async def get_summary(
         "unreviewed_count": total - reviewed,
         "top_asha_workers": top_asha,
     }
-
-    # Add degradation indicator if any queries failed
-    if query_failures:
+    if failures:
         response["_degraded"] = True
-        response["_failed_queries"] = query_failures
-        logger.info(f"Analytics summary returned degraded data. Failed queries: {query_failures}")
-
+        response["_failed_queries"] = failures
     return response
 
 
 @router.get("/emergency-rate")
+@limiter.limit("60/minute")
 async def get_emergency_rate(
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "facility_admin", "admin", "super_admin")),
+    user: dict = Depends(require_role("doctor", "admin")),
 ):
     """
     Returns EMERGENCY case rate over the last 30 days, grouped by week.
     Used for the trend indicator in the admin analytics view.
-
-    Reliability: Graceful degradation - returns empty weeks if query fails.
     """
-    raw_token = authorization.split(" ", 1)[1]
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
 
-    role = user.get("user_metadata", {}).get("role")
-    facility_id = user.get("user_metadata", {}).get("facility_id")
+    role = user.get("resolved_role") or ""
+    facility_id = user.get("resolved_facility_id")
+    scoped = role != GLOBAL_SCOPE_ROLE and facility_id
 
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 
-    try:
+    def build_query():
         q = (
             db.table("case_records")
             .select("triage_level, created_at")
             .is_("deleted_at", "null")
             .gte("created_at", since)
         )
-        if role not in ("super_admin",) and facility_id:
-            q = q.eq("facility_id", facility_id)
+        return (q.eq("facility_id", facility_id) if scoped else q).execute()
 
-        # Add query timeout to prevent hanging
-        res = await asyncio.wait_for(
-            asyncio.to_thread(lambda: q.execute()),
-            timeout=QUERY_TIMEOUT_SECONDS
-        )
-        rows = res.data or []
-    except asyncio.TimeoutError:
-        logger.warning("Analytics: emergency_rate query timeout")
-        rows = []
-    except Exception as e:
-        logger.warning(f"Analytics: emergency_rate query failed: {e}")
-        rows = []
+    failures: list[str] = []
+    res = await _run_query(build_query, "emergency_rate", failures)
+    rows = (res.data if res else []) or []
 
     # Group by ISO week
     weeks = {}
@@ -258,4 +196,7 @@ async def get_emergency_rate(
         for k, v in sorted(weeks.items())
     ]
 
-    return {"weeks": result}
+    response = {"weeks": result}
+    if failures:
+        response["_degraded"] = True
+    return response

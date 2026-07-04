@@ -1,95 +1,69 @@
 """
-Supabase database clients — three-client setup with connection pooling.
+Supabase database clients.
 
-1. supabase_anon — anon key, public reads (health check, facilities list).
-2. get_supabase_for_user() — per-request RLS-scoped client for all case/profile data.
-3. supabase_admin — service_role key, used ONLY for auth.admin.* operations.
-Never use for case_records or profiles data queries.
+1. supabase_anon  — anon key, public reads (health check) and the auth-token
+                    verification network fallback in app/core/auth.py.
+2. get_supabase_for_user() — per-request client scoped to the caller's JWT so
+                    Row Level Security applies. Used for all user-facing case /
+                    profile / analytics data access.
+3. supabase_admin — service_role key. Bypasses RLS entirely. Used for admin
+                    GLOBAL operations that legitimately must see across all
+                    facilities/users: auth.admin.* (create/list/update auth
+                    users) AND cross-tenant reads/writes on profiles, facilities,
+                    and case_records behind admin-only endpoints.
 
-Also exposes get_db_session() as a FastAPI Depends()-compatible dependency.
-
-Connection Pooling:
-- Uses a singleton base client with connection reuse
-- Only sets auth token per-request instead of creating new clients
-- Significantly reduces overhead and improves performance
-
-Reliability (CHAOS-005 to CHAOS-010):
-- Query timeouts handled at route level to prevent hanging requests
-- Graceful degradation patterns in analytics endpoints
+   SECURITY NOTE: because supabase_admin bypasses RLS, every route that uses it
+   (all of app/api/routes/admin_routes.py) MUST be guarded by
+   require_role('admin') — that role check is the ONLY access-control boundary
+   on those endpoints; there is no RLS backstop. Do not use supabase_admin in
+   any route that isn't admin-gated. tests/test_admin_authz.py enforces this.
 """
-import base64
 import hmac
-import json
 from typing import Optional
-import threading
 
-from fastapi import Header, HTTPException
+from fastapi import HTTPException
 from supabase import Client, create_client
 from supabase.lib.client_options import ClientOptions
 
 from app.core.config import settings
 
-# Thread-local storage for user-scoped clients to avoid race conditions
-_thread_local = threading.local()
-
-# 1. Anon client — public reads only (singleton).
+# 1. Anon client — public reads and the auth verification fallback.
 supabase_anon: Client = create_client(
     settings.supabase_url,
     settings.supabase_anon_key,
 )
 
-# Singleton base client for user-scoped requests (connection pooling)
-_base_user_client: Optional[Client] = None
-_client_lock = threading.Lock()
-
-
-def _get_base_client() -> Client:
-    """
-    Returns a singleton base Supabase client for connection pooling.
-    Thread-safe initialization using double-checked locking pattern.
-    """
-    global _base_user_client
-    if _base_user_client is None:
-        with _client_lock:
-            if _base_user_client is None:
-                _base_user_client = create_client(
-                    settings.supabase_url,
-                    settings.supabase_anon_key,
-                    options=ClientOptions(
-                        auto_refresh_token=False,
-                        persist_session=False,
-                    ),
-                )
-    return _base_user_client
-
 
 def get_supabase_for_user(raw_token: str) -> Client:
     """
-    Returns a Supabase client scoped to the user's JWT so RLS applies.
-    Uses connection pooling by reusing a singleton base client and only
-    setting the auth token per request.
-    
+    Creates a Supabase client scoped to the user's JWT so RLS applies.
     Call this in every endpoint that touches RLS-protected tables.
+
+    Note: constructs a fresh client per call. This is deliberate for
+    correctness — a shared client with a mutated per-request auth token would
+    race across concurrently-served requests. A shared-connection optimization
+    is possible but only safely once the routes are fully async and the
+    auth-set/query pair is provably atomic; see CODEBASE_MAP.md.
     """
-    client = _get_base_client()
-    # Set the auth token for this request (does not create a new connection)
+    client = create_client(settings.supabase_url, settings.supabase_anon_key)
     client.postgrest.auth(raw_token)
     return client
 
 
-ALLOWED_JWT_ALGS = {"HS256", "RS256", "ES256"}
-
-
-def _decode_jwt_part(part: str) -> dict:
-    padded = part + "=" * (-len(part) % 4)
-    decoded = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
-    return json.loads(decoded)
+# 3. Admin client — service_role key, bypasses RLS entirely.
+# Use ONLY inside require_role('admin')-guarded routes (see the SECURITY NOTE above).
+supabase_admin: Client = create_client(
+    settings.supabase_url,
+    settings.supabase_service_role_key,
+    options=ClientOptions(auto_refresh_token=False, persist_session=False),
+)
 
 
 def extract_bearer_token(authorization: Optional[str]) -> str:
     """
-    Extract and validate bearer token signature algorithm and format.
-    Raises HTTP 401 on missing or malformed header.
+    Extract and format-validate a Bearer token from the Authorization header.
+    Raises HTTP 401 on a missing/malformed header or a token that isn't a
+    well-formed 3-part JWT, before any signature verification is attempted.
     """
     if not authorization:
         raise HTTPException(
@@ -113,60 +87,21 @@ def extract_bearer_token(authorization: Optional[str]) -> str:
             detail="Malformed bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    try:
-        header = _decode_jwt_part(token.split(".", 1)[0])
-        alg = (header.get("alg") or "").upper()
-        if alg not in ALLOWED_JWT_ALGS:
-            raise HTTPException(
-                status_code=401,
-                detail="Unsupported token algorithm",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-    except Exception:
-        raise HTTPException(
-            status_code=401,
-            detail="Malformed bearer token header",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
     return token
-
-
-def get_db_session(authorization: Optional[str] = Header(None)) -> Client:
-    """
-    FastAPI Depends()-compatible dependency that extracts the Bearer token
-    from the Authorization header and returns a user-scoped Supabase client.
-    Raises HTTP 401 if the header is missing.
-    """
-    raw_token = extract_bearer_token(authorization)
-    return get_supabase_for_user(raw_token)
-
-
-# 3. Admin client — service_role key, bypasses RLS entirely.
-# Use EXCLUSIVELY for auth.admin.* calls (create/list/update auth users).
-supabase_admin: Client = create_client(
-    settings.supabase_url,
-    settings.supabase_service_role_key,
-    options=ClientOptions(auto_refresh_token=False, persist_session=False),
-)
 
 
 def validate_schema_compatibility() -> None:
     """
-    Verify database schema compatibility with critical tables and columns.
-    Raises RuntimeError if a table or expected query path fails due to schema mismatch.
-    Allows empty tables to pass successfully.
+    Startup gate: verify the tables this app depends on actually exist and are
+    queryable, so a schema drift or un-run migration fails fast at boot instead
+    of surfacing as a confusing 500 on a patient's first request. Queries just
+    one row per table (empty tables pass).
     """
-    tables_to_check = ["facilities", "profiles", "case_records", "case_reviews"]
+    tables_to_check = ["facilities", "profiles", "case_records"]
     for table in tables_to_check:
         try:
-            # Query just one ID to verify the table exists and can be queried.
-            # If the table is empty, this returns empty data but succeeds.
             supabase_anon.table(table).select("id").limit(1).execute()
         except Exception as e:
-            # If it's a real schema/database error (e.g. table not found), raise.
             raise RuntimeError(
                 f"Database schema compatibility check failed for table '{table}': {e}"
             )
-

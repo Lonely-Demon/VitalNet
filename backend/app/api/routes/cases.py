@@ -2,9 +2,6 @@
 VitalNet Cases Router — all patient case endpoints.
 Extracted from main.py as part of Phase 12 architectural modularisation.
 """
-import base64
-import hashlib
-import json as _json
 import logging
 import re
 import uuid as uuid_lib
@@ -13,12 +10,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 
-from app.core.auth import require_role
-from app.core.correlation import get_correlation_id
+from app.core.auth import require_role, verify_sub_for_rate_limit
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
-from app.core.database import extract_bearer_token, get_supabase_for_user
+from app.core.config import settings
+from app.core.database import get_supabase_for_user
 from app.models.schemas import IntakeForm
 from app.ml.classifier import run_triage
 from app.services.llm import generate_briefing
@@ -28,42 +24,41 @@ logger = logging.getLogger("vitalnet")
 router = APIRouter()
 
 
-def _header_or_401(value: str | None) -> str:
-    if value is None:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    return value
+def _get_user_id(request: Request) -> str:
+    """
+    Rate-limit key: the caller's VERIFIED Supabase user id (sub), so a clinic's
+    workers sharing one NATed IP each get their own budget. Uses signature-
+    verified extraction — an attacker cannot forge a token carrying a victim's
+    sub to burn the victim's budget. Falls back to client IP when the token is
+    absent or its signature can't be verified locally (e.g. asymmetric-key
+    projects), which also stops unauthenticated callers from bypassing the limiter.
+    """
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header.split(" ", 1)[-1] if auth_header else ""
+    sub = verify_sub_for_rate_limit(token) if token else None
+    return sub or (request.client.host if request.client else "unknown")
+
+
+# storage_uri empty -> slowapi's default in-memory store. Set
+# RATE_LIMIT_STORAGE_URI (e.g. redis://...) in multi-instance production so the
+# limit is shared across workers/instances rather than per-process.
+_limiter_kwargs = {"key_func": _get_user_id}
+if settings.rate_limit_storage_uri:
+    _limiter_kwargs["storage_uri"] = settings.rate_limit_storage_uri
+limiter = Limiter(**_limiter_kwargs)
 
 
 def _sanitize_medical_text(value: str | None, max_length: int = 500) -> str | None:
+    """
+    Defense-in-depth on top of the schema-level control-char stripping
+    (app/models/schemas.py): also strips embedded HTML/markup tags before the
+    text reaches the DB, the LLM prompt, or a doctor's browser.
+    """
     if value is None:
         return None
-    cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", value)
-    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+    cleaned = re.sub(r"<[^>]+>", "", value)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned[:max_length] if cleaned else None
-
-
-def _get_user_id(request: Request) -> str:
-    """
-    Extract the Supabase user ID (sub) from the Bearer JWT for rate limiting.
-    Falls back to client IP if the token is absent or malformed —
-    this prevents unauthenticated callers from bypassing the limiter.
-    """
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header.split(" ", 1)[1].strip()
-        if token:
-            return hashlib.sha256(token.encode("utf-8")).hexdigest()[:24]
-    return get_remote_address(request)
-
-
-def _extract_token(authorization: str | None) -> str:
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    parts = authorization.strip().split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
-        raise HTTPException(status_code=401, detail="Malformed Authorization header")
-    return parts[1].strip()
 
 
 def _parse_uuid(value: str, field: str = "id") -> str:
@@ -84,7 +79,7 @@ def _normalized_iso_ts(value: str, field: str) -> str:
 
 
 def _resolved_role(user: dict) -> str:
-    return (user.get("resolved_role") or "").strip()
+    return user.get("resolved_role") or ""
 
 
 def _resolved_facility(user: dict) -> str | None:
@@ -92,20 +87,22 @@ def _resolved_facility(user: dict) -> str | None:
 
 
 def _authorize_case_row_access(user: dict, row: dict) -> None:
+    """
+    Fine-grained, row-level authorization for a single case, on top of the
+    endpoint's require_role() gate: 'admin' is global; 'doctor' is scoped to
+    their own facility_id; 'asha_worker' is scoped to cases they submitted.
+    """
     role = _resolved_role(user)
     user_id = user.get("sub")
     facility_id = _resolved_facility(user)
 
-    if role in {"admin", "super_admin"}:
+    if role == "admin":
         return
-    if role in {"doctor", "facility_admin"} and facility_id and facility_id == row.get("facility_id"):
+    if role == "doctor" and facility_id and facility_id == row.get("facility_id"):
         return
     if role == "asha_worker" and row.get("submitted_by") == user_id:
         return
     raise HTTPException(status_code=403, detail="Not authorized for this case")
-
-
-limiter = Limiter(key_func=_get_user_id)
 
 
 # ── Submit Case ────────────────────────────────────────────────────────────────
@@ -117,7 +114,7 @@ async def submit_case(
     request: Request,       # required first positional param for slowapi
     form: IntakeForm,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("asha_worker", "facility_admin", "admin", "super_admin")),
+    user: dict = Depends(require_role("asha_worker", "admin")),
 ):
     form_data = form.model_dump()
     for field in ("patient_name", "chief_complaint", "observations", "known_conditions", "current_medications", "location"):
@@ -127,7 +124,7 @@ async def submit_case(
     role = _resolved_role(user)
     facility_id = _resolved_facility(user)
 
-    if role in {"asha_worker", "doctor", "facility_admin"} and not facility_id:
+    if role == "asha_worker" and not facility_id:
         raise HTTPException(status_code=403, detail="User is not assigned to a facility")
 
     if form.human_review_requested and not (form.human_review_reason or "").strip():
@@ -137,7 +134,7 @@ async def submit_case(
     try:
         triage_result = run_triage(form_data)
         briefing = await generate_briefing(form_data, triage_result)
-        raw_token = _extract_token(_header_or_401(authorization))
+        raw_token = (authorization or "").split(" ", 1)[-1]
         db = get_supabase_for_user(raw_token)
 
         record = {
@@ -163,11 +160,16 @@ async def submit_case(
             "current_medications": form_data.get("current_medications", form.current_medications),
             "human_review_requested": form.human_review_requested,
             "human_review_reason": form.human_review_reason,
+            "consent_captured": form.consent_captured,
+            "consent_captured_at": form.consent_captured_at.isoformat()
+            if form.consent_captured_at
+            else datetime.now(timezone.utc).isoformat(),
             "triage_level": triage_result["triage_level"],
             "triage_confidence": triage_result["confidence_score"],
             "risk_driver": triage_result["risk_driver"],
+            "low_confidence": bool(triage_result.get("low_confidence")),
             "llm_status": briefing.get("llm_status", "generated"),
-            "needs_review": bool(briefing.get("needs_review") or triage_result.get("needs_review")),
+            "needs_review": bool(briefing.get("needs_review") or form.human_review_requested),
             "briefing": briefing,
             "llm_model_used": briefing.get("_model_used", "unknown"),
             "created_offline": form.created_offline,
@@ -211,17 +213,10 @@ async def submit_case(
     except HTTPException:
         raise
     except Exception as e:
-        correlation_id = get_correlation_id()
         logger.error(
             "submit_case failed for client_id=%s: %s",
-            form.client_id,
-            e,
-            exc_info=True,
-            extra={
-                "correlation_id": correlation_id,
-                "client_id": str(form.client_id) if form.client_id else None,
-                "user_id": user.get("sub")
-            },
+            form.client_id, e,
+            exc_info=True,   # attaches full traceback to the log record
         )
         raise HTTPException(
             status_code=500,
@@ -233,28 +228,32 @@ async def submit_case(
 
 
 @router.get("/api/cases")
+@limiter.limit("60/minute")
 async def get_cases(
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "facility_admin", "admin", "super_admin")),
-    before_time: str | None = None, # ISO timestamp of the last seen case
-    before_priority: int | None = None, # triage_priority of the last seen case (0/1/2)
-    before_id: str | None = None, # id of the last seen case (unique tie-breaker)
+    user: dict = Depends(require_role("doctor", "admin")),
+    before_time: str | None = None,       # ISO timestamp of the last seen case
+    before_priority: int | None = None,   # triage_priority of the last seen case (0/1/2)
+    before_id: str | None = None,         # id of the last seen case (unique tie-breaker)
     limit: int = 25,
 ):
     """
     Cursor-based pagination with composite keyset for the Doctor Dashboard.
 
     Sort order: EMERGENCY (0) → URGENT (1) → ROUTINE (2) first,
-    then by created_at DESC within each tier,
-    then by id DESC as a unique tie-breaker.
+    then by created_at DESC within each tier, then by id DESC as a unique
+    tie-breaker (handles multiple cases with an identical created_at).
 
     Use before_time + before_priority + before_id from the previous page's
     nextCursor / nextTriagePriority / nextId to fetch the next page.
-    The composite cursor correctly handles cases at tier boundaries
-    without silent data loss. R3-REL-DATA-R3-003 fix: Added id as unique
-    tie-breaker to ensure stable pagination across equal timestamps.
+
+    Scoping: 'admin' sees all facilities (global). 'doctor' accounts with a
+    facility_id are scoped to that facility only. Doctors without a
+    facility_id assigned see all cases (unscoped), same as before this
+    endpoint had scoping.
     """
-    raw_token = _extract_token(_header_or_401(authorization))
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
     facility_id = _resolved_facility(user)
@@ -264,34 +263,29 @@ async def get_cases(
     if before_priority is not None and before_priority not in {0, 1, 2}:
         raise HTTPException(status_code=400, detail="Invalid before_priority")
 
-    normalized_before_time = None
-    if before_time is not None:
-        normalized_before_time = _normalized_iso_ts(before_time, "before_time")
-
+    normalized_before_time = _normalized_iso_ts(before_time, "before_time") if before_time is not None else None
     parsed_before_id = _parse_uuid(before_id, "before_id") if before_id else None
 
     query = (
         db.table("case_records")
         .select(
-            "id, patient_name, patient_age, patient_sex, "
-            "triage_level, triage_priority, triage_confidence, risk_driver, "
+            "id, patient_name, patient_age, patient_sex, patient_location, chief_complaint, "
+            "triage_level, triage_priority, triage_confidence, risk_driver, briefing, "
+            "low_confidence, needs_review, human_review_requested, human_review_reason, "
             "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
         )
         .is_("deleted_at", "null")
-        .order("triage_priority", desc=False) # EMERGENCY (0) first
-        .order("created_at", desc=True) # Newest within each tier
-        .order("id", desc=True) # Unique tie-breaker for stable pagination
-        .limit(limit + 1) # Fetch one extra to determine hasMore
+        .order("triage_priority", desc=False)   # EMERGENCY (0) first
+        .order("created_at", desc=True)          # Newest within each tier
+        .order("id", desc=True)                  # Unique tie-breaker for stable pagination
+        .limit(limit + 1)                        # Fetch one extra to determine hasMore
     )
 
-    if role in {"doctor", "facility_admin"}:
-        if not facility_id:
-            raise HTTPException(status_code=403, detail="User is not assigned to a facility")
+    if role == "doctor" and facility_id:
         query = query.eq("facility_id", facility_id)
 
     if normalized_before_time is not None and before_priority is not None:
-        # Composite keyset cursor with unique tie-breaker — correct three-column keyset pagination.
-        # R3-REL-DATA-R3-003: Added id to handle cases with equal timestamps
+        # Composite keyset cursor with unique tie-breaker.
         if parsed_before_id is not None:
             query = query.or_(
                 f"triage_priority.gt.{before_priority},"
@@ -315,7 +309,7 @@ async def get_cases(
         "hasMore": has_more,
         "nextCursor": cases[-1]["created_at"] if has_more and cases else None,
         "nextTriagePriority": cases[-1]["triage_priority"] if has_more and cases else None,
-        "nextId": cases[-1]["id"] if has_more and cases else None,  # R3-REL-DATA-R3-003: Unique tie-breaker for stable pagination
+        "nextId": cases[-1]["id"] if has_more and cases else None,
     }
 
 
@@ -323,14 +317,22 @@ async def get_cases(
 
 
 @router.patch("/api/cases/{case_id}/review")
+@limiter.limit("60/minute")
 async def review_case(
     request: Request,
     case_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "facility_admin", "admin", "super_admin")),
+    user: dict = Depends(require_role("doctor", "admin")),
 ):
+    """
+    Marks a case reviewed. Scoped the same way as GET /api/cases: 'admin'
+    is global, 'doctor' with a facility_id can only review cases in their
+    own facility (matches the visibility scoping — a doctor should not be
+    able to act on a case they cannot see in their normal case list, even
+    if they somehow obtained its id).
+    """
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = _extract_token(_header_or_401(authorization))
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
 
@@ -354,9 +356,8 @@ async def review_case(
         }
     ).eq("id", case_uuid).is_("deleted_at", "null").execute()
 
-    # Check if any row was actually updated (not just found)
-    # R3-REL-DATA-R3-004: Confirm persistence before reporting success
-    if not update_result.data or len(update_result.data) == 0:
+    # Confirm persistence (not just that the row was found) before reporting success
+    if not update_result.data:
         raise HTTPException(status_code=409, detail="Case could not be reviewed or already deleted")
 
     db.table("case_reviews").insert(
@@ -385,11 +386,13 @@ async def review_case(
 
 
 @router.get("/api/cases/mine")
+@limiter.limit("60/minute")
 async def get_my_cases(
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("asha_worker", "facility_admin", "admin", "super_admin")),
-    before: str | None = None, # created_at ISO cursor
-    before_id: str | None = None, # id of the last seen case (unique tie-breaker)
+    user: dict = Depends(require_role("asha_worker", "admin")),
+    before: str | None = None,      # created_at ISO cursor
+    before_id: str | None = None,   # id of the last seen case (unique tie-breaker)
     limit: int = 25,
 ):
     """
@@ -397,9 +400,8 @@ async def get_my_cases(
     Sorted by created_at DESC, then by id DESC as a unique tie-breaker.
     RLS enforces ownership at DB level; the explicit filter is for clarity.
     Returns a limited column set — full briefing JSONB is doctor-facing only.
-    R3-REL-DATA-R3-003 fix: Added id as unique tie-breaker to ensure stable pagination.
     """
-    raw_token = _extract_token(_header_or_401(authorization))
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
     limit = max(1, min(limit, 100))
 
@@ -415,12 +417,11 @@ async def get_my_cases(
         .eq("submitted_by", user["sub"])
         .is_("deleted_at", "null")
         .order("created_at", desc=True)
-        .order("id", desc=True) # R3-REL-DATA-R3-003: Unique tie-breaker for stable pagination
+        .order("id", desc=True)
         .limit(limit + 1)
     )
 
     if normalized_before and parsed_before_id:
-        # R3-REL-DATA-R3-003: Use composite cursor with unique tie-breaker
         query = query.or_(
             f"created_at.lt.{normalized_before},"
             f"and(created_at.eq.{normalized_before},id.lt.{parsed_before_id})"
@@ -436,7 +437,7 @@ async def get_my_cases(
         "cases": rows[:limit],
         "hasMore": has_more,
         "nextCursor": rows[limit - 1]["created_at"] if has_more and rows else None,
-        "nextId": rows[limit - 1]["id"] if has_more and rows else None, # R3-REL-DATA-R3-003: Unique tie-breaker
+        "nextId": rows[limit - 1]["id"] if has_more and rows else None,
     }
 
 
@@ -444,15 +445,16 @@ async def get_my_cases(
 
 
 @router.get("/api/cases/{case_id}")
+@limiter.limit("60/minute")
 async def get_case_detail(
     request: Request,
     case_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("asha_worker", "doctor", "facility_admin", "admin", "super_admin")),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin")),
 ):
     """Returns the full record including briefing JSONB for one case after ownership/facility authorization checks."""
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = _extract_token(_header_or_401(authorization))
+    raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
 
     result = (

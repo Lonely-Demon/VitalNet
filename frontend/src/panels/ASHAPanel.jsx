@@ -1,13 +1,11 @@
-import { lazy, Suspense, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import NavBar from '../components/NavBar'
+import IntakeForm from '../pages/IntakeForm'
 import OfflineBanner from '../components/OfflineBanner'
 import { getMySubmissions, processQueue } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
 import { useAuth } from '../store/authStore'
 import { useRealtimeCases } from '../hooks/useRealtimeCases'
-
-// ROOT-PERF-001: defer IntakeForm bundle until ASHA starts a new case.
-const IntakeForm = lazy(() => import('../pages/IntakeForm'))
 
 const TABS = [
   { id: 'new',     label: 'New Case' },
@@ -94,11 +92,7 @@ export default function ASHAPanel() {
       <OfflineBanner />
 
       <main className="max-w-2xl mx-auto px-4 py-6">
-        {activeTab === 'new' && (
-          <Suspense fallback={<div className="text-sm text-text3">Loading intake form...</div>}>
-            <IntakeForm />
-          </Suspense>
-        )}
+        {activeTab === 'new' && <IntakeForm />}
 
         {activeTab === 'history' && (
           <div>

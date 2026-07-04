@@ -72,7 +72,6 @@ const emptyForm = {
   current_medications: "",
   human_review_requested: false,
   human_review_reason: "",
-  // ROOT-COMPLY-005: Patient consent capture
   consent_captured: false,
 }
 
@@ -137,13 +136,12 @@ export default function IntakeForm() {
   }
 
   const handleSubmit = async (e) => {
-    if (e && e.preventDefault) e.preventDefault()
+    if (e?.preventDefault) e.preventDefault()
     setError(null)
     setFieldErrors({})
     setLocalResult(null)
     setLoading(true)
 
-    // ROOT-COMPLY-005: Require consent before submission
     if (!form.consent_captured) {
       setError("Patient consent is required before submitting case data.")
       setFieldErrors({ consent_captured: "Please confirm patient consent" })
@@ -163,7 +161,6 @@ export default function IntakeForm() {
       temperature: form.temperature ? parseFloat(form.temperature) : null,
       human_review_requested: Boolean(form.human_review_requested),
       human_review_reason: form.human_review_reason?.trim() || null,
-      // Include consent timestamp for audit trail
       consent_captured_at: new Date().toISOString(),
     }
 
@@ -176,7 +173,7 @@ export default function IntakeForm() {
       return
     }
 
-    // Run local ONNX triage immediately — before any network call
+    // Run local offline triage immediately — before any network call
     const local = await classify(payload)
     if (local) {
       setLocalResult(local)
@@ -221,8 +218,8 @@ export default function IntakeForm() {
                   <span className={`inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono ${BADGE_COLORS[offlineTriage.triageLevel]}`}>
                     {offlineTriage.triageLevel}
                   </span>
-                  {offlineTriage.needsReview && (
-                    <p className="text-xs text-urgent mt-2 font-mono">Confidence withheld — human review required</p>
+                  {offlineTriage.lowConfidence && (
+                    <p className="text-xs text-urgent mt-2 font-mono">Model uncertain — human review required</p>
                   )}
                 </div>
               )}
@@ -237,12 +234,6 @@ export default function IntakeForm() {
                   ? 'Preliminary AI triage shown above. Full analysis will be available when connectivity is restored.'
                   : 'It will be submitted automatically when connectivity is restored.'}
               </p>
-              {offlineTriage?.needsReview && (
-                <div className="mb-6 rounded-md border border-urgent/30 bg-urgent/5 p-4 text-left">
-                  <p className="text-xs font-bold uppercase tracking-wider text-urgent">Human review requested</p>
-                  <p className="mt-1 text-sm text-text2">{offlineTriage.reviewReason || 'This case should be reviewed before final disposition.'}</p>
-                </div>
-              )}
             </>
           ) : (
             <>
@@ -255,31 +246,6 @@ export default function IntakeForm() {
               <p className="text-text2 leading-relaxed mb-8">{result.risk_driver}</p>
             </>
           )}
-
-          <div className="mb-6 rounded-md border border-leaf/40 bg-surface2 p-4 text-left">
-            <label className="flex items-start gap-3 text-sm text-text2">
-              <input
-                type="checkbox"
-                name="human_review_requested"
-                checked={form.human_review_requested || false}
-                onChange={(e) => setForm((prev) => ({ ...prev, human_review_requested: e.target.checked }))}
-                className="mt-1 h-4 w-4 accent-forest"
-              />
-              <span>I want this case flagged for human clinical review.</span>
-            </label>
-            {form.human_review_requested && (
-              <textarea
-                name="human_review_reason"
-                value={form.human_review_reason || ''}
-                onChange={handleChange}
-                placeholder="Why does this case need manual review?"
-                maxLength={500}
-                className={`${inputClass} mt-3 resize-none`}
-                rows={2}
-              />
-            )}
-          </div>
-
           <button
             onClick={() => setResult(null)}
             className="bg-forest text-white px-8 py-3 rounded-pill font-medium cursor-pointer shadow-btn hover:shadow-card-hover transition-all active:scale-[0.98]"
@@ -304,8 +270,8 @@ export default function IntakeForm() {
       {/* Patient Location */}
       <Section title="Location">
         <Field label="Location / Village *" error={fieldErrors.location}>
-          <input name="location" value={form.location} onChange={handleChange}
-            placeholder="e.g. Rampur Village" className={`${inputClass} ${fieldErrors.location ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <input name="location" value={form.location} onChange={handleChange} required
+            placeholder="e.g. Rampur Village" maxLength={200} className={`${inputClass} ${fieldErrors.location ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
       </Section>
 
@@ -320,19 +286,19 @@ export default function IntakeForm() {
             onChange={handleChange} placeholder="e.g. 45" className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
         <Field label="Sex *" error={fieldErrors.patient_sex}>
-        <fieldset className="mt-1">
-          <legend className="sr-only">Sex</legend>
-          <div className="flex gap-4" aria-describedby={fieldErrors.patient_sex ? "patient_sex_error" : undefined}>
-            {["male", "female", "other"].map(s => (
-              <label key={s} className="flex items-center gap-2 cursor-pointer group p-2 min-w-[44px] min-h-[44px]">
-                <input type="radio" name="patient_sex" value={s}
-                  checked={form.patient_sex === s} onChange={handleChange}
-                  className="accent-forest w-5 h-5" />
-                <span className="capitalize text-sm text-text2 group-hover:text-forest transition-colors">{s}</span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
+          <fieldset className="mt-1">
+            <legend className="sr-only">Sex</legend>
+            <div className="flex gap-4" aria-describedby={fieldErrors.patient_sex ? "patient_sex_error" : undefined}>
+              {["male", "female", "other"].map(s => (
+                <label key={s} className="flex items-center gap-2 cursor-pointer group p-2 min-w-[44px] min-h-[44px]">
+                  <input type="radio" name="patient_sex" value={s}
+                    checked={form.patient_sex === s} onChange={handleChange}
+                    className="accent-forest w-5 h-5" />
+                  <span className="capitalize text-sm text-text2 group-hover:text-forest transition-colors">{s}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
         </Field>
       </Section>
 
@@ -425,16 +391,16 @@ export default function IntakeForm() {
         <Field label="Known Conditions">
           <input name="known_conditions" value={form.known_conditions}
             onChange={handleChange} placeholder="e.g. diabetes, hypertension"
-            className={inputClass} />
+            maxLength={300} className={inputClass} />
         </Field>
         <Field label="Current Medications">
           <input name="current_medications" value={form.current_medications}
             onChange={handleChange} placeholder="e.g. metformin, amlodipine"
-            className={inputClass} />
+            maxLength={300} className={inputClass} />
         </Field>
       </Section>
 
-      {/* ROOT-COMPLY-005: Patient Consent Section */}
+      {/* Patient Consent */}
       <Section title="Patient Consent">
         <div className={`p-4 rounded-lg border ${fieldErrors.consent_captured ? 'border-emergency/50 bg-emergency/5' : 'border-surface3 bg-surface2'}`}>
           <label className="flex items-start gap-3 cursor-pointer">
@@ -462,6 +428,7 @@ export default function IntakeForm() {
         </div>
       </Section>
 
+      {/* Clinician Review Request */}
       <Section title="Clinician Review">
         <div className="p-4 rounded-lg border border-leaf/40 bg-surface2">
           <label className="flex items-start gap-3 cursor-pointer">
@@ -526,19 +493,18 @@ export default function IntakeForm() {
               Preliminary triage
             </span>
           </div>
+          {localResult.lowConfidence && (
+            <p className="mt-2 text-xs text-urgent font-medium">
+              ⚠ Model uncertain on this case — please have a clinician review carefully.
+            </p>
+          )}
           <p className="mt-2 text-xs text-text3">
             {navigator.onLine
               ? 'Sending to server for full analysis…'
               : 'Offline — queued for sync. Full briefing will appear for the doctor when connectivity returns.'}
-            </p>
-            {offlineTriage?.needsReview && (
-              <div className="mt-3 rounded-md border border-urgent/30 bg-urgent/5 p-3 text-left">
-                <p className="text-xs font-bold uppercase tracking-wider text-urgent">Human review requested</p>
-                <p className="mt-1 text-xs text-text2">{offlineTriage.reviewReason || 'This case should be reviewed before final disposition.'}</p>
-              </div>
-            )}
-          </div>
-        )}
+          </p>
+        </div>
+      )}
     </form>
   )
 }

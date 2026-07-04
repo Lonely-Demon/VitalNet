@@ -30,7 +30,7 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
             <button
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className={`min-w-[44px] min-h-[44px] px-3 py-1.5 rounded-pill text-sm font-medium transition-all duration-200 ${
+              className={`px-3 py-1.5 rounded-pill text-sm font-medium transition-all duration-200 ${
                 activeTab === tab.id
                   ? 'bg-forest text-white shadow-btn'
                   : 'text-text2 hover:text-forest hover:bg-leaf/40'
@@ -53,7 +53,7 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
           </span>
           <button
             onClick={signOut}
-            className="min-w-[44px] min-h-[44px] text-sm text-text3 hover:text-terra transition-colors"
+            className="text-sm text-text3 hover:text-terra transition-colors"
           >
             Sign out
           </button>

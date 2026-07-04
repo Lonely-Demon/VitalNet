@@ -1,20 +1,27 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.8.2
-pydantic-settings==2.3.4
-python-dotenv==1.0.1
-groq==0.9.0
-google-generativeai==0.8.3
-scikit-learn==1.5.2
+fastapi==0.139.0
+uvicorn[standard]==0.50.0
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+groq==1.5.0
+google-generativeai==0.8.6
+# scikit-learn is pinned EXACTLY (not >=) because trained .pkl models are
+# only guaranteed to unpickle with the scikit-learn version that trained
+# them — a newer minor version reorganised internal modules (e.g. `_loss`)
+# and broke unpickling of models trained on older releases. If you bump
+# this version, you MUST re-run scripts/train_classifier.py and commit the
+# regenerated triage_classifier.pkl + triage_classifier.onnx in the same
+# change, or the app will crash at startup (load_classifier() raises).
+scikit-learn==1.9.0
 # shap==0.51.0 — do not downgrade to 0.46.0 (source build fails on Windows+Python 3.13)
 # do not upgrade past 0.51.x without re-verifying SHAP round-trip on triage_classifier.pkl
 shap==0.51.0
 numpy==2.2.6
-python-multipart>=0.0.9
-httpx>=0.27.0
-python-jose[cryptography]==3.3.0
+python-multipart==0.0.32
+httpx==0.27.2
+python-jose[cryptography]==3.4.0
 supabase==2.10.0
-email-validator>=2.0.0
+email-validator==2.3.0
 slowapi==0.1.9
 json-repair==0.36.0
-python-json-logger==2.0.7
+python-json-logger==4.1.0

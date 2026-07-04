@@ -4,6 +4,7 @@ import BriefingCard from '../components/BriefingCard'
 import { useAuth } from '../store/authStore'
 import { useToast } from '../components/ToastProvider'
 import { useRealtimeCases } from '../hooks/useRealtimeCases'
+import SkeletonCard from '../components/SkeletonCard'
 
 export default function Dashboard({ filter = 'all' }) {
   const [cases, setCases]         = useState([])
@@ -11,7 +12,7 @@ export default function Dashboard({ filter = 'all' }) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore]     = useState(false)
   const [nextCursor, setNextCursor] = useState(null)
-  const [nextPriority, setNextPriority] = useState(null)
+  const [nextTriagePriority, setNextTriagePriority] = useState(null)
   const [nextId, setNextId] = useState(null)
   const [error, setError]         = useState(null)
   const { profile } = useAuth()
@@ -31,7 +32,7 @@ export default function Dashboard({ filter = 'all' }) {
       setCases(data.cases)
       setHasMore(data.hasMore)
       setNextCursor(data.nextCursor)
-      setNextPriority(data.nextTriagePriority ?? null)
+      setNextTriagePriority(data.nextTriagePriority ?? null)
       setNextId(data.nextId ?? null)
     } catch (e) {
       setError(e.message || 'Failed to load cases. Check backend connection.')
@@ -46,11 +47,9 @@ export default function Dashboard({ filter = 'all' }) {
     setLoadingMore(true)
     try {
       const data = await getCases({
-        before: {
-          time: nextCursor,
-          priority: nextPriority,
-          id: nextId,
-        },
+        before_time: nextCursor,
+        before_priority: nextTriagePriority,
+        before_id: nextId,
       })
       if (!data || !Array.isArray(data.cases)) return
       // Deduplicate in case realtime already inserted a row / prior page overlap
@@ -61,7 +60,7 @@ export default function Dashboard({ filter = 'all' }) {
       })
       setHasMore(data.hasMore)
       setNextCursor(data.nextCursor)
-      setNextPriority(data.nextTriagePriority ?? null)
+      setNextTriagePriority(data.nextTriagePriority ?? null)
       setNextId(data.nextId ?? null)
     } catch (e) {
       showToast('Failed to load more cases', 'error')
@@ -84,54 +83,44 @@ export default function Dashboard({ filter = 'all' }) {
   useRealtimeCases({
     facilityId,
     onInsert: (newCase) => {
-      // Only add non-deleted cases to prevent soft-deleted records from appearing
-      if (!newCase.deleted_at) {
-        setCases((prev) => {
-          if (prev.find((c) => c.id === newCase.id)) return prev
-          return [newCase, ...prev]
-        })
-        if (newCase.triage_level === 'EMERGENCY') {
-          showToast('New EMERGENCY case received', 'error')
-        }
+      // Soft-deleted rows shouldn't appear on the live dashboard
+      if (newCase.deleted_at) return
+      setCases((prev) => {
+        if (prev.find((c) => c.id === newCase.id)) return prev
+        return [newCase, ...prev]
+      })
+      if (newCase.triage_level === 'EMERGENCY') {
+        showToast('New EMERGENCY case received', 'error')
       }
     },
     onUpdate: (updatedCase) => {
       setCases((prev) => {
-        // If the case has been soft-deleted, remove it from the dashboard
+        // A case just soft-deleted should drop off the dashboard immediately
         if (updatedCase.deleted_at) {
           return prev.filter((c) => c.id !== updatedCase.id)
         }
-        // Otherwise, update the case in place
         return prev.map((c) => (c.id === updatedCase.id ? updatedCase : c))
       })
     },
   })
 
-  // Client-side filtering and section derivation memoized for render stability.
-  // R3-DATA-LIFECYCLE-R3-006: Consistent soft-delete filtering.
+  // Client-side filter — memoized so section derivation doesn't re-run every render
   const visibleCases = useMemo(() => (
     filter === 'pending'
       ? cases.filter(c => !c.reviewed_at && !c.deleted_at)
       : cases.filter(c => !c.deleted_at)
   ), [cases, filter])
 
-  const emergency = useMemo(
-    () => visibleCases.filter(c => c.triage_level === 'EMERGENCY'),
-    [visibleCases]
-  )
-  const urgent = useMemo(
-    () => visibleCases.filter(c => c.triage_level === 'URGENT'),
-    [visibleCases]
-  )
-  const routine = useMemo(
-    () => visibleCases.filter(c => c.triage_level === 'ROUTINE'),
-    [visibleCases]
-  )
+  const emergency = useMemo(() => visibleCases.filter(c => c.triage_level === 'EMERGENCY'), [visibleCases])
+  const urgent    = useMemo(() => visibleCases.filter(c => c.triage_level === 'URGENT'), [visibleCases])
+  const routine   = useMemo(() => visibleCases.filter(c => c.triage_level === 'ROUTINE'), [visibleCases])
 
   if (loading) {
     return (
-      <div className="max-w-2xl mx-auto p-4 mt-8 text-center text-text3">
-        Loading cases...
+      <div className="max-w-2xl mx-auto p-4 mt-6">
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
       </div>
     )
   }

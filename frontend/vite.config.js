@@ -5,53 +5,6 @@ import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
 export default defineConfig({
-  // Handle ONNX files as static assets
-  assetsInclude: ['**/*.onnx'],
-
-  // Exclude onnxruntime-web from pre-bundling (uses dynamic WASM loading)
-  optimizeDeps: {
-    exclude: ['onnxruntime-web'],
-  },
-
-  build: {
-    chunkSizeWarningLimit: 2000,
-    rollupOptions: {
-      output: {
-        // ROOT-PERF-001: deterministic chunking strategy for stable cache reuse.
-        manualChunks(id) {
-          const moduleId = id.replace(/\\/g, '/')
-          if (!moduleId.includes('node_modules')) return undefined
-
-          if (
-            moduleId.includes('/react/') ||
-            moduleId.includes('/react-dom/') ||
-            moduleId.includes('/react-router')
-          ) {
-            return 'vendor-react'
-          }
-
-          if (moduleId.includes('/@supabase/')) {
-            return 'vendor-supabase'
-          }
-
-          if (moduleId.includes('/onnxruntime-web/')) {
-            return 'vendor-onnx'
-          }
-
-          if (moduleId.includes('/recharts/') || moduleId.includes('/d3-')) {
-            return 'vendor-charts'
-          }
-
-          if (moduleId.includes('/date-fns/')) {
-            return 'vendor-date'
-          }
-
-          return 'vendor-misc'
-        },
-      },
-    },
-  },
-
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },
   },
@@ -62,47 +15,34 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
 
-      // Precache app shell only; heavy ML assets are runtime-cached below.
+      // Precache the app shell + the offline triage model. The model is now a
+      // compact tree JSON (~1 MB, gzips far smaller) evaluated in pure JS —
+      // there is no onnxruntime-web WASM to precache anymore, which is the
+      // headline weak-hardware/low-bandwidth win of the Option-6 offline engine.
       workbox: {
+        // Raise the per-file precache cap so triage_trees.json is precached
+        // (default is 2 MiB; the JSON is ~1 MB but keep headroom).
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         globPatterns: [
           '**/*.{js,css,html,ico,png,svg,woff2}',
+          'models/triage_trees.json',
+          'models/features_config.json',
         ],
 
-        runtimeCaching: [
-          {
-            // R3-PERF-ASSET-R3-001: runtime caching policy for large ML assets.
-            urlPattern: ({ url }) =>
-              url.pathname.endsWith('.wasm') ||
-              url.pathname.endsWith('.onnx') ||
-              url.pathname.includes('/models/'),
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'ml-assets-cache',
-              expiration: {
-                maxEntries: 12,
-                maxAgeSeconds: 7 * 24 * 60 * 60,
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
+        // Background Sync for POST /api/submit (in-flight failure recovery)
+        runtimeCaching: [{
+          urlPattern: ({ url }) => url.pathname === '/api/submit',
+          handler: 'NetworkOnly',
+          method: 'POST',
+          options: {
+            backgroundSync: {
+              name: 'vitalnet_submission_queue',
+              options: {
+                maxRetentionTime: 24 * 60,  // 24 hours in minutes
               },
             },
           },
-
-          // Background Sync for POST /api/submit (in-flight failure recovery)
-          {
-            urlPattern: ({ url }) => url.pathname === '/api/submit',
-            handler: 'NetworkOnly',
-            method: 'POST',
-            options: {
-              backgroundSync: {
-                name: 'vitalnet_submission_queue',
-                options: {
-                  maxRetentionTime: 24 * 60, // 24 hours in minutes
-                },
-              },
-            },
-          },
-        ],
+        }],
       },
 
       manifest: {
@@ -141,10 +81,9 @@ export default defineConfig({
       },
     }),
   ],
-
   server: {
     proxy: {
-      '/api': 'http://localhost:8000',
-    },
-  },
+      '/api': 'http://localhost:8000'
+    }
+  }
 })

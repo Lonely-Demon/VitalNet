@@ -5,8 +5,7 @@
 // is unreachable — navigator.onLine stays true but all fetches hang for 60-90 seconds.
 
 const PROBE_TIMEOUT_MS = 5000
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
-const PROBE_URL = API_BASE ? `${API_BASE}/api/health` : '/api/health'
+const PROBE_URL = '/api/health'   // VitalNet backend itself — not an external URL.
 // This correctly handles deployments where the backend is on the clinic LAN.
 
 /**

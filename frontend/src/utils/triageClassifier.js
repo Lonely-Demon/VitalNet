@@ -1,75 +1,73 @@
 // frontend/src/utils/triageClassifier.js
 //
-// Client-side ONNX triage inference using the enhanced 45-feature model.
-// Ports backend/clinical_features.py ClinicalFeatureEngineer to JavaScript.
+// Client-side (offline) triage using the ClinicalFeatureEngineer's 45-feature
+// pipeline (ported from backend/app/ml/clinical_features.py) plus a pure-JS
+// evaluation of the trained tree ensemble — NO onnxruntime-web WASM.
 //
+// Why no ONNX runtime: the model is a gradient-boosted tree ensemble, which
+// evaluates in a few thousand float comparisons. Shipping a general ~12 MB WASM
+// inference engine to precache and cold-compile for that is pure overhead on the
+// 2 GB-class Android tablets and metered rural links this app targets. Instead
+// the model is exported as compact JSON (/models/triage_trees.json, ~1 MB, gzips
+// far smaller) and walked by treeEvaluator.js. Predictions are argmax-identical
+// to the server, enforced by a golden-vector parity test.
+//
+// Layered design (mirrors backend/app/ml/classifier.py, so offline == online):
+//   1. Deterministic safety net → EMERGENCY for extreme presentations, even for
+//      inputs the model never saw ("classify under any circumstances").
+//   2. The tree model for everything else.
+//   3. A NEWS2 concerning-vital floor: never leave a concerning vital as ROUTINE.
+//   4. If the tree JSON can't load at all, rules-only triage still returns a
+//      safe result — triage never fails.
 
-import {
-  CONFIDENCE_FLOOR,
-  EXPECTED_ONNX_SHA256,
-  FEATURE_SCHEMA_VERSION,
-  MODEL_VERSION,
-  RED_FLAG_RULES,
-  SYMPTOM_NORMALIZATION_MAP,
-  UNCERTAINTY_FLOOR,
-} from './modelContract'
+import { evaluateTrees } from './treeEvaluator'
+import { safetyNetCheck, news2ConcerningVital } from './clinicalRules'
 
-const MODEL_PATH = '/models/triage_classifier.onnx'
+const TREES_PATH = '/models/triage_trees.json'
+const FEATURES_CONFIG_PATH = '/models/features_config.json'
 const TRIAGE_LABELS = ['ROUTINE', 'URGENT', 'EMERGENCY']
-const NUM_FEATURES = 45
+
+// Abstention thresholds — mirror classifier.py (LOW_CONFIDENCE_PROBA/MARGIN).
+const LOW_CONFIDENCE_PROBA = 0.55
+const LOW_CONFIDENCE_MARGIN = 0.15
 
 // ---------------------------------------------------------------------------
-// Session management
+// Model loading (compact tree JSON + canonical feature order)
 // ---------------------------------------------------------------------------
 
-let _session = null
+let _treeJson = null
+let _featureNames = null   // canonical feature order, fetched from features_config.json
 let _loadPromise = null
-let _ort = null
-let _modelHash = null
 
 /**
- * Dynamically import ONNX runtime and initialize it
- */
-async function loadOrt() {
-  if (_ort) return _ort
-  
-  // Lazy load ONNX runtime only when needed
-  const ortModule = await import('onnxruntime-web')
-  _ort = ortModule
-  
-  // Disable multi-threading — requires COOP/COEP headers that Vite dev server
-  // and many production hosts don't set.  Single-threaded WASM is fast enough
-  // for a 45-feature model inference (<10 ms).
-  _ort.env.wasm.numThreads = 1
-  
-  return _ort
-}
-
-/**
- * Load and cache the ONNX session.
- * Called once on ASHA panel mount — not on every submission.
- * Retries on failure (resets _loadPromise so next call retries).
+ * Load and cache the tree ensemble JSON + the feature-order manifest. Called
+ * once (warmup) — not per submission. Resets its promise on failure so a later
+ * call retries. Fetching feature order from features_config.json (not a
+ * hard-coded array) means a backend feature-set change can never silently
+ * desync this file from the trained model.
  */
 export async function loadModel() {
-  // Load ONNX runtime only when actually needed
-  await loadOrt()
-  
-  if (_session) return _session
+  if (_treeJson && _featureNames) return _treeJson
   if (_loadPromise) return _loadPromise
 
-  _loadPromise = _ort.InferenceSession.create(MODEL_PATH, {
-    executionProviders: ['wasm'],
-    graphOptimizationLevel: 'all',
-  }).then((session) => {
-    _session = session
-    _modelHash = EXPECTED_ONNX_SHA256
+  _loadPromise = Promise.all([
+    fetch(TREES_PATH).then((r) => {
+      if (!r.ok) throw new Error(`triage_trees.json fetch failed: ${r.status}`)
+      return r.json()
+    }),
+    fetch(FEATURES_CONFIG_PATH).then((r) => {
+      if (!r.ok) throw new Error(`features_config.json fetch failed: ${r.status}`)
+      return r.json()
+    }),
+  ]).then(([trees, config]) => {
+    _treeJson = trees
+    _featureNames = config.feature_names
     _loadPromise = null
-    console.log('[VitalNet] ONNX model loaded (enhanced 45-feature)')
-    return session
+    console.log(`[VitalNet] Offline triage model loaded (${config.num_features}-feature, v${config.model_version}, pure-JS)`)
+    return trees
   }).catch((err) => {
-    // Reset so next call retries instead of returning the failed promise
     _loadPromise = null
-    console.error('[VitalNet] ONNX model load failed:', err)
+    console.error('[VitalNet] Offline model load failed (rules-only fallback will be used):', err)
     throw err
   })
 
@@ -77,20 +75,16 @@ export async function loadModel() {
 }
 
 /**
- * Warm up the model with a dummy inference pass.
- * Eliminates first-submission latency.
- * Guarded against concurrent calls (React strict mode calls useEffect twice).
+ * Prefetch + a dummy evaluation so the first real offline submission is instant.
+ * Guarded against concurrent calls (React strict mode double-invokes effects).
  */
 let _warmupPromise = null
 export async function warmupModel() {
   if (_warmupPromise) return _warmupPromise
   _warmupPromise = (async () => {
-    const session = await loadModel()
-    const ort = await loadOrt()
-    const dummyInput = new Float32Array(NUM_FEATURES).fill(0)
-    const tensor = new ort.Tensor('float32', dummyInput, [1, NUM_FEATURES])
-    await session.run({ float_input: tensor })
-    console.log('[VitalNet] ONNX warmup complete — ready for offline triage')
+    const trees = await loadModel()
+    evaluateTrees(trees, new Array(_featureNames.length).fill(0))
+    console.log('[VitalNet] Offline triage warmup complete')
   })()
   try {
     await _warmupPromise
@@ -149,68 +143,34 @@ function containsAny(text, termSet) {
   return false
 }
 
-function normalizeSymptom(symptom) {
-  const raw = String(symptom || '').trim().toLowerCase()
-  if (!raw) return ''
-  const cleaned = raw.replaceAll('_', ' ').replaceAll('/', ' ').replaceAll('-', ' ').replace(/[^a-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim()
-  return SYMPTOM_NORMALIZATION_MAP[cleaned] || cleaned.replaceAll(' ', '_')
-}
-
-function normalizeSymptoms(symptoms) {
-  const seen = new Set()
-  const normalized = []
-  for (const symptom of Array.isArray(symptoms) ? symptoms : []) {
-    const canonical = normalizeSymptom(symptom)
-    if (canonical && !seen.has(canonical)) {
-      normalized.push(canonical)
-      seen.add(canonical)
-    }
-  }
-  return normalized
-}
-
-function coerceNumeric(value, fallback) {
-  if (value === '' || value == null) return fallback
-  const numeric = Number(value)
-  return Number.isFinite(numeric) ? numeric : fallback
-}
-
-function assessRedFlags(formData, symptoms) {
-  const complaint = String(formData.chief_complaint || '').toLowerCase()
-  const matched = []
-  for (const [ruleName, rule] of Object.entries(RED_FLAG_RULES)) {
-    const symptomHit = rule.symptoms.some((symptom) => symptoms.includes(symptom))
-    const complaintHit = rule.complaintTerms.some((term) => complaint.includes(term))
-    if (symptomHit || complaintHit) matched.push(ruleName)
-  }
-  return { redFlags: matched, mustEscalate: matched.length > 0 }
-}
-
 /**
- * Build the full 45-feature Float32Array from IntakeForm data.
- * Feature order MUST match the Python ClinicalFeatureEngineer exactly.
+ * Compute the clinical feature map from IntakeForm data.
+ * Key names MUST match the Python ClinicalFeatureEngineer output keys
+ * exactly — the assembly ORDER is handled separately by
+ * orderFeatureVector() using features_config.json, so key order in the
+ * returned object here does not need to match the model's input order.
  */
-function buildFeatureVector(formData) {
-  const symptoms = normalizeSymptoms(formData.symptoms || [])
-  const age = coerceNumeric(formData.patient_age, 0)
-  const sex = formData.patient_sex === 'male' ? 1 : formData.patient_sex === 'female' ? 0 : -1
-  const bpSys = coerceNumeric(formData.bp_systolic, 110)
-  const bpDia = coerceNumeric(formData.bp_diastolic, 70)
-  const spo2 = coerceNumeric(formData.spo2, 94)
-  const hr = coerceNumeric(formData.heart_rate, 88)
-  const temp = coerceNumeric(formData.temperature, 37.2)
+function buildFeatureMap(formData) {
+  const symptoms = formData.symptoms || []
+  const age = formData.patient_age ?? -1
+  const sex = formData.patient_sex === 'male' ? 1 : 0
+  const bpSys = formData.bp_systolic ?? -1
+  const bpDia = formData.bp_diastolic ?? -1
+  const spo2 = formData.spo2 ?? -1
+  const hr = formData.heart_rate ?? -1
+  const temp = formData.temperature ?? -1
   const complaint = (formData.chief_complaint || '').toLowerCase()
   const duration = (formData.complaint_duration || '').toLowerCase()
   const location = (formData.location || '').toLowerCase()
   const conditions = (formData.known_conditions || '').toLowerCase()
 
   // Use fallbacks for derived features (same as Python)
-  const safeBpSys = bpSys > 0 ? bpSys : 110
-  const safeBpDia = bpDia > 0 ? bpDia : 70
-  const safeHr = hr > 0 ? hr : 88
-  const safeSpo2 = spo2 > 0 ? spo2 : 94
-  const safeTemp = temp > 0 ? temp : 37.2
-  const safeAge = age > 0 ? age : 0
+  const safeBpSys = bpSys > 0 ? bpSys : 120
+  const safeBpDia = bpDia > 0 ? bpDia : 80
+  const safeHr = hr > 0 ? hr : 75
+  const safeSpo2 = spo2 > 0 ? spo2 : 97
+  const safeTemp = temp > 0 ? temp : 37.0
+  const safeAge = age > 0 ? age : 40
 
   // Symptom flags
   const chestPain = symptoms.includes('chest_pain') ? 1 : 0
@@ -404,91 +364,110 @@ function buildFeatureVector(formData) {
   if (ruralTerms.some(t => location.includes(t))) healthcareAccessibility = 0.5
   else if (urbanTerms.some(t => location.includes(t))) healthcareAccessibility = 1.0
 
-  // --- Assemble the 45-feature vector in exact order ---
-  const features = [
-    // Basic (14)
-    age, sex, bpSys, bpDia, spo2, hr, temp, symptomCount,
-    chestPain, breathlessness, alteredConsciousness, severeBleeding, seizure, highFever,
-    // Vital derived (12)
-    pulsePressure, meanArterialPressure, shockIndex, spo2AgeRatio, tempDeviation,
-    cardiacRisk, respDistress, hemodynamic, sepsisRisk,
-    pediatricAdj, geriatricAdj, pregnancyAdj,
-    // Symptom interaction (8)
-    cardiopulmonaryCluster, neurologicalCluster, hemorrhagicCluster, infectiousCluster,
-    symptomSeverity, durationRisk, complaintRisk, comorbidityMult,
-    // Age-specific (6)
-    pediatricFeverRisk, elderlyFallRisk, adultCardiacRisk, obstetricRisk,
-    traumaSeverity, mentalHealthCrisis,
-    // Contextual (5)
-    timeOfDayRisk, seasonalRisk, geographicRisk, epidemicAlertLevel, healthcareAccessibility,
-  ]
+  // --- Feature map, keyed by the same names ClinicalFeatureEngineer uses ---
+  // Values are assembled into the final vector using the canonical order
+  // fetched from features_config.json (see loadModel()) — NOT the order
+  // they're listed here, so this object's key order is not load-bearing.
+  return {
+    age, sex, bp_systolic: bpSys, bp_diastolic: bpDia, spo2, heart_rate: hr,
+    temperature: temp, symptom_count: symptomCount,
+    chest_pain: chestPain, breathlessness, altered_consciousness: alteredConsciousness,
+    severe_bleeding: severeBleeding, seizure, high_fever: highFever,
+    pulse_pressure: pulsePressure, mean_arterial_pressure: meanArterialPressure,
+    shock_index: shockIndex, spo2_age_ratio: spo2AgeRatio, temp_deviation: tempDeviation,
+    cardiac_risk_score: cardiacRisk, respiratory_distress_score: respDistress,
+    hemodynamic_instability: hemodynamic, sepsis_risk_score: sepsisRisk,
+    pediatric_adjustment: pediatricAdj, geriatric_adjustment: geriatricAdj,
+    pregnancy_adjustment: pregnancyAdj,
+    cardiopulmonary_cluster: cardiopulmonaryCluster, neurological_cluster: neurologicalCluster,
+    hemorrhagic_cluster: hemorrhagicCluster, infectious_cluster: infectiousCluster,
+    symptom_severity_score: symptomSeverity, symptom_duration_risk: durationRisk,
+    chief_complaint_risk: complaintRisk, comorbidity_multiplier: comorbidityMult,
+    pediatric_fever_risk: pediatricFeverRisk, elderly_fall_risk: elderlyFallRisk,
+    adult_cardiac_risk: adultCardiacRisk, obstetric_emergency_risk: obstetricRisk,
+    trauma_severity_score: traumaSeverity, mental_health_crisis: mentalHealthCrisis,
+    time_of_day_risk: timeOfDayRisk, seasonal_risk: seasonalRisk,
+    geographic_risk: geographicRisk, epidemic_alert_level: epidemicAlertLevel,
+    healthcare_accessibility: healthcareAccessibility,
+  }
+}
 
-  return new Float32Array(features)
+/**
+ * Assemble the ordered plain-number array using the canonical feature order
+ * fetched from features_config.json. Throws if the feature order hasn't loaded.
+ */
+function orderFeatureVector(featureMap) {
+  if (!_featureNames) {
+    throw new Error('Feature order not loaded yet — call loadModel() before running inference')
+  }
+  return _featureNames.map((name) => {
+    const v = featureMap[name]
+    return typeof v === 'number' ? v : 0
+  })
 }
 
 // ---------------------------------------------------------------------------
-// Inference
+// Inference — layered, mirrors backend/app/ml/classifier.py::predict_triage
 // ---------------------------------------------------------------------------
 
 /**
- * Run triage inference on form data.
- * Returns { triageLevel, confidence, isLocal: true }
+ * Run offline triage on form data. Always returns a result — never throws for
+ * well-formed input, even if the tree model failed to load (rules-only
+ * fallback). Shape:
+ *   { triageLevel, confidence, lowConfidence, isLocal: true,
+ *     safetyNet, news2Floor, modelUnavailable }
  */
 export async function runTriage(formData) {
-  const ort = await loadOrt()
-  const session = await loadModel()
-
-  const featureVector = buildFeatureVector(formData)
-  const tensor = new ort.Tensor('float32', featureVector, [1, NUM_FEATURES])
-
-  const results = await session.run({ float_input: tensor })
-
-  // label output: int64 tensor, value is 0/1/2
-  const labelIndex = Number(results.label.data[0])
-  const triageLevel = TRIAGE_LABELS[labelIndex] ?? null
-
-  // probabilities: flat array [prob_0, prob_1, prob_2]
-  let confidence = null
-  try {
-    const probData = results.probabilities.data
-    confidence = Number.isFinite(labelIndex) && TRIAGE_LABELS[labelIndex] ? probData[labelIndex] : null
-  } catch {
-    // non-critical — confidence display is optional
-  }
-
-  const symptoms = normalizeSymptoms(formData.symptoms || [])
-  const redFlags = assessRedFlags(formData, symptoms)
-  const uncertainty = { high_uncertainty: false, agreement_score: 1, epistemic_uncertainty: 0 }
-
-  if (triageLevel == null) {
+  // Layer 1 — deterministic safety net. Works with no model at all.
+  const safetyReason = safetyNetCheck(formData)
+  if (safetyReason) {
     return {
       triageLevel: 'EMERGENCY',
-      confidence: null,
+      confidence: 1,
+      lowConfidence: false,
       isLocal: true,
-      needsReview: true,
-      reviewReason: 'Unknown ONNX label index — requiring human review',
-      modelVersion: MODEL_VERSION,
-      featureSchemaVersion: FEATURE_SCHEMA_VERSION,
-      modelHash: _modelHash,
-      redFlags: redFlags.redFlags,
-      mustEscalate: true,
-      uncertainty,
+      safetyNet: true,
+      news2Floor: false,
+      modelUnavailable: false,
     }
   }
 
-  const needsReview = confidence == null || confidence < CONFIDENCE_FLOOR || uncertainty.high_uncertainty || redFlags.mustEscalate
+  // Layer 2 — trained tree model (fall back to rules if it can't load).
+  let triageLevel = 'ROUTINE'
+  let confidence = null
+  let lowConfidence = false
+  let modelUnavailable = false
+
+  try {
+    const trees = await loadModel()
+    const featureVector = orderFeatureVector(buildFeatureMap(formData))
+    const { classIndex, probabilities } = evaluateTrees(trees, featureVector)
+    triageLevel = TRIAGE_LABELS[classIndex] ?? 'ROUTINE'
+    confidence = probabilities[classIndex]
+    const sorted = [...probabilities].sort((a, b) => b - a)
+    const margin = sorted.length > 1 ? sorted[0] - sorted[1] : 1
+    lowConfidence = confidence < LOW_CONFIDENCE_PROBA || margin < LOW_CONFIDENCE_MARGIN
+  } catch {
+    // Model unavailable — rules-only fallback. Never fail to triage.
+    modelUnavailable = true
+    triageLevel = 'ROUTINE'
+  }
+
+  // Layer 3 — NEWS2 concerning-vital floor: never leave a concerning vital as ROUTINE.
+  let news2Floor = false
+  if (triageLevel === 'ROUTINE' && news2ConcerningVital(formData)) {
+    triageLevel = 'URGENT'
+    lowConfidence = false
+    news2Floor = true
+  }
 
   return {
     triageLevel,
-    confidence: needsReview ? null : confidence,
-    isLocal: true, // flags this as a preliminary local result
-    needsReview,
-    reviewReason: needsReview ? 'Low-confidence or red-flag case needs human review' : null,
-    modelVersion: MODEL_VERSION,
-    featureSchemaVersion: FEATURE_SCHEMA_VERSION,
-    modelHash: _modelHash,
-    redFlags: redFlags.redFlags,
-    mustEscalate: redFlags.mustEscalate,
-    uncertainty,
+    confidence,
+    lowConfidence,
+    isLocal: true,
+    safetyNet: false,
+    news2Floor,
+    modelUnavailable,
   }
 }

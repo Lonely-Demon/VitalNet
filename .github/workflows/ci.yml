@@ -2,9 +2,9 @@ name: VitalNet CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
 
 permissions:
   contents: read
@@ -35,6 +35,12 @@ jobs:
         run: python -m ruff check backend
 
   build-frontend-pr:
+    # PR-triggered build + the offline-model parity check. Deliberately does
+    # NOT receive repository secrets (untrusted PR code, e.g. from a fork or
+    # Dependabot, could exfiltrate them) — uses placeholder env values, which
+    # is safe because this job only validates the build compiles and that the
+    # committed golden vectors parity-check against the committed tree JSON
+    # (neither requires live credentials).
     runs-on: ubuntu-latest
     timeout-minutes: 12
     if: github.event_name == 'pull_request'
@@ -46,10 +52,15 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '20'
-      - name: Install and Build (No Install Scripts)
-        run: |
-          npm ci --prefix frontend --ignore-scripts
-          npm run build --prefix frontend
+      - name: Install (no install scripts)
+        run: npm ci --prefix frontend --ignore-scripts
+      - name: Offline-model parity (JS == server model)
+        # Guards that the pure-JS offline tree evaluator produces the SAME
+        # triage as the server model on the committed golden vectors. If this
+        # fails, offline triage would diverge from online — block the merge.
+        run: npm run test:parity --prefix frontend
+      - name: Build
+        run: npm run build --prefix frontend
         env:
           VITE_SUPABASE_URL: https://example.supabase.co
           VITE_SUPABASE_ANON_KEY: ci-placeholder-anon-key
@@ -73,7 +84,11 @@ jobs:
           pip install --no-cache-dir -r backend/requirements.txt
           pip install --no-cache-dir pytest==8.3.4 pytest-asyncio==0.24.0 httpx==0.27.2
       - name: Run Pytest
-        run: python -m pytest backend/tests/ -v
+        # test_e2e.py is an integration test needing a live server + real
+        # Supabase project — excluded here. tests/conftest.py supplies
+        # fallback fake creds for the unit/safety/authz tests when secrets
+        # aren't configured for this run.
+        run: python -m pytest backend/tests/ -v --ignore=backend/tests/test_e2e.py
         env:
           SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
@@ -93,10 +108,12 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '20'
-      - name: Install and Build (No Install Scripts)
-        run: |
-          npm ci --prefix frontend --ignore-scripts
-          npm run build --prefix frontend
+      - name: Install (no install scripts)
+        run: npm ci --prefix frontend --ignore-scripts
+      - name: Offline-model parity (JS == server model)
+        run: npm run test:parity --prefix frontend
+      - name: Build
+        run: npm run build --prefix frontend
         env:
           VITE_SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}

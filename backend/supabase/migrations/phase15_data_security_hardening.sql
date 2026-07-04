@@ -226,18 +226,34 @@ CREATE POLICY case_records_update_policy
     )
   )
   WITH CHECK (
-    -- Cannot change submitted_by (immutable audit trail)
-    submitted_by = submitted_by
-    -- Only doctors+ can set reviewed_by
-    AND (
-      reviewed_by IS NULL
-      OR EXISTS (
-        SELECT 1 FROM public.profiles p
-        WHERE p.id = auth.uid()
-          AND p.role IN ('doctor', 'facility_admin', 'admin', 'super_admin')
-      )
+    -- Only doctors+ can set reviewed_by (submitted_by immutability is
+    -- enforced separately below via trigger — RLS WITH CHECK cannot
+    -- compare against the pre-update row, only the proposed new one)
+    reviewed_by IS NULL
+    OR EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.id = auth.uid()
+        AND p.role IN ('doctor', 'facility_admin', 'admin', 'super_admin')
     )
   );
+
+-- submitted_by is an immutable audit-trail field. RLS's WITH CHECK only sees
+-- the proposed new row, not the stored one, so it cannot express "unchanged"
+-- — a BEFORE UPDATE trigger is the correct primitive for column immutability.
+CREATE OR REPLACE FUNCTION public.protect_case_records_submitted_by()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.submitted_by IS DISTINCT FROM OLD.submitted_by THEN
+    RAISE EXCEPTION 'submitted_by is immutable and cannot be changed';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_protect_case_records_submitted_by ON public.case_records;
+CREATE TRIGGER trg_protect_case_records_submitted_by
+  BEFORE UPDATE ON public.case_records
+  FOR EACH ROW EXECUTE FUNCTION public.protect_case_records_submitted_by();
 
 -- R3-DATA-RLS-R3-006: Facilities table RLS (prevent unauthorized PHC data access)
 DROP POLICY IF EXISTS facilities_select_policy ON public.facilities;

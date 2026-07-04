@@ -10,7 +10,7 @@ updates:
     directory: "/backend"
     schedule:
       interval: "daily"
-    target-branch: "dev"    # <--- Now targeting dev instead of main
+    target-branch: "dev"
     open-pull-requests-limit: 5
 
   # 2. Frontend Dependencies (NPM)
@@ -18,7 +18,7 @@ updates:
     directory: "/frontend"
     schedule:
       interval: "daily"
-    target-branch: "dev"    # <--- Now targeting dev instead of main
+    target-branch: "dev"
     open-pull-requests-limit: 5
 
   # 3. Actions Dependencies (GitHub Actions)

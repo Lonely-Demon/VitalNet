@@ -1,8 +1,8 @@
-import { memo, useCallback, useState } from 'react'
+import { useState } from 'react'
 import { reviewCase } from '../lib/api'
 import TriageBadge from './TriageBadge'
 
-function BriefingCard({ caseData, onReviewed }) {
+export default function BriefingCard({ caseData, onReviewed }) {
   const [expanded, setExpanded] = useState(caseData.triage_level === 'EMERGENCY')
   const [marking, setMarking] = useState(false)
   const [reviewed, setReviewed] = useState(caseData.reviewed_at !== null)
@@ -10,7 +10,7 @@ function BriefingCard({ caseData, onReviewed }) {
   // briefing is already a JSONB object from Supabase — no JSON.parse needed
   const b = caseData.briefing
 
-  const handleMarkReviewed = useCallback(async () => {
+  const handleMarkReviewed = async () => {
     setMarking(true)
     try {
       await reviewCase(caseData.id)
@@ -21,7 +21,7 @@ function BriefingCard({ caseData, onReviewed }) {
     } finally {
       setMarking(false)
     }
-  }, [caseData.id, onReviewed])
+  }
 
   const timeStr = new Date(caseData.created_at).toLocaleTimeString([], {
     hour: '2-digit', minute: '2-digit'
@@ -40,11 +40,9 @@ function BriefingCard({ caseData, onReviewed }) {
       ${caseData.triage_level === 'EMERGENCY' ? 'animate-pulse-ring' : ''}
     `}>
       {/* Header — always visible */}
-      <button
-        className="w-full p-4 cursor-pointer flex items-start justify-between text-left hover:bg-surface2/20 focus:outline-none focus:ring-2 focus:ring-sage focus:ring-inset"
+      <div
+        className="p-4 cursor-pointer flex items-start justify-between"
         onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
-        aria-controls={`briefing-content-${caseData.id}`}
       >
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
@@ -65,13 +63,20 @@ function BriefingCard({ caseData, onReviewed }) {
           <p className="text-xs text-text3 mt-1 font-mono">
             {timeStr}
           </p>
+          {(caseData.needs_review || caseData.low_confidence || caseData.human_review_requested) && (
+            <p className="text-xs text-urgent font-bold mt-1">
+              {caseData.human_review_requested
+                ? '⚑ Review requested by submitter'
+                : '⚠ Model uncertain — clinician review recommended'}
+            </p>
+          )}
         </div>
-        <span className="text-text3 ml-2 flex items-center justify-center min-w-[44px] min-h-[44px]" aria-hidden="true">{expanded ? "▲" : "▼"}</span>
-      </button>
+        <span className="text-text3 ml-2">{expanded ? "▲" : "▼"}</span>
+      </div>
 
       {/* Expanded briefing */}
       {expanded && b && (
-        <div id={`briefing-content-${caseData.id}`} className="px-5 pb-5 border-t border-leaf/40 pt-4 space-y-5 bg-surface2/30">
+        <div className="px-5 pb-5 border-t border-leaf/40 pt-4 space-y-5 bg-surface2/30">
 
           <BriefingSection title="Primary Signal">
             <p className="text-sm text-text font-medium leading-relaxed">{b.primary_risk_driver}</p>
@@ -121,6 +126,12 @@ function BriefingCard({ caseData, onReviewed }) {
             <p className="text-sm text-urgent">{b.uncertainty_flags}</p>
           </BriefingSection>
 
+          {caseData.human_review_requested && caseData.human_review_reason && (
+            <BriefingSection title="Review Requested By Submitter">
+              <p className="text-sm text-text2">{caseData.human_review_reason}</p>
+            </BriefingSection>
+          )}
+
           {/* Disclaimer — non-removable */}
           <div className="bg-surface2 border border-leaf/40 rounded-lg p-3 mt-2 shadow-card">
             <p className="text-xs text-text3 font-medium tracking-tight font-mono">{b.disclaimer}</p>
@@ -150,6 +161,3 @@ function BriefingSection({ title, children }) {
     </div>
   )
 }
-
-// ROOT-PERF-005: avoid rerendering unchanged cards when parent rerenders.
-export default memo(BriefingCard)
