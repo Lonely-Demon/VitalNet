@@ -1,0 +1,1652 @@
+[
+  {
+    "case_input": {
+      "patient_age": 15,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": null,
+      "heart_rate": 87,
+      "temperature": 37.5,
+      "symptoms": [
+        "high_fever"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Remote Tribal Area",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 19,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 96,
+      "heart_rate": 82,
+      "temperature": 36.9,
+      "symptoms": [],
+      "chief_complaint": "Weakness / fatigue",
+      "complaint_duration": "More than 3 days",
+      "location": "Remote Tribal Area",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 45,
+      "patient_sex": "male",
+      "bp_systolic": 106,
+      "bp_diastolic": 62,
+      "spo2": 96,
+      "heart_rate": 78,
+      "temperature": 37.0,
+      "symptoms": [],
+      "chief_complaint": "Other",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Chennai City",
+      "known_conditions": "heart disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 16,
+      "patient_sex": "male",
+      "bp_systolic": 127,
+      "bp_diastolic": 81,
+      "spo2": 98,
+      "heart_rate": 82,
+      "temperature": 37.0,
+      "symptoms": [],
+      "chief_complaint": "Weakness / fatigue",
+      "complaint_duration": "More than 3 days",
+      "location": "Kothagudem Town",
+      "known_conditions": "heart disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 9,
+      "patient_sex": "male",
+      "bp_systolic": 121,
+      "bp_diastolic": 67,
+      "spo2": null,
+      "heart_rate": 86,
+      "temperature": 36.9,
+      "symptoms": [],
+      "chief_complaint": "Headache / dizziness",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Remote Tribal Area",
+      "known_conditions": "diabetes",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 6,
+      "patient_sex": "female",
+      "bp_systolic": 131,
+      "bp_diastolic": 77,
+      "spo2": 97,
+      "heart_rate": 108,
+      "temperature": 37.1,
+      "symptoms": [
+        "breathlessness"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Bihar Village",
+      "known_conditions": "kidney disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 38,
+      "patient_sex": "male",
+      "bp_systolic": 101,
+      "bp_diastolic": 69,
+      "spo2": 96,
+      "heart_rate": null,
+      "temperature": 36.9,
+      "symptoms": [],
+      "chief_complaint": "Headache / dizziness",
+      "complaint_duration": "1\u20133 days",
+      "location": "Bihar Village",
+      "known_conditions": "asthma",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 95,
+      "patient_sex": "male",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 97,
+      "heart_rate": 65,
+      "temperature": 36.5,
+      "symptoms": [
+        "high_fever"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Remote Tribal Area",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 7,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": null,
+      "heart_rate": 86,
+      "temperature": 37.3,
+      "symptoms": [],
+      "chief_complaint": "Weakness / fatigue",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Rampur Village",
+      "known_conditions": "kidney disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 0,
+      "patient_sex": "male",
+      "bp_systolic": 136,
+      "bp_diastolic": 80,
+      "spo2": 96,
+      "heart_rate": 112,
+      "temperature": 37.1,
+      "symptoms": [],
+      "chief_complaint": "Other",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Bihar Village",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 50,
+      "patient_sex": "female",
+      "bp_systolic": 149,
+      "bp_diastolic": 83,
+      "spo2": null,
+      "heart_rate": 72,
+      "temperature": 36.5,
+      "symptoms": [],
+      "chief_complaint": "Headache / dizziness",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Bihar Village",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 16,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 95,
+      "heart_rate": null,
+      "temperature": null,
+      "symptoms": [],
+      "chief_complaint": "Fever",
+      "complaint_duration": "More than 3 days",
+      "location": "Rampur Village",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 50,
+      "patient_sex": "female",
+      "bp_systolic": 106,
+      "bp_diastolic": 80,
+      "spo2": 96,
+      "heart_rate": 63,
+      "temperature": 36.9,
+      "symptoms": [],
+      "chief_complaint": "Fever",
+      "complaint_duration": "More than 3 days",
+      "location": "Bihar Village",
+      "known_conditions": "asthma",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 24,
+      "patient_sex": "female",
+      "bp_systolic": 97,
+      "bp_diastolic": 78,
+      "spo2": 96,
+      "heart_rate": 69,
+      "temperature": 37.2,
+      "symptoms": [],
+      "chief_complaint": "Headache / dizziness",
+      "complaint_duration": "1\u20133 days",
+      "location": "Rural District",
+      "known_conditions": "heart disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 23,
+      "patient_sex": "female",
+      "bp_systolic": 113,
+      "bp_diastolic": 77,
+      "spo2": null,
+      "heart_rate": 91,
+      "temperature": 36.7,
+      "symptoms": [],
+      "chief_complaint": "Fever",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Kothagudem Town",
+      "known_conditions": "diabetes",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 22,
+      "patient_sex": "female",
+      "bp_systolic": 139,
+      "bp_diastolic": 94,
+      "spo2": null,
+      "heart_rate": 83,
+      "temperature": 38.2,
+      "symptoms": [],
+      "chief_complaint": "Nausea / vomiting",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Kothagudem Town",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 2,
+      "patient_sex": "male",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 94,
+      "heart_rate": 111,
+      "temperature": 38.2,
+      "symptoms": [],
+      "chief_complaint": "Other",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Chennai City",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 44,
+      "patient_sex": "male",
+      "bp_systolic": 127,
+      "bp_diastolic": 90,
+      "spo2": 94,
+      "heart_rate": null,
+      "temperature": 38.3,
+      "symptoms": [],
+      "chief_complaint": "Fever",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Mumbai City",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 93,
+      "patient_sex": "female",
+      "bp_systolic": 152,
+      "bp_diastolic": 95,
+      "spo2": 95,
+      "heart_rate": 103,
+      "temperature": 37.4,
+      "symptoms": [
+        "high_fever",
+        "severe_headache"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "More than 3 days",
+      "location": "Metro Urban",
+      "known_conditions": "kidney disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 21,
+      "patient_sex": "male",
+      "bp_systolic": 111,
+      "bp_diastolic": 88,
+      "spo2": 94,
+      "heart_rate": 101,
+      "temperature": 36.3,
+      "symptoms": [
+        "breathlessness",
+        "high_fever"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "More than 3 days",
+      "location": "Metro Urban",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 51,
+      "patient_sex": "female",
+      "bp_systolic": 138,
+      "bp_diastolic": 82,
+      "spo2": 96,
+      "heart_rate": 64,
+      "temperature": 37.3,
+      "symptoms": [
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Kothagudem Town",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 19,
+      "patient_sex": "male",
+      "bp_systolic": 115,
+      "bp_diastolic": 82,
+      "spo2": 96,
+      "heart_rate": null,
+      "temperature": 38.9,
+      "symptoms": [
+        "high_fever",
+        "severe_headache"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "1\u20133 days",
+      "location": "Rural District",
+      "known_conditions": "diabetes",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 48,
+      "patient_sex": "male",
+      "bp_systolic": 149,
+      "bp_diastolic": 85,
+      "spo2": null,
+      "heart_rate": 79,
+      "temperature": 37.8,
+      "symptoms": [],
+      "chief_complaint": "Headache / dizziness",
+      "complaint_duration": "1\u20133 days",
+      "location": "Bihar Village",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 3,
+      "patient_sex": "female",
+      "bp_systolic": 147,
+      "bp_diastolic": 81,
+      "spo2": 97,
+      "heart_rate": 111,
+      "temperature": 37.6,
+      "symptoms": [],
+      "chief_complaint": "Nausea / vomiting",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Kothagudem Town",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 25,
+      "patient_sex": "male",
+      "bp_systolic": 150,
+      "bp_diastolic": 88,
+      "spo2": null,
+      "heart_rate": 91,
+      "temperature": 37.8,
+      "symptoms": [
+        "severe_headache",
+        "persistent_vomiting"
+      ],
+      "chief_complaint": "Headache / dizziness",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Bihar Village",
+      "known_conditions": "diabetes",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 4,
+      "patient_sex": "female",
+      "bp_systolic": 118,
+      "bp_diastolic": 71,
+      "spo2": 95,
+      "heart_rate": 92,
+      "temperature": 38.3,
+      "symptoms": [
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Headache / dizziness",
+      "complaint_duration": "1\u20133 days",
+      "location": "Rural District",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 3,
+      "patient_sex": "male",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 93,
+      "heart_rate": 118,
+      "temperature": 37.7,
+      "symptoms": [
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Kothagudem Town",
+      "known_conditions": "copd",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 16,
+      "patient_sex": "male",
+      "bp_systolic": 115,
+      "bp_diastolic": 85,
+      "spo2": 97,
+      "heart_rate": 81,
+      "temperature": 37.8,
+      "symptoms": [],
+      "chief_complaint": "Weakness / fatigue",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Rural District",
+      "known_conditions": "kidney disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 33,
+      "patient_sex": "female",
+      "bp_systolic": 133,
+      "bp_diastolic": 74,
+      "spo2": 94,
+      "heart_rate": null,
+      "temperature": 37.2,
+      "symptoms": [
+        "breathlessness",
+        "high_fever"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Metro Urban",
+      "known_conditions": "heart disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 84,
+      "patient_sex": "female",
+      "bp_systolic": 120,
+      "bp_diastolic": 97,
+      "spo2": 94,
+      "heart_rate": 73,
+      "temperature": 38.0,
+      "symptoms": [],
+      "chief_complaint": "Nausea / vomiting",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Rural District",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 7,
+      "patient_sex": "female",
+      "bp_systolic": 109,
+      "bp_diastolic": 89,
+      "spo2": 98,
+      "heart_rate": null,
+      "temperature": 35.4,
+      "symptoms": [],
+      "chief_complaint": "Fever",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Metro Urban",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 55,
+      "patient_sex": "male",
+      "bp_systolic": 138,
+      "bp_diastolic": 109,
+      "spo2": 94,
+      "heart_rate": 78,
+      "temperature": 37.1,
+      "symptoms": [],
+      "chief_complaint": "Fever",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Metro Urban",
+      "known_conditions": "copd",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 31,
+      "patient_sex": "male",
+      "bp_systolic": 127,
+      "bp_diastolic": 92,
+      "spo2": 97,
+      "heart_rate": 123,
+      "temperature": 37.0,
+      "symptoms": [
+        "high_fever",
+        "persistent_vomiting"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Kothagudem Town",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 37,
+      "patient_sex": "female",
+      "bp_systolic": 146,
+      "bp_diastolic": 88,
+      "spo2": 91,
+      "heart_rate": 95,
+      "temperature": 37.7,
+      "symptoms": [
+        "high_fever",
+        "weakness_one_side"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Bihar Village",
+      "known_conditions": "heart disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 47,
+      "patient_sex": "male",
+      "bp_systolic": 122,
+      "bp_diastolic": 76,
+      "spo2": 94,
+      "heart_rate": 112,
+      "temperature": 39.0,
+      "symptoms": [
+        "high_fever",
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Bihar Village",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 19,
+      "patient_sex": "male",
+      "bp_systolic": 108,
+      "bp_diastolic": 87,
+      "spo2": 93,
+      "heart_rate": null,
+      "temperature": 38.1,
+      "symptoms": [
+        "breathlessness",
+        "severe_headache",
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Mumbai City",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 20,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": null,
+      "heart_rate": 125,
+      "temperature": 37.3,
+      "symptoms": [
+        "chest_pain"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Chennai City",
+      "known_conditions": "diabetes",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 6,
+      "patient_sex": "female",
+      "bp_systolic": 129,
+      "bp_diastolic": 83,
+      "spo2": 96,
+      "heart_rate": null,
+      "temperature": 36.6,
+      "symptoms": [],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Mumbai City",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "ROUTINE"
+  },
+  {
+    "case_input": {
+      "patient_age": 27,
+      "patient_sex": "male",
+      "bp_systolic": 164,
+      "bp_diastolic": 94,
+      "spo2": 93,
+      "heart_rate": 93,
+      "temperature": 37.1,
+      "symptoms": [],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Rampur Village",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 24,
+      "patient_sex": "female",
+      "bp_systolic": 137,
+      "bp_diastolic": 72,
+      "spo2": 89,
+      "heart_rate": 88,
+      "temperature": null,
+      "symptoms": [
+        "breathlessness",
+        "severe_headache"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Rampur Village",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 42,
+      "patient_sex": "male",
+      "bp_systolic": 136,
+      "bp_diastolic": 83,
+      "spo2": 97,
+      "heart_rate": 75,
+      "temperature": 39.3,
+      "symptoms": [
+        "breathlessness"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Metro Urban",
+      "known_conditions": "asthma",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 7,
+      "patient_sex": "male",
+      "bp_systolic": 132,
+      "bp_diastolic": 81,
+      "spo2": 95,
+      "heart_rate": 88,
+      "temperature": 36.6,
+      "symptoms": [
+        "chest_pain"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Remote Tribal Area",
+      "known_conditions": "kidney disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 95,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 95,
+      "heart_rate": 66,
+      "temperature": 39.7,
+      "symptoms": [
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Pregnancy complication",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Metro Urban",
+      "known_conditions": "asthma",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "ROUTINE",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 11,
+      "patient_sex": "female",
+      "bp_systolic": 174,
+      "bp_diastolic": 81,
+      "spo2": 98,
+      "heart_rate": 112,
+      "temperature": 35.2,
+      "symptoms": [
+        "chest_pain",
+        "breathlessness",
+        "high_fever"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Bihar Village",
+      "known_conditions": "copd",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 66,
+      "patient_sex": "male",
+      "bp_systolic": 155,
+      "bp_diastolic": 86,
+      "spo2": 95,
+      "heart_rate": 90,
+      "temperature": null,
+      "symptoms": [
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "6\u201324 hours",
+      "location": "Chennai City",
+      "known_conditions": "kidney disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 20,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 95,
+      "heart_rate": 113,
+      "temperature": 39.5,
+      "symptoms": [
+        "breathlessness"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Rural District",
+      "known_conditions": "heart disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 28,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 90,
+      "heart_rate": null,
+      "temperature": 40.0,
+      "symptoms": [
+        "breathlessness",
+        "high_fever",
+        "persistent_vomiting",
+        "weakness_one_side"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Bihar Village",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 7,
+      "patient_sex": "female",
+      "bp_systolic": 95,
+      "bp_diastolic": 69,
+      "spo2": null,
+      "heart_rate": 129,
+      "temperature": 40.2,
+      "symptoms": [
+        "breathlessness"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Chennai City",
+      "known_conditions": "copd",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 18,
+      "patient_sex": "female",
+      "bp_systolic": 84,
+      "bp_diastolic": 133,
+      "spo2": 87,
+      "heart_rate": null,
+      "temperature": 36.3,
+      "symptoms": [
+        "chest_pain",
+        "breathlessness"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Metro Urban",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 95,
+      "patient_sex": "female",
+      "bp_systolic": 211,
+      "bp_diastolic": 142,
+      "spo2": 91,
+      "heart_rate": 81,
+      "temperature": 37.5,
+      "symptoms": [
+        "breathlessness",
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Mumbai City",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 17,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": null,
+      "heart_rate": 91,
+      "temperature": 38.7,
+      "symptoms": [
+        "difficulty_speaking"
+      ],
+      "chief_complaint": "Injury / trauma",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Remote Tribal Area",
+      "known_conditions": "kidney disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 17,
+      "patient_sex": "female",
+      "bp_systolic": 72,
+      "bp_diastolic": 40,
+      "spo2": null,
+      "heart_rate": 112,
+      "temperature": 37.7,
+      "symptoms": [
+        "persistent_vomiting",
+        "severe_abdominal_pain",
+        "difficulty_speaking"
+      ],
+      "chief_complaint": "Injury / trauma",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Remote Tribal Area",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 17,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": null,
+      "heart_rate": 124,
+      "temperature": 37.3,
+      "symptoms": [
+        "chest_pain"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Remote Tribal Area",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 70,
+      "patient_sex": "male",
+      "bp_systolic": 215,
+      "bp_diastolic": 131,
+      "spo2": 92,
+      "heart_rate": 126,
+      "temperature": 38.6,
+      "symptoms": [],
+      "chief_complaint": "Altered consciousness / confusion",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Mumbai City",
+      "known_conditions": "heart disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 7,
+      "patient_sex": "male",
+      "bp_systolic": 85,
+      "bp_diastolic": 52,
+      "spo2": 94,
+      "heart_rate": 123,
+      "temperature": 38.0,
+      "symptoms": [
+        "persistent_vomiting"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Bihar Village",
+      "known_conditions": "diabetes",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 34,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 89,
+      "heart_rate": 125,
+      "temperature": 37.2,
+      "symptoms": [
+        "high_fever",
+        "difficulty_speaking"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Remote Tribal Area",
+      "known_conditions": "copd",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 23,
+      "patient_sex": "male",
+      "bp_systolic": 176,
+      "bp_diastolic": 93,
+      "spo2": 96,
+      "heart_rate": null,
+      "temperature": 39.1,
+      "symptoms": [
+        "high_fever",
+        "severe_headache",
+        "severe_abdominal_pain",
+        "severe_bleeding"
+      ],
+      "chief_complaint": "Severe bleeding",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Bihar Village",
+      "known_conditions": "copd",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 5,
+      "patient_sex": "male",
+      "bp_systolic": 80,
+      "bp_diastolic": 60,
+      "spo2": 86,
+      "heart_rate": 130,
+      "temperature": null,
+      "symptoms": [
+        "chest_pain",
+        "breathlessness",
+        "high_fever",
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Kothagudem Town",
+      "known_conditions": "diabetes",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 32,
+      "patient_sex": "male",
+      "bp_systolic": 99,
+      "bp_diastolic": 65,
+      "spo2": 95,
+      "heart_rate": 124,
+      "temperature": 36.4,
+      "symptoms": [
+        "high_fever",
+        "persistent_vomiting"
+      ],
+      "chief_complaint": "Fever",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Rampur Village",
+      "known_conditions": "asthma",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 21,
+      "patient_sex": "female",
+      "bp_systolic": 108,
+      "bp_diastolic": 45,
+      "spo2": 98,
+      "heart_rate": 144,
+      "temperature": 39.3,
+      "symptoms": [
+        "breathlessness",
+        "severe_abdominal_pain"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Chennai City",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 77,
+      "patient_sex": "male",
+      "bp_systolic": 65,
+      "bp_diastolic": 39,
+      "spo2": 84,
+      "heart_rate": 110,
+      "temperature": 39.3,
+      "symptoms": [
+        "chest_pain",
+        "breathlessness"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Chennai City",
+      "known_conditions": "asthma",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 11,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 92,
+      "heart_rate": 83,
+      "temperature": 37.5,
+      "symptoms": [
+        "breathlessness",
+        "high_fever",
+        "weakness_one_side"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Mumbai City",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 15,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 92,
+      "heart_rate": 33,
+      "temperature": 36.8,
+      "symptoms": [
+        "chest_pain",
+        "difficulty_speaking",
+        "severe_bleeding"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Mumbai City",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 41,
+      "patient_sex": "male",
+      "bp_systolic": 142,
+      "bp_diastolic": 85,
+      "spo2": 95,
+      "heart_rate": null,
+      "temperature": 41.2,
+      "symptoms": [
+        "breathlessness"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Bihar Village",
+      "known_conditions": "heart disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "URGENT",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 29,
+      "patient_sex": "male",
+      "bp_systolic": 80,
+      "bp_diastolic": 48,
+      "spo2": 83,
+      "heart_rate": 155,
+      "temperature": 37.5,
+      "symptoms": [
+        "high_fever",
+        "seizure"
+      ],
+      "chief_complaint": "Seizure",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Remote Tribal Area",
+      "known_conditions": "asthma",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 5,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 84,
+      "heart_rate": 33,
+      "temperature": 37.2,
+      "symptoms": [
+        "breathlessness",
+        "high_fever",
+        "weakness_one_side"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Kothagudem Town",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 85,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 96,
+      "heart_rate": 107,
+      "temperature": 33.5,
+      "symptoms": [
+        "breathlessness",
+        "altered_consciousness"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Rural District",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 86,
+      "patient_sex": "male",
+      "bp_systolic": 99,
+      "bp_diastolic": 86,
+      "spo2": null,
+      "heart_rate": null,
+      "temperature": 36.9,
+      "symptoms": [
+        "breathlessness",
+        "severe_bleeding",
+        "altered_consciousness"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Kothagudem Town",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 49,
+      "patient_sex": "female",
+      "bp_systolic": 65,
+      "bp_diastolic": 39,
+      "spo2": 88,
+      "heart_rate": 90,
+      "temperature": 36.6,
+      "symptoms": [],
+      "chief_complaint": "Seizure",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Chennai City",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 51,
+      "patient_sex": "male",
+      "bp_systolic": 116,
+      "bp_diastolic": 69,
+      "spo2": null,
+      "heart_rate": 103,
+      "temperature": 36.2,
+      "symptoms": [
+        "breathlessness",
+        "difficulty_speaking"
+      ],
+      "chief_complaint": "Breathlessness / difficulty breathing",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Chennai City",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "URGENT"
+  },
+  {
+    "case_input": {
+      "patient_age": 10,
+      "patient_sex": "male",
+      "bp_systolic": 131,
+      "bp_diastolic": 78,
+      "spo2": 95,
+      "heart_rate": 33,
+      "temperature": 37.9,
+      "symptoms": [
+        "altered_consciousness"
+      ],
+      "chief_complaint": "Altered consciousness / confusion",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Chennai City",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 24,
+      "patient_sex": "female",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 88,
+      "heart_rate": 128,
+      "temperature": 36.1,
+      "symptoms": [
+        "high_fever",
+        "difficulty_speaking",
+        "altered_consciousness",
+        "swelling_face_throat"
+      ],
+      "chief_complaint": "Altered consciousness / confusion",
+      "complaint_duration": "1\u20136 hours",
+      "location": "Kothagudem Town",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 5,
+      "patient_sex": "male",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 96,
+      "heart_rate": null,
+      "temperature": 36.8,
+      "symptoms": [
+        "chest_pain",
+        "breathlessness",
+        "high_fever",
+        "altered_consciousness",
+        "swelling_face_throat"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Kothagudem Town",
+      "known_conditions": "hypertension",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 95,
+      "patient_sex": "male",
+      "bp_systolic": 138,
+      "bp_diastolic": 83,
+      "spo2": 100,
+      "heart_rate": 115,
+      "temperature": 41.2,
+      "symptoms": [
+        "high_fever",
+        "altered_consciousness"
+      ],
+      "chief_complaint": "Altered consciousness / confusion",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Rural District",
+      "known_conditions": "kidney disease",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  },
+  {
+    "case_input": {
+      "patient_age": 59,
+      "patient_sex": "male",
+      "bp_systolic": null,
+      "bp_diastolic": null,
+      "spo2": 85,
+      "heart_rate": 155,
+      "temperature": 39.3,
+      "symptoms": [
+        "chest_pain",
+        "swelling_face_throat"
+      ],
+      "chief_complaint": "Chest pain / tightness",
+      "complaint_duration": "Less than 1 hour",
+      "location": "Kothagudem Town",
+      "known_conditions": "",
+      "observations": "",
+      "current_medications": ""
+    },
+    "actual_severity": "EMERGENCY",
+    "original_triage_level": "EMERGENCY"
+  }
+]

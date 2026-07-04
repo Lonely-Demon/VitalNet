@@ -1,215 +1,354 @@
 """
-VitalNet Classifier Interface — Enhanced classifier only.
-Legacy classifier paths removed (triage_classifier.pkl deleted in cleanup sprint).
-If loading fails, raises RuntimeError with a descriptive message.
+VitalNet Classifier Interface.
+
+Loads the single unified HistGradientBoostingClassifier (see
+backend/scripts/train_classifier.py for training + the clinical rationale)
+and exposes:
+  - predict_triage() / run_triage() — main prediction entry point
+  - get_classifier_info() — startup/health-check introspection
+
+Two safety layers run on every prediction, in order:
+  1. A deterministic safety-net check for unambiguous, extreme vitals or
+     critical symptoms (mirrors NEWS2's "any red parameter" escalation
+     principle). This guarantees EMERGENCY classification for these cases
+     regardless of any residual ML model error — it does not depend on the
+     classifier being correct.
+  2. The trained classifier's own prediction for the nuanced multi-factor
+     cases that don't hit an unambiguous threshold.
+Risk drivers are generated from real SHAP (TreeExplainer) feature
+attributions for the model's own predictions, translated into clinically
+readable language. The safety-net path reports its own deterministic
+reason instead (SHAP does not apply — it did not run).
 """
 import logging
+import pickle
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+import numpy as np
 
 logger = logging.getLogger("vitalnet")
 
-# Model path — enhanced classifier sits alongside this file under app/ml/models/
-ENHANCED_PKL_PATH = Path(__file__).parent / "models" / "enhanced_triage_classifier.pkl"
+PKL_PATH = Path(__file__).parent / "models" / "triage_classifier.pkl"
 
-# Global classifier state
+# Global classifier state — populated once at startup by load_classifier()
 _classifier = None
-_classifier_type = None
-_model_info = {}
+_explainer = None
+_feature_names: list[str] = []
+_label_map: Dict[int, str] = {}
+_model_version: str = ""
+_performance_metrics: Dict[str, Any] = {}
+
+# Feature engineer singleton — built once, reused for every prediction
+# (constructing it per request was pure allocation churn on the triage hot path).
+_feature_engineer = None
+
+# ── Abstention thresholds (C2) ────────────────────────────────────────────
+# When the model's decision is weak, surface a low-confidence flag so the
+# doctor treats the ML triage as tentative and reviews more carefully.
+LOW_CONFIDENCE_PROBA = 0.55      # top-class probability below this = uncertain
+LOW_CONFIDENCE_MARGIN = 0.15     # top-two probability gap below this = uncertain
+
+# ── Safety-net override — see module docstring ────────────────────────────
+
+CRITICAL_SYMPTOMS_OVERRIDE = {
+    "altered_consciousness", "seizure", "severe_bleeding", "swelling_face_throat",
+}
+
+# ── NEWS2 "concerning single vital" floor (C1) ─────────────────────────────
+# The safety net (above) escalates EXTREME single vitals straight to EMERGENCY.
+# There is a milder band where a single vital is concerning (a NEWS2 single-
+# parameter score of 2+) but not extreme — e.g. SpO2 91-92, HR 111-119. In that
+# band the model could still output ROUTINE, which would be dangerous under-
+# triage. This floor guarantees such a case is at least URGENT. It only ever
+# RAISES a ROUTINE result to URGENT; it never lowers anything and never fires
+# for EMERGENCY. Thresholds are intentionally simple so they mirror 1:1 in the
+# frontend JS (see triageClassifier.js). Mild pediatric over-triage from the HR
+# bound is an accepted, safe tradeoff (over-triage, never under-triage).
+
+
+def _news2_concerning_vital(form_data: Dict[str, Any]) -> Optional[str]:
+    """Return a reason if any single vital is in the NEWS2 'score >= 2'
+    concerning band (but not extreme enough for the safety net), else None."""
+    spo2 = form_data.get("spo2")
+    if spo2 is not None and spo2 <= 92:
+        return f"low oxygen saturation ({spo2}%)"
+
+    bp_sys = form_data.get("bp_systolic")
+    if bp_sys is not None and (bp_sys <= 100 or bp_sys >= 180):
+        return f"concerning systolic blood pressure ({bp_sys} mmHg)"
+
+    hr = form_data.get("heart_rate")
+    if hr is not None and (hr <= 40 or hr >= 120):
+        return f"concerning heart rate ({hr} bpm)"
+
+    temp = form_data.get("temperature")
+    if temp is not None and (temp <= 35.0 or temp >= 39.1):
+        return f"concerning temperature ({temp}°C)"
+
+    return None
+
+# ── Human-readable labels for SHAP feature attributions ────────────────────
+
+FEATURE_LABELS = {
+    "age": "patient age", "sex": "patient sex",
+    "bp_systolic": "systolic blood pressure", "bp_diastolic": "diastolic blood pressure",
+    "spo2": "oxygen saturation (SpO2)", "heart_rate": "heart rate", "temperature": "body temperature",
+    "symptom_count": "number of critical symptoms",
+    "chest_pain": "chest pain", "breathlessness": "breathlessness",
+    "altered_consciousness": "altered consciousness", "severe_bleeding": "severe bleeding",
+    "seizure": "seizure activity", "high_fever": "high fever",
+    "pulse_pressure": "pulse pressure", "mean_arterial_pressure": "mean arterial pressure",
+    "shock_index": "shock index (HR/systolic BP)", "spo2_age_ratio": "oxygenation relative to age",
+    "temp_deviation": "temperature deviation from normal",
+    "cardiac_risk_score": "cardiac risk indicators",
+    "respiratory_distress_score": "respiratory distress indicators",
+    "hemodynamic_instability": "hemodynamic instability",
+    "sepsis_risk_score": "sepsis risk indicators (qSOFA-like)",
+    "pediatric_adjustment": "pediatric vital sign abnormality",
+    "geriatric_adjustment": "geriatric vital sign abnormality",
+    "pregnancy_adjustment": "pregnancy-related risk",
+    "cardiopulmonary_cluster": "combined chest pain and breathlessness",
+    "neurological_cluster": "combined altered consciousness and seizure",
+    "hemorrhagic_cluster": "bleeding with low blood pressure",
+    "infectious_cluster": "fever combined with multiple symptoms",
+    "symptom_severity_score": "overall symptom severity",
+    "symptom_duration_risk": "acuity of symptom onset",
+    "chief_complaint_risk": "risk level of the chief complaint",
+    "comorbidity_multiplier": "pre-existing conditions",
+    "pediatric_fever_risk": "pediatric fever risk", "elderly_fall_risk": "elderly fall risk",
+    "adult_cardiac_risk": "adult cardiac risk", "obstetric_emergency_risk": "obstetric emergency risk",
+    "trauma_severity_score": "trauma severity", "mental_health_crisis": "mental health crisis indicators",
+    "time_of_day_risk": "time-of-day risk factor", "seasonal_risk": "seasonal disease risk",
+    "geographic_risk": "geographic disease risk", "epidemic_alert_level": "epidemic alert level",
+    "healthcare_accessibility": "healthcare accessibility",
+}
 
 
 def load_classifier() -> bool:
     """
-    Load the enhanced multi-stage classifier.
-    Raises RuntimeError with a descriptive message if loading fails.
+    Load the unified triage classifier bundle (classifier + SHAP explainer).
+    Raises RuntimeError with a descriptive message if loading fails —
+    the app must not silently serve triage requests with no model loaded.
     """
-    global _classifier, _classifier_type, _model_info
+    global _classifier, _explainer, _feature_names, _label_map, _model_version, _performance_metrics
 
-    if not ENHANCED_PKL_PATH.exists():
+    if not PKL_PATH.exists():
         raise RuntimeError(
-            f"Enhanced classifier not found at {ENHANCED_PKL_PATH}. "
-            "Run backend/scripts/retrain_and_export.py to regenerate."
+            f"Triage classifier not found at {PKL_PATH}. "
+            "Run backend/scripts/train_classifier.py to generate it."
         )
 
     try:
-        from app.ml.enhanced_classifier import EnhancedTriageClassifier
-        _classifier = EnhancedTriageClassifier.load_model(str(ENHANCED_PKL_PATH))
-        _classifier_type = "enhanced"
-        _model_info = _classifier.get_model_info()
+        with open(PKL_PATH, "rb") as f:
+            bundle = pickle.load(f)
 
-        acc = _model_info["performance_metrics"].get("accuracy", "N/A")
-        recall = _model_info["performance_metrics"].get("emergency_recall", "N/A")
+        _classifier = bundle["classifier"]
+        _explainer = bundle["explainer"]
+        _feature_names = bundle["feature_names"]
+        _label_map = bundle["label_map"]
+        _model_version = bundle.get("model_version", "unknown")
+        _performance_metrics = bundle.get("performance_metrics", {})
+
         logger.info(
-            "Enhanced classifier loaded",
+            "Triage classifier loaded",
             extra={
-                "model_version": _model_info["model_version"],
-                "accuracy": acc,
-                "emergency_recall": recall,
+                "model_version": _model_version,
+                "accuracy": _performance_metrics.get("accuracy"),
+                "emergency_recall": _performance_metrics.get("emergency_recall"),
+                "n_features": len(_feature_names),
             },
         )
         return True
 
     except Exception as e:
         raise RuntimeError(
-            f"Enhanced classifier loading failed: {e}. "
-            "The model file may be corrupt. Run retrain_and_export.py to regenerate."
+            f"Triage classifier loading failed: {e}. "
+            "The model file may be corrupt or built with an incompatible "
+            "scikit-learn version — re-run scripts/train_classifier.py "
+            "with the currently installed scikit-learn."
         ) from e
+
+
+def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
+    """
+    Deterministic escalation for unambiguous, extreme presentations.
+    Mirrors the label-generation override in train_classifier.py so
+    training-time and inference-time safety guarantees stay aligned.
+    Returns a human-readable reason string if triggered, else None.
+    """
+    symptoms = set(form_data.get("symptoms") or [])
+    hit = symptoms & CRITICAL_SYMPTOMS_OVERRIDE
+    if hit:
+        readable = ", ".join(sorted(h.replace("_", " ") for h in hit))
+        return f"Critical symptom present: {readable}"
+
+    age = form_data.get("patient_age")
+    temp = form_data.get("temperature")
+    if age is not None and age < 0.25 and temp is not None and temp >= 38.0:
+        return f"Neonatal fever (age {age * 12:.0f} months, temperature {temp}°C)"
+
+    spo2 = form_data.get("spo2")
+    if spo2 is not None and spo2 < 85:
+        return f"Critically low oxygen saturation ({spo2}%)"
+
+    hr = form_data.get("heart_rate")
+    if hr is not None and (hr < 35 or hr > 170):
+        return f"Extreme heart rate ({hr} bpm)"
+
+    bp_sys = form_data.get("bp_systolic")
+    if bp_sys is not None and (bp_sys < 70 or bp_sys > 220):
+        return f"Extreme systolic blood pressure ({bp_sys} mmHg)"
+
+    if bp_sys is not None and bp_sys >= 180:
+        neuro_hit = symptoms & {
+            "severe_headache", "weakness_one_side", "difficulty_speaking", "altered_consciousness",
+        }
+        if neuro_hit:
+            readable = ", ".join(sorted(h.replace("_", " ") for h in neuro_hit))
+            return (
+                f"Hypertensive crisis (systolic BP {bp_sys} mmHg) with neurological "
+                f"symptom(s): {readable} — possible hypertensive encephalopathy/stroke"
+            )
+
+    if temp is not None and (temp > 41.5 or temp < 33.0):
+        return f"Extreme body temperature ({temp}°C)"
+
+    return None
 
 
 def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Run triage prediction using the loaded enhanced classifier.
+    Run triage prediction for a patient.
 
-    Args:
-        form_data: Patient data dictionary
-
-    Returns:
-        Dictionary with triage_level, confidence_score, risk_driver, and metadata
+    Returns a dict with triage_level, confidence_score, risk_driver, and
+    metadata. Never raises for a loaded classifier on well-formed input —
+    the caller (cases.py submit_case) treats any exception as a 500.
     """
-    if _classifier_type is None:
+    global _feature_engineer
+    if _classifier is None:
         raise RuntimeError("Classifier not loaded — call load_classifier() at startup")
 
-    return _predict_enhanced(form_data)
+    if _feature_engineer is None:
+        from app.ml.clinical_features import ClinicalFeatureEngineer
+        _feature_engineer = ClinicalFeatureEngineer()
 
+    features = _feature_engineer.engineer_features(form_data)
+    feature_vector = np.array(
+        [[features[name] for name in _feature_names]], dtype=np.float32
+    )
 
-def _predict_enhanced(form_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Run prediction using the enhanced classifier."""
-    try:
-        result = _classifier.predict(form_data)
-
-        # Extract risk driver from clinical features
-        clinical_features = result.get("clinical_features", {})
-        risk_driver = _generate_risk_explanation(
-            result["triage_level"], clinical_features, form_data
-        )
-
+    # Layer 1 — deterministic safety net: extreme presentations -> EMERGENCY,
+    # independent of the model. Certain by construction, so never low-confidence.
+    safety_reason = _safety_net_check(form_data)
+    if safety_reason:
         return {
-            "triage_level": result["triage_level"],
-            "confidence_score": result["confidence"],
-            "risk_driver": risk_driver,
-            "model_version": result.get("model_version", "N/A"),
-            "processing_time": result.get("processing_time", "standard"),
-            "uncertainty": result.get("uncertainty", {}),
-            "probabilities": result.get("probabilities", {}),
-            "fast_path": result.get("fast_path", False),
+            "triage_level": "EMERGENCY",
+            "confidence_score": 1.0,
+            "risk_driver": f"Immediate escalation: {safety_reason}. Classified as EMERGENCY.",
+            "model_version": _model_version,
+            "safety_net_triggered": True,
+            "low_confidence": False,
         }
 
-    except Exception as e:
-        logger.error("Enhanced prediction failed: %s", e, exc_info=True)
-        raise  # Let main.py's handler catch this as a 500
+    # Layer 2 — trained model.
+    proba = _classifier.predict_proba(feature_vector)[0]
+    predicted_class = int(np.argmax(proba))
+    triage_level = _label_map[predicted_class]
+    confidence = float(proba[predicted_class])
 
+    # Abstention flag (C2): weak decisions are surfaced as tentative.
+    sorted_p = sorted(proba, reverse=True)
+    margin = float(sorted_p[0] - sorted_p[1]) if len(sorted_p) > 1 else 1.0
+    low_confidence = confidence < LOW_CONFIDENCE_PROBA or margin < LOW_CONFIDENCE_MARGIN
 
-def _generate_risk_explanation(
-    triage_level: str, clinical_features: Dict[str, float], form_data: Dict[str, Any]
-) -> str:
-    """
-    Generate a human-readable risk explanation from enhanced classifier features.
-    """
-    try:
-        # Find the most significant clinical indicators
-        high_risk_features = {}
+    # Layer 3 — NEWS2 concerning-vital floor (C1): never leave a concerning
+    # single vital as ROUTINE. Deterministic, so it also resolves the
+    # uncertainty (not low-confidence once floored on a hard rule).
+    floor_reason = None
+    if triage_level == "ROUTINE":
+        floor_reason = _news2_concerning_vital(form_data)
+        if floor_reason:
+            triage_level = "URGENT"
+            low_confidence = False
 
-        # Check vital sign abnormalities
-        if clinical_features.get("cardiac_risk_score", 0) >= 3.0:
-            high_risk_features["Cardiac risk"] = clinical_features["cardiac_risk_score"]
-        if clinical_features.get("respiratory_distress_score", 0) >= 2.0:
-            high_risk_features["Respiratory distress"] = clinical_features[
-                "respiratory_distress_score"
-            ]
-        if clinical_features.get("hemodynamic_instability", 0) >= 2.0:
-            high_risk_features["Hemodynamic instability"] = clinical_features[
-                "hemodynamic_instability"
-            ]
-        if clinical_features.get("sepsis_risk_score", 0) >= 2.0:
-            high_risk_features["Sepsis risk"] = clinical_features["sepsis_risk_score"]
+    risk_driver = _generate_shap_explanation(feature_vector, predicted_class, "ROUTINE" if floor_reason else triage_level, form_data)
+    if floor_reason:
+        risk_driver = (
+            f"Escalated to URGENT by clinical safety floor: {floor_reason}. "
+            f"(Model's own read was ROUTINE.)"
+        )
 
-        # Check specific vitals
-        spo2 = form_data.get("spo2", 97)
-        hr = form_data.get("heart_rate", 75)
-        bp_sys = form_data.get("bp_systolic", 120)
-        temp = form_data.get("temperature", 37.0)
-
-        vital_explanations = []
-        if spo2 and spo2 < 90:
-            vital_explanations.append(f"critically low oxygen saturation ({spo2}%)")
-        elif spo2 and spo2 < 94:
-            vital_explanations.append(f"low oxygen saturation ({spo2}%)")
-
-        if hr and hr > 130:
-            vital_explanations.append(f"very high heart rate ({hr} bpm)")
-        elif hr and hr < 50:
-            vital_explanations.append(f"very low heart rate ({hr} bpm)")
-
-        if bp_sys and bp_sys > 180:
-            vital_explanations.append(f"very high blood pressure ({bp_sys} mmHg)")
-        elif bp_sys and bp_sys < 90:
-            vital_explanations.append(f"low blood pressure ({bp_sys} mmHg)")
-
-        if temp and temp > 40.0:
-            vital_explanations.append(f"very high fever ({temp}°C)")
-        elif temp and temp < 35.0:
-            vital_explanations.append(f"dangerously low temperature ({temp}°C)")
-
-        # Check symptom combinations
-        symptoms = form_data.get("symptoms", [])
-        symptom_explanations = []
-
-        if "altered_consciousness" in symptoms:
-            symptom_explanations.append("altered consciousness")
-        if "severe_bleeding" in symptoms:
-            symptom_explanations.append("severe bleeding")
-        if "seizure" in symptoms:
-            symptom_explanations.append("seizure activity")
-        if "chest_pain" in symptoms and "breathlessness" in symptoms:
-            symptom_explanations.append("chest pain with difficulty breathing")
-        elif "chest_pain" in symptoms:
-            symptom_explanations.append("chest pain")
-        elif "breathlessness" in symptoms:
-            symptom_explanations.append("difficulty breathing")
-
-        # Build explanation
-        explanation_parts = []
-
-        if vital_explanations:
-            explanation_parts.append(
-                "vital signs showed " + ", ".join(vital_explanations[:2])
-            )
-
-        if symptom_explanations:
-            explanation_parts.append(
-                "patient presented with " + ", ".join(symptom_explanations[:2])
-            )
-
-        if high_risk_features:
-            top_risk = max(high_risk_features.items(), key=lambda x: x[1])
-            explanation_parts.append(
-                f"{top_risk[0].lower()} was significantly elevated"
-            )
-
-        if explanation_parts:
-            base_explanation = "Primary risk factors: " + "; ".join(
-                explanation_parts[:3]
-            )
-        else:
-            base_explanation = (
-                "Multiple clinical indicators contributed to this triage decision"
-            )
-
-        return f"{base_explanation}. Classified as {triage_level}."
-
-    except Exception as e:
-        logger.warning("Risk explanation generation failed: %s", e)
-        return f"Advanced clinical analysis classified this case as {triage_level}."
-
-
-def get_classifier_info() -> Dict[str, Any]:
-    """Get information about the currently loaded classifier."""
     return {
-        "classifier_type": _classifier_type,
-        "model_info": _model_info,
-        "is_enhanced": _classifier_type == "enhanced",
+        "triage_level": triage_level,
+        "confidence_score": confidence,
+        "risk_driver": risk_driver,
+        "model_version": _model_version,
+        "probabilities": {_label_map[i]: float(p) for i, p in enumerate(proba)},
+        "safety_net_triggered": False,
+        "news2_floor_triggered": bool(floor_reason),
+        "low_confidence": low_confidence,
     }
 
 
-# Backwards-compatible alias
+def _generate_shap_explanation(
+    feature_vector: np.ndarray, predicted_class: int, triage_level: str, form_data: Dict[str, Any]
+) -> str:
+    """
+    Generate a per-patient risk explanation from real SHAP feature
+    attributions for the model's predicted class. Falls back to a generic
+    statement if SHAP computation fails for any reason — explanation
+    quality must never block a triage result from being returned.
+    """
+    try:
+        shap_values = _explainer.shap_values(feature_vector)  # shape: (1, n_features, n_classes)
+        contributions = shap_values[0, :, predicted_class]
+
+        ranked = sorted(
+            zip(_feature_names, contributions),
+            key=lambda kv: abs(kv[1]),
+            reverse=True,
+        )
+        # Keep only features that meaningfully pushed toward this class
+        top = [(name, val) for name, val in ranked if abs(val) > 1e-4][:3]
+
+        if not top:
+            return f"No single dominant factor identified. Classified as {triage_level}."
+
+        # "Risk" framing only makes clinical sense for URGENT/EMERGENCY —
+        # for ROUTINE, describe factors as supporting the reassuring read
+        # rather than implying elevated risk.
+        if triage_level == "ROUTINE":
+            positive_word, negative_word = "supported a routine assessment", "raised some concern but was not decisive"
+        else:
+            positive_word, negative_word = "increased the assessed risk", "was a mitigating factor"
+
+        parts = []
+        for name, val in top:
+            label = FEATURE_LABELS.get(name, name.replace("_", " "))
+            direction = positive_word if val > 0 else negative_word
+            parts.append(f"{label} ({direction})")
+
+        explanation = "Primary factors: " + "; ".join(parts) + "."
+        return f"{explanation} Classified as {triage_level}."
+
+    except Exception as e:
+        logger.warning("SHAP explanation generation failed: %s", e)
+        return f"Clinical analysis classified this case as {triage_level}."
+
+
+def get_classifier_info() -> Dict[str, Any]:
+    """Get information about the currently loaded classifier (used by /api/health)."""
+    return {
+        "classifier_type": "unified" if _classifier is not None else None,
+        "model_info": {
+            "model_version": _model_version,
+            "performance_metrics": _performance_metrics,
+            "n_features": len(_feature_names),
+        },
+        "is_enhanced": False,  # legacy field name kept for API stability
+    }
+
+
+# Backwards-compatible alias — cases.py imports run_triage
 run_triage = predict_triage

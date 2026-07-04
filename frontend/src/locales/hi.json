@@ -1,0 +1,145 @@
+{
+  "common": {
+    "language": "Language",
+    "languages": {
+      "en": "English",
+      "hi": "हिन्दी (Hindi)",
+      "ta": "தமிழ் (Tamil)"
+    }
+  },
+  "intakeForm": {
+    "title": "Patient Intake Form",
+    "sections": {
+      "location": "Location",
+      "patientDetails": "Patient Details",
+      "chiefComplaint": "Chief Complaint",
+      "vitals": "Vitals (optional — record what is available)",
+      "symptoms": "Symptoms (select all that apply)",
+      "observations": "Observations (optional)",
+      "consent": "Patient Consent",
+      "clinicianReview": "Clinician Review"
+    },
+    "fields": {
+      "location": "Location / Village *",
+      "patientName": "Patient Name *",
+      "patientAge": "Age (years) *",
+      "patientSex": "Sex *",
+      "chiefComplaint": "Primary Complaint *",
+      "customComplaint": "Please specify the complaint *",
+      "duration": "Duration *",
+      "bpSystolic": "BP Systolic (mmHg)",
+      "bpDiastolic": "BP Diastolic (mmHg)",
+      "spo2": "SpO2 (%)",
+      "heartRate": "Heart Rate (bpm)",
+      "temperature": "Temperature (°C)",
+      "knownConditions": "Known Conditions",
+      "currentMedications": "Current Medications"
+    },
+    "placeholders": {
+      "location": "e.g. Rampur Village",
+      "patientName": "e.g. Priya Sharma",
+      "patientAge": "e.g. 45",
+      "selectComplaint": "Select complaint",
+      "customComplaint": "e.g. Joint pain, skin rash, vision problems...",
+      "selectDuration": "Select duration",
+      "bpSystolic": "e.g. 120",
+      "bpDiastolic": "e.g. 80",
+      "spo2": "e.g. 98",
+      "heartRate": "e.g. 72",
+      "temperature": "e.g. 37.2",
+      "observations": "Any additional observations about the patient's condition...",
+      "knownConditions": "e.g. diabetes, hypertension",
+      "currentMedications": "e.g. metformin, amlodipine",
+      "reviewReason": "Why does this case need manual review?"
+    },
+    "sexOptions": {
+      "male": "male",
+      "female": "female",
+      "other": "other"
+    },
+    "complaints": {
+      "chestPain": "Chest pain / tightness",
+      "breathlessness": "Breathlessness / difficulty breathing",
+      "fever": "Fever",
+      "abdominalPain": "Abdominal pain",
+      "headacheDizziness": "Headache / dizziness",
+      "weaknessFatigue": "Weakness / fatigue",
+      "alteredConsciousness": "Altered consciousness / confusion",
+      "seizure": "Seizure",
+      "severeBleeding": "Severe bleeding",
+      "nauseaVomiting": "Nausea / vomiting",
+      "babyChildUnwell": "Baby / child unwell",
+      "pregnancyComplication": "Pregnancy complication",
+      "injuryTrauma": "Injury / trauma",
+      "other": "Other"
+    },
+    "durations": {
+      "lessThan1h": "Less than 1 hour",
+      "oneToSixH": "1–6 hours",
+      "sixToTwentyFourH": "6–24 hours",
+      "oneToThreeDays": "1–3 days",
+      "moreThanThreeDays": "More than 3 days"
+    },
+    "symptoms": {
+      "chest_pain": "Chest pain",
+      "breathlessness": "Breathlessness",
+      "high_fever": "High fever (>102°F)",
+      "altered_consciousness": "Altered consciousness",
+      "seizure": "Seizure",
+      "severe_bleeding": "Severe bleeding",
+      "severe_abdominal_pain": "Severe abdominal pain",
+      "persistent_vomiting": "Persistent vomiting",
+      "severe_headache": "Severe headache",
+      "weakness_one_side": "Weakness on one side",
+      "difficulty_speaking": "Difficulty speaking",
+      "swelling_face_throat": "Swelling of face/throat"
+    },
+    "consent": {
+      "title": "Patient consent obtained *",
+      "intro": "I confirm that the patient (or their guardian) has been informed about and consented to:",
+      "items": [
+        "Collection and storage of their health information",
+        "Use of AI-assisted triage for clinical decision support",
+        "Sharing of data with healthcare providers at the PHC"
+      ]
+    },
+    "review": {
+      "title": "Request human review",
+      "description": "Flag this case for explicit clinician review before disposition."
+    },
+    "actions": {
+      "submit": "Submit Case",
+      "analyzing": "Analyzing Case...",
+      "submitAnother": "Submit Another Case"
+    },
+    "result": {
+      "savedLocallyTitle": "Case Saved Locally",
+      "savedLocallyWithTriage": "Preliminary AI triage shown above. Full analysis will be available when connectivity is restored.",
+      "savedLocallyNoTriage": "It will be submitted automatically when connectivity is restored.",
+      "savedOfflineBadge": "SAVED OFFLINE",
+      "lowConfidenceShort": "Model uncertain — human review required",
+      "successTitle": "Case Successfully Logged"
+    },
+    "preliminary": {
+      "label": "Preliminary triage",
+      "lowConfidence": "⚠ Model uncertain on this case — please have a clinician review carefully.",
+      "sendingOnline": "Sending to server for full analysis…",
+      "sendingOffline": "Offline — queued for sync. Full briefing will appear for the doctor when connectivity returns."
+    },
+    "errors": {
+      "consentRequired": "Patient consent is required before submitting case data.",
+      "consentRequiredShort": "Please confirm patient consent",
+      "validationFailed": "Please fix the validation errors below before submitting.",
+      "queueFull": "Offline queue is full (50 cases). Connect to internet to sync before submitting more cases.",
+      "submissionFailed": "Submission failed. Check connection."
+    },
+    "voice": {
+      "start": "Speak to fill this field",
+      "stop": "Stop recording",
+      "unsupported": "Voice input is not supported on this device",
+      "offline": "Voice input needs an internet connection",
+      "permissionDenied": "Microphone permission denied",
+      "failed": "Voice input failed — please type instead"
+    }
+  }
+}

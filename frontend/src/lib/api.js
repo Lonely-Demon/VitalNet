@@ -3,7 +3,7 @@
  *
  * The monolithic api.js has been decomposed into domain-specific modules:
  *   - @/api/auth.js       → authHeaders
- *   - @/api/cases.js      → getCases, reviewCase, getMySubmissions
+ *   - @/api/cases.js      → getCases, reviewCase, getMySubmissions, overrideTriage, recordCaseOutcome
  *   - @/api/admin.js      → adminList/Create/Update/Deactivate/Reactivate users + facilities + stats
  *   - @/api/analytics.js  → getAnalyticsSummary, getEmergencyRate
  *   - @/stores/syncStore.js → submitCase, processQueue (stateful offline queue manager)
@@ -14,16 +14,19 @@
 
 export { authHeaders } from '@/api/auth'
 export { submitCase, processQueue } from '@/stores/syncStore'
-export { getCases, reviewCase, getMySubmissions } from '@/api/cases'
+export { getCases, reviewCase, getMySubmissions, overrideTriage, recordCaseOutcome } from '@/api/cases'
 export {
   adminListUsers,
   adminCreateUser,
   adminUpdateUser,
   adminDeactivateUser,
   adminReactivateUser,
+  adminBulkCreateUsers,
   adminListFacilities,
   adminCreateFacility,
   adminToggleFacility,
   adminGetStats,
+  adminGetAuditLog,
 } from '@/api/admin'
-export { getAnalyticsSummary, getEmergencyRate } from '@/api/analytics'
+export { getAnalyticsSummary, getEmergencyRate, getResponseTimes, getMlAgreement, exportCases } from '@/api/analytics'
+export { listActiveFacilities, createReferral, listReferrals, updateReferralStatus } from '@/api/referrals'

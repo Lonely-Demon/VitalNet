@@ -1,5 +1,10 @@
 # VitalNet — Comprehensive Rebuild Instructions
 
+> [!NOTE]
+> **This document is historical.** The rebuild it describes has been
+> executed. Kept for historical record. For the current, accurate state of
+> the codebase, see **[CODEBASE_MAP.md](./CODEBASE_MAP.md)** at the repo root.
+
 > **Version:** 1.1 — March 2026 (peer-reviewed)  
 > **Scope:** Full overhaul of the existing Phase 10 codebase, preserving all functionality while fixing structural flaws, closing technical debt, and improving performance, reliability, and offline-first robustness.  
 > **Intended reader:** An AI coding agent or developer executing this rebuild from scratch using the existing codebase as a reference. Every change described here is grounded in explicit observations of the actual source files.

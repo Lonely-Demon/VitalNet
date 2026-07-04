@@ -6,19 +6,21 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:parity": "node tests/treeParity.test.mjs",
+    "test:feature-parity": "node tests/featureParity.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",
     "@tailwindcss/vite": "^4.2.1",
     "@vitejs/plugin-react": "^4.5.2",
-    "axios": "^1.13.6",
+    "i18next": "^26.3.4",
     "idb": "^8.0.3",
-    "onnxruntime-web": "^1.24.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-i18next": "^17.0.8",
     "tailwindcss": "^4.2.1",
-    "uuid": "^13.0.0",
+    "uuid": "^14.0.0",
     "vite-plugin-pwa": "^1.2.0",
     "workbox-window": "^7.4.0",
     "zod": "^4.3.6"

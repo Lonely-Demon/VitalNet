@@ -5,14 +5,6 @@ import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
 export default defineConfig({
-  // Handle ONNX files as static assets
-  assetsInclude: ['**/*.onnx'],
-
-  // Exclude onnxruntime-web from pre-bundling (uses dynamic WASM loading)
-  optimizeDeps: {
-    exclude: ['onnxruntime-web'],
-  },
-
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },
   },
@@ -23,13 +15,22 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
 
-      // Precache the entire app shell
+      // Precache the app shell + the offline triage model. The model is now a
+      // compact tree JSON (~1 MB, gzips far smaller) evaluated in pure JS —
+      // there is no onnxruntime-web WASM to precache anymore, which is the
+      // headline weak-hardware/low-bandwidth win of the Option-6 offline engine.
       workbox: {
+        // Raise the per-file precache cap so triage_trees.json is precached
+        // (default is 2 MiB; the JSON is ~1 MB but keep headroom).
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         globPatterns: [
           '**/*.{js,css,html,ico,png,svg,woff2}',
-          'models/triage_classifier.onnx',
+          'models/triage_trees.json',
           'models/features_config.json',
         ],
+        // Web Push handler (FEATURES_ROADMAP §1.4) — a small standalone
+        // script rather than switching to injectManifest mode.
+        importScripts: ['sw-push.js'],
 
         // Background Sync for POST /api/submit (in-flight failure recovery)
         runtimeCaching: [{

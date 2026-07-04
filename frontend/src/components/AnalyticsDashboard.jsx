@@ -2,7 +2,17 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../store/authStore'
 import { useRealtimeCases } from '../hooks/useRealtimeCases'
-import { getAnalyticsSummary } from '../lib/api'
+import { getAnalyticsSummary, getResponseTimes, exportCases } from '../lib/api'
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function daysAgoIso(days) {
+  const d = new Date()
+  d.setDate(d.getDate() - days)
+  return d.toISOString().slice(0, 10)
+}
 
 const TRIAGE_COLORS = {
   EMERGENCY: 'bg-emergency',
@@ -10,14 +20,43 @@ const TRIAGE_COLORS = {
   ROUTINE: 'bg-routine',
 }
 
+const TRIAGE_TEXT_COLORS = {
+  EMERGENCY: 'text-emergency',
+  URGENT: 'text-urgent',
+  ROUTINE: 'text-routine',
+}
+
+function formatMinutes(mins) {
+  if (mins == null) return '—'
+  if (mins < 60) return `${Math.round(mins)}m`
+  return `${(mins / 60).toFixed(1)}h`
+}
+
 export default function AnalyticsDashboard() {
   const { profile } = useAuth()
   const [stats, setStats] = useState(null)
+  const [responseTimes, setResponseTimes] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [liveCount, setLiveCount] = useState(0)
+  const [exportFrom, setExportFrom] = useState(daysAgoIso(30))
+  const [exportTo, setExportTo] = useState(todayIso())
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState(null)
 
   const facilityId = profile?.facility_id
+
+  async function handleExport() {
+    setExporting(true)
+    setExportError(null)
+    try {
+      await exportCases({ dateFrom: exportFrom, dateTo: exportTo })
+    } catch (err) {
+      setExportError(err.message)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   async function fetchStats() {
     try {
@@ -32,6 +71,7 @@ export default function AnalyticsDashboard() {
 
   useEffect(() => {
     fetchStats()
+    getResponseTimes().then(setResponseTimes).catch(() => {})
   }, [])
 
   // Live case counter — increments on every new INSERT
@@ -125,6 +165,40 @@ export default function AnalyticsDashboard() {
         </div>
       </div>
 
+      {/* Response-time SLA (FEATURES_ROADMAP §1.5) */}
+      {responseTimes && (
+        <div className="rounded-lg border border-leaf/40 bg-surface p-4 shadow-card">
+          <p className="mb-3 text-xs font-mono font-semibold uppercase tracking-wide text-text3">
+            Response Times — Last 30 Days
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {['EMERGENCY', 'URGENT', 'ROUTINE'].map((level) => {
+              const t = responseTimes.tiers[level]
+              return (
+                <div key={level} className="rounded-lg border border-leaf/20 p-3">
+                  <p className={`text-xs font-mono font-bold uppercase tracking-wider ${TRIAGE_TEXT_COLORS[level]}`}>
+                    {level}
+                  </p>
+                  <div className="mt-2 flex justify-between text-sm">
+                    <span className="text-text3">Median</span>
+                    <span className="font-mono text-text font-medium">{formatMinutes(t.median_minutes)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-text3">p90</span>
+                    <span className="font-mono text-text font-medium">{formatMinutes(t.p90_minutes)}</span>
+                  </div>
+                  {t.overdue_count > 0 && (
+                    <p className="mt-2 text-xs font-bold text-emergency">
+                      {t.overdue_count} overdue (past {formatMinutes(t.overdue_threshold_minutes)})
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Daily volume chart (last 7 days) */}
       <div className="rounded-lg border border-leaf/40 bg-surface p-4 shadow-card">
         <p className="mb-4 text-xs font-mono font-semibold uppercase tracking-wide text-text3">
@@ -168,6 +242,46 @@ export default function AnalyticsDashboard() {
           </div>
         </div>
       )}
+
+      {/* CSV export (FEATURES_ROADMAP §1b.3) */}
+      <div className="rounded-lg border border-leaf/40 bg-surface p-4 shadow-card">
+        <p className="mb-3 text-xs font-mono font-semibold uppercase tracking-wide text-text3">
+          Export Case Data
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-text3">From</span>
+            <input
+              type="date"
+              value={exportFrom}
+              max={exportTo}
+              onChange={(e) => setExportFrom(e.target.value)}
+              className="rounded-lg border border-leaf/40 bg-bg px-2 py-1.5 text-sm text-text"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-text3">To</span>
+            <input
+              type="date"
+              value={exportTo}
+              min={exportFrom}
+              max={todayIso()}
+              onChange={(e) => setExportTo(e.target.value)}
+              className="rounded-lg border border-leaf/40 bg-bg px-2 py-1.5 text-sm text-text"
+            />
+          </label>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="rounded-lg bg-forest px-4 py-1.5 text-sm font-semibold text-white hover:bg-forest/90 transition-colors disabled:opacity-60"
+          >
+            {exporting ? 'Exporting…' : 'Download CSV'}
+          </button>
+        </div>
+        {exportError && (
+          <p className="mt-2 text-xs text-emergency">Export failed: {exportError}</p>
+        )}
+      </div>
 
     </div>
   )

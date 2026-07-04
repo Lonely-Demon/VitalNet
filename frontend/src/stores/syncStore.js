@@ -12,6 +12,7 @@
 import { supabase } from '@/lib/supabase'
 import { enqueue, dequeue, getAllQueued } from '@/lib/offlineQueue'
 import { isServerReachable } from '@/lib/connectivity'
+import { getDeviceId } from '@/api/auth'
 import { v4 as uuidv4 } from 'uuid'
 
 const BASE = import.meta.env.VITE_API_BASE_URL
@@ -20,6 +21,8 @@ async function _authHeaders(token) {
   return {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${token}`,
+    'X-Device-Id': getDeviceId(),
+    'X-CSRF-Token': 'vitalnet-spa',
   }
 }
 
@@ -40,7 +43,7 @@ export async function submitCase(formData) {
     // Offline path: store in IndexedDB queue with offline flag (no token stored)
     const offlinePayload = { ...payload, created_offline: true }
     await enqueue(clientId, offlinePayload)
-    // Signal useLocalTriage to begin ONNX warmup for offline use
+    // Signal useLocalTriage to begin offline-model warmup
     window.dispatchEvent(new CustomEvent('vitalnet-server-unreachable'))
     return { queued: true, client_id: clientId }
   }
@@ -100,10 +103,7 @@ export async function processQueue() {
     try {
       const res = await fetch(`${BASE}/api/submit`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${freshToken}`,
-        },
+        headers: await _authHeaders(freshToken),
         body: JSON.stringify(item.payload),
       })
 

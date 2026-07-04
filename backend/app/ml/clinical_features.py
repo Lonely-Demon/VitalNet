@@ -3,11 +3,9 @@ VitalNet Enhanced Clinical Feature Engineering
 Transforms raw patient data into clinically meaningful features for ML classification
 """
 
-import numpy as np
-import pandas as pd
 from datetime import datetime
-from typing import Dict, List, Any, Optional
-import re
+from typing import Dict, List, Any
+
 
 class ClinicalFeatureEngineer:
     """
@@ -141,9 +139,6 @@ class ClinicalFeatureEngineer:
 
     def _engineer_age_specific_features(self, raw_data: Dict[str, Any]) -> Dict[str, float]:
         """Engineer age-specific clinical features"""
-        age = raw_data.get('patient_age', 40)
-        sex = raw_data.get('patient_sex', '')
-
         return {
             'pediatric_fever_risk': self._pediatric_fever_assessment(raw_data),
             'elderly_fall_risk': self._elderly_fall_assessment(raw_data),
@@ -217,7 +212,6 @@ class ClinicalFeatureEngineer:
     def _calculate_hemodynamic_score(self, raw_data: Dict[str, Any]) -> float:
         """Calculate hemodynamic instability score"""
         bp_sys = raw_data.get('bp_systolic', 120)
-        bp_dia = raw_data.get('bp_diastolic', 80)
         hr = raw_data.get('heart_rate', 75)
 
         score = 0.0

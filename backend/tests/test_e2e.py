@@ -1,6 +1,4 @@
 import requests
-import json
-import time
 from app.core.config import settings
 from supabase import create_client
 

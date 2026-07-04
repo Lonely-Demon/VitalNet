@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { v4 as uuidv4 } from 'uuid'
 import { submitCase } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
@@ -6,8 +7,14 @@ import { useAuth } from '../store/authStore'
 import { useLocalTriage } from '../hooks/useLocalTriage'
 import { useDraftSave } from '../hooks/useDraftSave'
 import { validateForm } from '../utils/validation'
+import VoiceInputButton from '../components/VoiceInputButton'
 
-const COMPLAINTS = [
+// Stable English identifiers — these are the actual values submitted to the
+// API (chief_complaint is a free-text-ish field, not a coded enum server-
+// side). Only the DISPLAYED label is translated (via the *_LABEL_KEYS maps
+// below); selecting a different language never changes what gets submitted
+// (FEATURES_ROADMAP §2.1 acceptance check).
+const COMPLAINT_IDS = [
   "Chest pain / tightness",
   "Breathlessness / difficulty breathing",
   "Fever",
@@ -24,7 +31,24 @@ const COMPLAINTS = [
   "Other",
 ]
 
-const DURATIONS = [
+const COMPLAINT_LABEL_KEYS = {
+  "Chest pain / tightness": "chestPain",
+  "Breathlessness / difficulty breathing": "breathlessness",
+  "Fever": "fever",
+  "Abdominal pain": "abdominalPain",
+  "Headache / dizziness": "headacheDizziness",
+  "Weakness / fatigue": "weaknessFatigue",
+  "Altered consciousness / confusion": "alteredConsciousness",
+  "Seizure": "seizure",
+  "Severe bleeding": "severeBleeding",
+  "Nausea / vomiting": "nauseaVomiting",
+  "Baby / child unwell": "babyChildUnwell",
+  "Pregnancy complication": "pregnancyComplication",
+  "Injury / trauma": "injuryTrauma",
+  "Other": "other",
+}
+
+const DURATION_IDS = [
   "Less than 1 hour",
   "1–6 hours",
   "6–24 hours",
@@ -32,20 +56,34 @@ const DURATIONS = [
   "More than 3 days",
 ]
 
-const SYMPTOM_OPTIONS = [
-  { id: "chest_pain", label: "Chest pain" },
-  { id: "breathlessness", label: "Breathlessness" },
-  { id: "high_fever", label: "High fever (>102°F)" },
-  { id: "altered_consciousness", label: "Altered consciousness" },
-  { id: "seizure", label: "Seizure" },
-  { id: "severe_bleeding", label: "Severe bleeding" },
-  { id: "severe_abdominal_pain", label: "Severe abdominal pain" },
-  { id: "persistent_vomiting", label: "Persistent vomiting" },
-  { id: "severe_headache", label: "Severe headache" },
-  { id: "weakness_one_side", label: "Weakness on one side" },
-  { id: "difficulty_speaking", label: "Difficulty speaking" },
-  { id: "swelling_face_throat", label: "Swelling of face/throat" },
+const DURATION_LABEL_KEYS = {
+  "Less than 1 hour": "lessThan1h",
+  "1–6 hours": "oneToSixH",
+  "6–24 hours": "sixToTwentyFourH",
+  "1–3 days": "oneToThreeDays",
+  "More than 3 days": "moreThanThreeDays",
+}
+
+// Symptom ids are both the stable wire value (sent as `symptoms: [ids...]`)
+// AND the i18n key under intakeForm.symptoms.* — no separate label map needed.
+const SYMPTOM_IDS = [
+  "chest_pain",
+  "breathlessness",
+  "high_fever",
+  "altered_consciousness",
+  "seizure",
+  "severe_bleeding",
+  "severe_abdominal_pain",
+  "persistent_vomiting",
+  "severe_headache",
+  "weakness_one_side",
+  "difficulty_speaking",
+  "swelling_face_throat",
 ]
+
+const SEX_OPTIONS = ["male", "female", "other"]
+
+const SPEECH_LANG_MAP = { en: "en-US", hi: "hi-IN", ta: "ta-IN" }
 
 const BADGE_COLORS = {
   EMERGENCY: "bg-emergency/10 text-emergency border border-emergency/30",
@@ -70,9 +108,15 @@ const emptyForm = {
   observations: "",
   known_conditions: "",
   current_medications: "",
+  human_review_requested: false,
+  human_review_reason: "",
+  consent_captured: false,
 }
 
 export default function IntakeForm() {
+  const { t, i18n } = useTranslation()
+  const speechLang = SPEECH_LANG_MAP[i18n.language] || "en-US"
+
   const [clientId] = useState(() => uuidv4())
   const [form, setForm] = useState(emptyForm)
   const [loading, setLoading] = useState(false)
@@ -80,11 +124,11 @@ export default function IntakeForm() {
   const [error, setError] = useState(null)
   const [fieldErrors, setFieldErrors] = useState({})
   const [localResult, setLocalResult] = useState(null)
-  
+
   const { profile } = useAuth()
   const { showToast } = useToast()
   const { classify } = useLocalTriage()
-  
+
   // Tie draft strictly to the authenticated worker so tab evictions safely restore
   const { loadDraft, saveDraft, clearDraft } = useDraftSave(profile?.id || 'anonymous')
 
@@ -132,11 +176,29 @@ export default function IntakeForm() {
     }))
   }
 
-  const handleSubmit = async () => {
+  // Appends a voice transcript to the named field rather than overwriting it
+  // — the transcribed text always stays visible in the field for the worker
+  // to review/edit before submit (never auto-submitted).
+  const appendVoiceTranscript = (field) => (transcript) => {
+    setForm(prev => ({
+      ...prev,
+      [field]: prev[field] ? `${prev[field]} ${transcript}` : transcript,
+    }))
+  }
+
+  const handleSubmit = async (e) => {
+    if (e?.preventDefault) e.preventDefault()
     setError(null)
     setFieldErrors({})
     setLocalResult(null)
     setLoading(true)
+
+    if (!form.consent_captured) {
+      setError(t('intakeForm.errors.consentRequired'))
+      setFieldErrors({ consent_captured: t('intakeForm.errors.consentRequiredShort') })
+      setLoading(false)
+      return
+    }
 
     const payload = {
       ...form,
@@ -148,18 +210,21 @@ export default function IntakeForm() {
       spo2: form.spo2 ? parseInt(form.spo2) : null,
       heart_rate: form.heart_rate ? parseInt(form.heart_rate) : null,
       temperature: form.temperature ? parseFloat(form.temperature) : null,
+      human_review_requested: Boolean(form.human_review_requested),
+      human_review_reason: form.human_review_reason?.trim() || null,
+      consent_captured_at: new Date().toISOString(),
     }
 
     // Zod clinical boundary validation
     const validation = validateForm(payload)
     if (!validation.success) {
-      setError("Please fix the validation errors below before submitting.")
+      setError(t('intakeForm.errors.validationFailed'))
       setFieldErrors(validation.errors)
       setLoading(false)
       return
     }
 
-    // Run local ONNX triage immediately — before any network call
+    // Run local offline triage immediately — before any network call
     const local = await classify(payload)
     if (local) {
       setLocalResult(local)
@@ -167,13 +232,13 @@ export default function IntakeForm() {
 
     try {
       const data = await submitCase(payload)
-      
+
       // Clear draft since it is successfully saved or queued
       await clearDraft().catch(console.error)
 
       if (data.queued) {
         setResult({ ...data, localTriage: local })
-        showToast('Saved offline \u2014 will sync when connected', 'warning')
+        showToast('Saved offline — will sync when connected', 'warning')
       } else {
         setResult(data)
         setLocalResult(null)
@@ -184,8 +249,8 @@ export default function IntakeForm() {
       // If offline or network error — local result stays displayed
       // The Phase 8 queue handles the actual sync
       setError(err.message?.includes('queue is full')
-        ? 'Offline queue is full (50 cases). Connect to internet to sync before submitting more cases.'
-        : (err.message || "Submission failed. Check connection."))
+        ? t('intakeForm.errors.queueFull')
+        : (err.message || t('intakeForm.errors.submissionFailed')))
     } finally {
       setLoading(false)
     }
@@ -204,23 +269,21 @@ export default function IntakeForm() {
                   <span className={`inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono ${BADGE_COLORS[offlineTriage.triageLevel]}`}>
                     {offlineTriage.triageLevel}
                   </span>
-                  {offlineTriage.confidence != null && (
-                    <p className="text-xs text-text3 mt-2 font-mono">
-                      Confidence: {(offlineTriage.confidence * 100).toFixed(0)}%
-                    </p>
+                  {offlineTriage.lowConfidence && (
+                    <p className="text-xs text-urgent mt-2 font-mono">{t('intakeForm.result.lowConfidenceShort')}</p>
                   )}
                 </div>
               )}
               <div className="mb-6">
                 <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide shadow-sm bg-sand text-urgent border border-urgent/20 font-mono">
-                  SAVED OFFLINE
+                  {t('intakeForm.result.savedOfflineBadge')}
                 </span>
               </div>
-              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">Case Saved Locally</h2>
+              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">{t('intakeForm.result.savedLocallyTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">
                 {offlineTriage
-                  ? 'Preliminary AI triage shown above. Full analysis will be available when connectivity is restored.'
-                  : 'It will be submitted automatically when connectivity is restored.'}
+                  ? t('intakeForm.result.savedLocallyWithTriage')
+                  : t('intakeForm.result.savedLocallyNoTriage')}
               </p>
             </>
           ) : (
@@ -230,7 +293,7 @@ export default function IntakeForm() {
                   {result.triage_level}
                 </span>
               </div>
-              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">Case Successfully Logged</h2>
+              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">{t('intakeForm.result.successTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">{result.risk_driver}</p>
             </>
           )}
@@ -238,7 +301,7 @@ export default function IntakeForm() {
             onClick={() => setResult(null)}
             className="bg-forest text-white px-8 py-3 rounded-pill font-medium cursor-pointer shadow-btn hover:shadow-card-hover transition-all active:scale-[0.98]"
           >
-            Submit Another Case
+            {t('intakeForm.actions.submitAnother')}
           </button>
         </div>
       </div>
@@ -246,111 +309,118 @@ export default function IntakeForm() {
   }
 
   return (
-    <div className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300">
-      <h1 className="text-2xl font-display italic text-forest tracking-tight mb-8 text-center">Patient Intake Form</h1>
+    <form onSubmit={handleSubmit} className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300 relative pb-32">
+      <h1 className="text-2xl font-display italic text-forest tracking-tight mb-8 text-center">{t('intakeForm.title')}</h1>
 
       {error && (
-        <div className="bg-emergency/10 border border-emergency/30 text-emergency px-4 py-3 rounded-md mb-4 text-sm">
+        <div role="alert" aria-live="assertive" className="bg-emergency/10 border border-emergency/30 text-emergency px-4 py-3 rounded-md mb-4 text-sm">
           {error}
         </div>
       )}
 
       {/* Patient Location */}
-      <Section title="Location">
-        <Field label="Location / Village *" error={fieldErrors.location}>
-          <input name="location" value={form.location} onChange={handleChange}
-            placeholder="e.g. Rampur Village" className={`${inputClass} ${fieldErrors.location ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+      <Section title={t('intakeForm.sections.location')}>
+        <Field label={t('intakeForm.fields.location')} error={fieldErrors.location}>
+          <input name="location" value={form.location} onChange={handleChange} required
+            placeholder={t('intakeForm.placeholders.location')} maxLength={200} className={`${inputClass} ${fieldErrors.location ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
       </Section>
 
       {/* Patient */}
-      <Section title="Patient Details">
-        <Field label="Patient Name *" error={fieldErrors.patient_name}>
+      <Section title={t('intakeForm.sections.patientDetails')}>
+        <Field label={t('intakeForm.fields.patientName')} error={fieldErrors.patient_name}>
           <input name="patient_name" value={form.patient_name} onChange={handleChange}
-            placeholder="e.g. Priya Sharma" className={`${inputClass} ${fieldErrors.patient_name ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} maxLength={100} />
+            placeholder={t('intakeForm.placeholders.patientName')} className={`${inputClass} ${fieldErrors.patient_name ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} maxLength={100} />
         </Field>
-        <Field label="Age (years) *" error={fieldErrors.patient_age}>
+        <Field label={t('intakeForm.fields.patientAge')} error={fieldErrors.patient_age}>
           <input name="patient_age" type="number" value={form.patient_age}
-            onChange={handleChange} placeholder="e.g. 45" className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+            onChange={handleChange} placeholder={t('intakeForm.placeholders.patientAge')} className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
-        <Field label="Sex *" error={fieldErrors.patient_sex}>
-          <div className="flex gap-4 mt-1">
-            {["male", "female", "other"].map(s => (
-              <label key={s} className="flex items-center gap-2 cursor-pointer group">
-                <input type="radio" name="patient_sex" value={s}
-                  checked={form.patient_sex === s} onChange={handleChange}
-                  className="accent-forest" />
-                <span className="capitalize text-sm text-text2 group-hover:text-forest transition-colors">{s}</span>
-              </label>
-            ))}
-          </div>
+        <Field label={t('intakeForm.fields.patientSex')} error={fieldErrors.patient_sex}>
+          <fieldset className="mt-1">
+            <legend className="sr-only">{t('intakeForm.fields.patientSex')}</legend>
+            <div className="flex gap-4" aria-describedby={fieldErrors.patient_sex ? "patient_sex_error" : undefined}>
+              {SEX_OPTIONS.map(s => (
+                <label key={s} className="flex items-center gap-2 cursor-pointer group p-2 min-w-[44px] min-h-[44px]">
+                  <input type="radio" name="patient_sex" value={s}
+                    checked={form.patient_sex === s} onChange={handleChange}
+                    className="accent-forest w-5 h-5" />
+                  <span className="capitalize text-sm text-text2 group-hover:text-forest transition-colors">{t(`intakeForm.sexOptions.${s}`)}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
         </Field>
       </Section>
 
       {/* Complaint */}
-      <Section title="Chief Complaint">
-        <Field label="Primary Complaint *" error={fieldErrors.chief_complaint}>
+      <Section title={t('intakeForm.sections.chiefComplaint')}>
+        <Field label={t('intakeForm.fields.chiefComplaint')} error={fieldErrors.chief_complaint}>
           <select name="chief_complaint" value={form.chief_complaint}
             onChange={handleChange} className={`${inputClass} ${fieldErrors.chief_complaint ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
-            <option value="">Select complaint</option>
-            {COMPLAINTS.map(c => <option key={c} value={c}>{c}</option>)}
+            <option value="">{t('intakeForm.placeholders.selectComplaint')}</option>
+            {COMPLAINT_IDS.map(id => (
+              <option key={id} value={id}>{t(`intakeForm.complaints.${COMPLAINT_LABEL_KEYS[id]}`)}</option>
+            ))}
           </select>
         </Field>
         {form.chief_complaint === "Other" && (
-          <Field label="Please specify the complaint *" error={fieldErrors.chief_complaint}>
+          <Field label={t('intakeForm.fields.customComplaint')} error={fieldErrors.chief_complaint}>
             <input
               name="custom_complaint"
               value={form.custom_complaint}
               onChange={handleChange}
-              placeholder="e.g. Joint pain, skin rash, vision problems..."
+              placeholder={t('intakeForm.placeholders.customComplaint')}
               className={inputClass}
               maxLength={200}
             />
           </Field>
         )}
-        <Field label="Duration *" error={fieldErrors.complaint_duration}>
+        <Field label={t('intakeForm.fields.duration')} error={fieldErrors.complaint_duration}>
           <select name="complaint_duration" value={form.complaint_duration}
             onChange={handleChange} className={`${inputClass} ${fieldErrors.complaint_duration ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
-            <option value="">Select duration</option>
-            {DURATIONS.map(d => <option key={d} value={d}>{d}</option>)}
+            <option value="">{t('intakeForm.placeholders.selectDuration')}</option>
+            {DURATION_IDS.map(id => (
+              <option key={id} value={id}>{t(`intakeForm.durations.${DURATION_LABEL_KEYS[id]}`)}</option>
+            ))}
           </select>
         </Field>
       </Section>
 
       {/* Vitals */}
-      <Section title="Vitals (optional — record what is available)">
+      <Section title={t('intakeForm.sections.vitals')}>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="BP Systolic (mmHg)" error={fieldErrors.bp_systolic}>
+          <Field label={t('intakeForm.fields.bpSystolic')} error={fieldErrors.bp_systolic}>
             <input name="bp_systolic" type="number" value={form.bp_systolic}
-              onChange={handleChange} placeholder="e.g. 120" className={`${inputClass} ${fieldErrors.bp_systolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+              onChange={handleChange} placeholder={t('intakeForm.placeholders.bpSystolic')} className={`${inputClass} ${fieldErrors.bp_systolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label="BP Diastolic (mmHg)" error={fieldErrors.bp_diastolic}>
+          <Field label={t('intakeForm.fields.bpDiastolic')} error={fieldErrors.bp_diastolic}>
             <input name="bp_diastolic" type="number" value={form.bp_diastolic}
-              onChange={handleChange} placeholder="e.g. 80" className={`${inputClass} ${fieldErrors.bp_diastolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+              onChange={handleChange} placeholder={t('intakeForm.placeholders.bpDiastolic')} className={`${inputClass} ${fieldErrors.bp_diastolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label="SpO2 (%)" error={fieldErrors.spo2}>
+          <Field label={t('intakeForm.fields.spo2')} error={fieldErrors.spo2}>
             <input name="spo2" type="number" value={form.spo2}
-              onChange={handleChange} placeholder="e.g. 98" className={`${inputClass} ${fieldErrors.spo2 ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+              onChange={handleChange} placeholder={t('intakeForm.placeholders.spo2')} className={`${inputClass} ${fieldErrors.spo2 ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label="Heart Rate (bpm)" error={fieldErrors.heart_rate}>
+          <Field label={t('intakeForm.fields.heartRate')} error={fieldErrors.heart_rate}>
             <input name="heart_rate" type="number" value={form.heart_rate}
-              onChange={handleChange} placeholder="e.g. 72" className={`${inputClass} ${fieldErrors.heart_rate ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+              onChange={handleChange} placeholder={t('intakeForm.placeholders.heartRate')} className={`${inputClass} ${fieldErrors.heart_rate ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label="Temperature (°C)" error={fieldErrors.temperature}>
+          <Field label={t('intakeForm.fields.temperature')} error={fieldErrors.temperature}>
             <input name="temperature" type="number" step="0.1" value={form.temperature}
-              onChange={handleChange} placeholder="e.g. 37.2" className={`${inputClass} ${fieldErrors.temperature ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+              onChange={handleChange} placeholder={t('intakeForm.placeholders.temperature')} className={`${inputClass} ${fieldErrors.temperature ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
         </div>
       </Section>
 
       {/* Symptoms */}
-      <Section title="Symptoms (select all that apply)">
+      <Section title={t('intakeForm.sections.symptoms')}>
         <div className="grid grid-cols-2 gap-3">
-          {SYMPTOM_OPTIONS.map((s, idx) => {
-            const isSelected = form.symptoms.includes(s.id);
+          {SYMPTOM_IDS.map((id, idx) => {
+            const isSelected = form.symptoms.includes(id);
             return (
               <label
-                key={s.id}
+                key={id}
                 style={{ animationDelay: `${idx * 40}ms` }}
                 className={`flex items-center justify-center p-3 rounded-lg border text-sm transition-all duration-200 cursor-pointer animate-fade-up
                 ${isSelected
@@ -359,9 +429,9 @@ export default function IntakeForm() {
                 }`}
               >
                 <input type="checkbox" checked={isSelected}
-                  onChange={() => handleSymptom(s.id)}
+                  onChange={() => handleSymptom(id)}
                   className="sr-only" />
-                <span className="text-center">{s.label}</span>
+                <span className="text-center">{t(`intakeForm.symptoms.${id}`)}</span>
               </label>
             )
           })}
@@ -369,30 +439,100 @@ export default function IntakeForm() {
       </Section>
 
       {/* Observations */}
-      <Section title="Observations (optional)">
-        <textarea name="observations" value={form.observations} onChange={handleChange}
-          placeholder="Any additional observations about the patient's condition..."
-          rows={3} className={`${inputClass} resize-none`} maxLength={500} />
-        <Field label="Known Conditions">
-          <input name="known_conditions" value={form.known_conditions}
-            onChange={handleChange} placeholder="e.g. diabetes, hypertension"
-            className={inputClass} />
+      <Section title={t('intakeForm.sections.observations')}>
+        <div className="flex items-start gap-2">
+          <textarea name="observations" value={form.observations} onChange={handleChange}
+            placeholder={t('intakeForm.placeholders.observations')}
+            rows={3} className={`${inputClass} resize-none flex-1`} maxLength={500} />
+          <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('observations')} />
+        </div>
+        <Field label={t('intakeForm.fields.knownConditions')}>
+          <div className="flex items-center gap-2">
+            <input name="known_conditions" value={form.known_conditions}
+              onChange={handleChange} placeholder={t('intakeForm.placeholders.knownConditions')}
+              maxLength={300} className={`${inputClass} flex-1`} />
+            <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('known_conditions')} />
+          </div>
         </Field>
-        <Field label="Current Medications">
-          <input name="current_medications" value={form.current_medications}
-            onChange={handleChange} placeholder="e.g. metformin, amlodipine"
-            className={inputClass} />
+        <Field label={t('intakeForm.fields.currentMedications')}>
+          <div className="flex items-center gap-2">
+            <input name="current_medications" value={form.current_medications}
+              onChange={handleChange} placeholder={t('intakeForm.placeholders.currentMedications')}
+              maxLength={300} className={`${inputClass} flex-1`} />
+            <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('current_medications')} />
+          </div>
         </Field>
       </Section>
 
+      {/* Patient Consent */}
+      <Section title={t('intakeForm.sections.consent')}>
+        <div className={`p-4 rounded-lg border ${fieldErrors.consent_captured ? 'border-emergency/50 bg-emergency/5' : 'border-surface3 bg-surface2'}`}>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              name="consent_captured"
+              checked={form.consent_captured}
+              onChange={(e) => setForm(prev => ({ ...prev, consent_captured: e.target.checked }))}
+              className="mt-1 w-5 h-5 accent-forest rounded"
+            />
+            <span className="text-sm text-text2 leading-relaxed">
+              <strong className="text-text">{t('intakeForm.consent.title')}</strong>
+              <br />
+              {t('intakeForm.consent.intro')}
+              <ul className="mt-2 ml-4 list-disc space-y-1 text-text3">
+                {t('intakeForm.consent.items', { returnObjects: true }).map((item, i) => (
+                  <li key={i}>{item}</li>
+                ))}
+              </ul>
+            </span>
+          </label>
+          {fieldErrors.consent_captured && (
+            <p className="text-emergency text-xs mt-2 font-medium">{fieldErrors.consent_captured}</p>
+          )}
+        </div>
+      </Section>
+
+      {/* Clinician Review Request */}
+      <Section title={t('intakeForm.sections.clinicianReview')}>
+        <div className="p-4 rounded-lg border border-leaf/40 bg-surface2">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              name="human_review_requested"
+              checked={form.human_review_requested}
+              onChange={(e) => setForm(prev => ({ ...prev, human_review_requested: e.target.checked }))}
+              className="mt-1 w-5 h-5 accent-forest rounded"
+            />
+            <span className="text-sm text-text2 leading-relaxed">
+              <strong className="text-text">{t('intakeForm.review.title')}</strong>
+              <br />
+              {t('intakeForm.review.description')}
+            </span>
+          </label>
+          {form.human_review_requested && (
+            <textarea
+              name="human_review_reason"
+              value={form.human_review_reason}
+              onChange={handleChange}
+              placeholder={t('intakeForm.placeholders.reviewReason')}
+              rows={2}
+              maxLength={500}
+              className={`${inputClass} mt-3 resize-none`}
+            />
+          )}
+        </div>
+      </Section>
+
       {/* Submit */}
-      <button
-        onClick={handleSubmit}
-        disabled={loading}
-        className="w-full bg-forest text-white py-4 rounded-pill font-bold text-lg mt-6 shadow-btn hover:shadow-card-hover disabled:opacity-75 disabled:cursor-wait transition-all duration-200 active:scale-[0.98] cursor-pointer flex justify-center items-center"
-      >
-        {loading ? <span className="animate-pulse">Analyzing Case...</span> : "Submit Case"}
-      </button>
+      <div className="fixed sm:absolute bottom-0 left-0 right-0 sm:left-auto sm:right-auto sm:w-full p-4 bg-surface sm:bg-transparent border-t border-surface3 sm:border-none shadow-[0_-4px_10px_rgba(0,0,0,0.1)] sm:shadow-none z-20">
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-forest text-white py-4 rounded-pill font-bold text-lg shadow-btn hover:shadow-card-hover disabled:opacity-75 disabled:cursor-wait transition-all duration-200 active:scale-[0.98] cursor-pointer flex justify-center items-center min-h-[56px]"
+        >
+          {loading ? <span className="animate-pulse">{t('intakeForm.actions.analyzing')}</span> : t('intakeForm.actions.submit')}
+        </button>
+      </div>
 
       {/* Preliminary Triage Result Display */}
       {localResult && (
@@ -414,17 +554,22 @@ export default function IntakeForm() {
               {localResult.triageLevel}
             </span>
             <span className="text-sm font-medium text-text2">
-              Preliminary triage
+              {t('intakeForm.preliminary.label')}
             </span>
           </div>
+          {localResult.lowConfidence && (
+            <p className="mt-2 text-xs text-urgent font-medium">
+              {t('intakeForm.preliminary.lowConfidence')}
+            </p>
+          )}
           <p className="mt-2 text-xs text-text3">
             {navigator.onLine
-              ? 'Sending to server for full analysis…'
-              : 'Offline — queued for sync. Full briefing will appear for the doctor when connectivity returns.'}
+              ? t('intakeForm.preliminary.sendingOnline')
+              : t('intakeForm.preliminary.sendingOffline')}
           </p>
         </div>
       )}
-    </div>
+    </form>
   )
 }
 

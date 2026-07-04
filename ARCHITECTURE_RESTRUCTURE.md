@@ -1,5 +1,12 @@
 # VitalNet — Architecture Restructuring Instructions
 
+> [!NOTE]
+> **This document is historical.** The restructuring it describes has been
+> executed — the codebase is already in the `app/` package structure
+> described below. Kept for historical record of *why* the structure is
+> what it is. For the current, accurate state of the codebase, see
+> **[CODEBASE_MAP.md](./CODEBASE_MAP.md)** at the repo root.
+
 > **Version:** 1.0 — Phase 12 (Enterprise Scale Preparation)
 > **Scope:** A deep structural reorganization of the VitalNet codebase. This phase transitions the flat prototype architecture into a modular, production-grade package structure. It also introduces structural enhancements like JSON logging, API decomposition, and robust dependency injection.
 > **Intended reader:** An AI coding agent or developer executing this rebuild from scratch. Follow each section strictly in order.
