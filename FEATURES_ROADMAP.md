@@ -364,9 +364,40 @@ meeting our EMERGENCY response target?" without exporting raw data.
 
 ## Tier 2 — High value, larger effort
 
-### 2.1 Multi-language intake form (i18n)
+### 2.1 Multi-language intake form (i18n) — ✅ INFRASTRUCTURE DONE (translations pending clinician review)
 
-**Why**: VitalNet's default facility state (`admin_routes.py`'s
+**Status**: The infrastructure is real and working: `react-i18next` +
+`i18next` (added to `package.json`), `frontend/src/i18n.js` (init, persists
+the chosen language to `localStorage` under `vn_language`, updates
+`document.documentElement.lang`), and a language switcher in `NavBar.jsx`
+(English/Hindi/Tamil). `IntakeForm.jsx` — the single component the spec
+itself names as highest-value — is fully wired: every displayed string
+(section titles, field labels, placeholders, complaint/duration/symptom
+options, consent text, error messages) goes through `t()`.
+
+**Deliberately NOT done this pass**: `hi.json` and `ta.json` are byte-for-
+byte English copies of `en.json` (see `frontend/src/locales/README.md`), not
+real translations. The spec itself warns that machine-translating clinical
+terminology without a clinician review pass is a patient-safety issue, not a
+cosmetic one — a mistranslated symptom option could change what a worker
+believes they're recording. Populating real translations is tracked as
+follow-on work requiring that review; it is not a coding task and was
+explicitly excluded from this pass by user decision. The mechanical string
+extraction for the *other* panels/components (`Dashboard.jsx`,
+`AdminPanel.jsx`, etc.) also hasn't been done — `IntakeForm.jsx` is the
+reference implementation demonstrating the pattern works end-to-end;
+extending it to the rest of the app is the same mechanical pattern, not a
+design question.
+
+**Wire-format guarantee preserved**: `chief_complaint`'s submitted value and
+every `symptoms[]` id are unchanged regardless of the selected language —
+`COMPLAINT_IDS`/`DURATION_IDS` (stable English strings, exactly as before)
+are decoupled from their displayed labels via `COMPLAINT_LABEL_KEYS`/
+`DURATION_LABEL_KEYS`; `SYMPTOM_IDS` double as both the wire value and the
+i18n key directly. A form filled out in any language submits byte-identical
+`symptoms`/`chief_complaint` values to English mode.
+
+**Why (original)**: VitalNet's default facility state (`admin_routes.py`'s
 `CreateFacilityRequest.state` default) is Tamil Nadu, and ASHA workers
 nationally work primarily in their regional language, not English. An
 intake form in a worker's non-native language increases entry time and
@@ -401,9 +432,25 @@ submits the exact same wire payload (English symptom IDs) as English mode.
 
 ---
 
-### 2.2 Voice-to-text intake assist
+### 2.2 Voice-to-text intake assist — ✅ DONE (browser-native path)
 
-**Why**: Typing speed and literacy vary widely among ASHA workers. Free-
+**Status**: Implemented exactly per the "ship first" browser-native path.
+`frontend/src/hooks/useVoiceInput.js` wraps `SpeechRecognition`/
+`webkitSpeechRecognition`; `frontend/src/components/VoiceInputButton.jsx` is
+a mic button rendering nothing on unsupported browsers (Firefox) rather than
+a dead button. Availability is gated on both feature support AND
+`navigator.onLine` (Chrome's engine calls a Google speech API and silently
+fails offline), matching the spec's explicit constraint — the button
+disables with a tooltip explaining why rather than letting a worker tap it
+and get nothing. `lang` is derived from the §2.1 language switcher
+(`en`→`en-US`, `hi`→`hi-IN`, `ta`→`ta-IN`). Wired onto `observations`,
+`known_conditions`, and `current_medications` in `IntakeForm.jsx` — the
+transcript is always appended into the field for the worker to review/edit,
+never auto-submitted. The offline-capable WASM-model follow-on remains
+out of scope per the spec's own guidance (validate the browser-native path
+on real devices first).
+
+**Why (original)**: Typing speed and literacy vary widely among ASHA workers. Free-
 text fields (`observations`, `known_conditions`, `current_medications`)
 are exactly where voice input has the highest leverage — structured
 fields (dropdowns, symptom checkboxes) are already fast to fill via touch.
@@ -438,9 +485,30 @@ before investing here.
 
 ---
 
-### 2.3 Inter-facility referral workflow
+### 2.3 Inter-facility referral workflow — ✅ DONE
 
-**Why**: A PHC doctor's real-world action on a severe case is often not
+**Status**: Implemented per spec. Migration `phase19_referrals.sql` adds the
+`referrals` table (`case_id`, `referred_by`, `referring_facility_id`,
+`receiving_facility_id`, `reason`, `urgency`, `status`, timestamps) with RLS
+(visible to admin globally or a doctor on either side of the referral;
+insert restricted to the referring facility; status updates restricted to
+the receiving facility) plus Realtime (mirrors `phase10`'s setup for
+`case_records`). New `backend/app/api/routes/referral_routes.py`:
+`GET /api/facilities` (doctor-accessible target picker — deliberately not
+tier-filtered, since `facilities.type` is free text with no defined
+ordering yet and enforcing one could hide a legitimate lateral referral),
+`POST /api/cases/{case_id}/refer`, `GET /api/referrals?direction=`, and
+`PATCH /api/referrals/{id}/status` (enforces a forward-only
+`pending→acknowledged→patient_arrived→completed` state machine, with
+`cancelled` reachable from any active state, via optimistic concurrency
+matching `toggle_facility`'s pattern). Frontend: `api/referrals.js`,
+`hooks/useRealtimeReferrals.js` (binds two `postgres_changes` filters — one
+per side of a referral — since a facility can be either referring or
+receiving), a "Refer to another facility" action on `BriefingCard.jsx`, and
+a new "Referrals" tab in `DoctorPanel.jsx` (`ReferralsPanel.jsx`) showing
+outgoing/incoming/all with live status-advance actions.
+
+**Why (original)**: A PHC doctor's real-world action on a severe case is often not
 "treat here" but "stabilize and refer to the district hospital." VitalNet
 currently has no way to represent that — a case is either reviewed or not,
 with no notion of where the patient went next. This connects directly to
