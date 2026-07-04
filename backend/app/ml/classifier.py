@@ -39,11 +39,54 @@ _label_map: Dict[int, str] = {}
 _model_version: str = ""
 _performance_metrics: Dict[str, Any] = {}
 
+# Feature engineer singleton — built once, reused for every prediction
+# (constructing it per request was pure allocation churn on the triage hot path).
+_feature_engineer = None
+
+# ── Abstention thresholds (C2) ────────────────────────────────────────────
+# When the model's decision is weak, surface a low-confidence flag so the
+# doctor treats the ML triage as tentative and reviews more carefully.
+LOW_CONFIDENCE_PROBA = 0.55      # top-class probability below this = uncertain
+LOW_CONFIDENCE_MARGIN = 0.15     # top-two probability gap below this = uncertain
+
 # ── Safety-net override — see module docstring ────────────────────────────
 
 CRITICAL_SYMPTOMS_OVERRIDE = {
     "altered_consciousness", "seizure", "severe_bleeding", "swelling_face_throat",
 }
+
+# ── NEWS2 "concerning single vital" floor (C1) ─────────────────────────────
+# The safety net (above) escalates EXTREME single vitals straight to EMERGENCY.
+# There is a milder band where a single vital is concerning (a NEWS2 single-
+# parameter score of 2+) but not extreme — e.g. SpO2 91-92, HR 111-119. In that
+# band the model could still output ROUTINE, which would be dangerous under-
+# triage. This floor guarantees such a case is at least URGENT. It only ever
+# RAISES a ROUTINE result to URGENT; it never lowers anything and never fires
+# for EMERGENCY. Thresholds are intentionally simple so they mirror 1:1 in the
+# frontend JS (see triageClassifier.js). Mild pediatric over-triage from the HR
+# bound is an accepted, safe tradeoff (over-triage, never under-triage).
+
+
+def _news2_concerning_vital(form_data: Dict[str, Any]) -> Optional[str]:
+    """Return a reason if any single vital is in the NEWS2 'score >= 2'
+    concerning band (but not extreme enough for the safety net), else None."""
+    spo2 = form_data.get("spo2")
+    if spo2 is not None and spo2 <= 92:
+        return f"low oxygen saturation ({spo2}%)"
+
+    bp_sys = form_data.get("bp_systolic")
+    if bp_sys is not None and (bp_sys <= 100 or bp_sys >= 180):
+        return f"concerning systolic blood pressure ({bp_sys} mmHg)"
+
+    hr = form_data.get("heart_rate")
+    if hr is not None and (hr <= 40 or hr >= 120):
+        return f"concerning heart rate ({hr} bpm)"
+
+    temp = form_data.get("temperature")
+    if temp is not None and (temp <= 35.0 or temp >= 39.1):
+        return f"concerning temperature ({temp}°C)"
+
+    return None
 
 # ── Human-readable labels for SHAP feature attributions ────────────────────
 
@@ -182,16 +225,21 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
     metadata. Never raises for a loaded classifier on well-formed input —
     the caller (cases.py submit_case) treats any exception as a 500.
     """
+    global _feature_engineer
     if _classifier is None:
         raise RuntimeError("Classifier not loaded — call load_classifier() at startup")
 
-    from app.ml.clinical_features import ClinicalFeatureEngineer
-    engineer = ClinicalFeatureEngineer()
-    features = engineer.engineer_features(form_data)
+    if _feature_engineer is None:
+        from app.ml.clinical_features import ClinicalFeatureEngineer
+        _feature_engineer = ClinicalFeatureEngineer()
+
+    features = _feature_engineer.engineer_features(form_data)
     feature_vector = np.array(
         [[features[name] for name in _feature_names]], dtype=np.float32
     )
 
+    # Layer 1 — deterministic safety net: extreme presentations -> EMERGENCY,
+    # independent of the model. Certain by construction, so never low-confidence.
     safety_reason = _safety_net_check(form_data)
     if safety_reason:
         return {
@@ -200,14 +248,36 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
             "risk_driver": f"Immediate escalation: {safety_reason}. Classified as EMERGENCY.",
             "model_version": _model_version,
             "safety_net_triggered": True,
+            "low_confidence": False,
         }
 
+    # Layer 2 — trained model.
     proba = _classifier.predict_proba(feature_vector)[0]
     predicted_class = int(np.argmax(proba))
     triage_level = _label_map[predicted_class]
     confidence = float(proba[predicted_class])
 
-    risk_driver = _generate_shap_explanation(feature_vector, predicted_class, triage_level, form_data)
+    # Abstention flag (C2): weak decisions are surfaced as tentative.
+    sorted_p = sorted(proba, reverse=True)
+    margin = float(sorted_p[0] - sorted_p[1]) if len(sorted_p) > 1 else 1.0
+    low_confidence = confidence < LOW_CONFIDENCE_PROBA or margin < LOW_CONFIDENCE_MARGIN
+
+    # Layer 3 — NEWS2 concerning-vital floor (C1): never leave a concerning
+    # single vital as ROUTINE. Deterministic, so it also resolves the
+    # uncertainty (not low-confidence once floored on a hard rule).
+    floor_reason = None
+    if triage_level == "ROUTINE":
+        floor_reason = _news2_concerning_vital(form_data)
+        if floor_reason:
+            triage_level = "URGENT"
+            low_confidence = False
+
+    risk_driver = _generate_shap_explanation(feature_vector, predicted_class, "ROUTINE" if floor_reason else triage_level, form_data)
+    if floor_reason:
+        risk_driver = (
+            f"Escalated to URGENT by clinical safety floor: {floor_reason}. "
+            f"(Model's own read was ROUTINE.)"
+        )
 
     return {
         "triage_level": triage_level,
@@ -216,6 +286,8 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
         "model_version": _model_version,
         "probabilities": {_label_map[i]: float(p) for i, p in enumerate(proba)},
         "safety_net_triggered": False,
+        "news2_floor_triggered": bool(floor_reason),
+        "low_confidence": low_confidence,
     }
 
 

@@ -59,11 +59,19 @@ Usage:
     python scripts/train_classifier.py
 
 Outputs:
-    backend/app/ml/models/triage_classifier.pkl   (classifier + SHAP explainer)
-    frontend/public/models/triage_classifier.onnx (browser inference)
-    frontend/public/models/features_config.json   (canonical feature order —
+    backend/app/ml/models/triage_classifier.pkl   (backend: classifier + SHAP explainer)
+    frontend/public/models/triage_trees.json       (browser: compact tree ensemble,
+        evaluated in pure JS by treeEvaluator.js — NO onnxruntime-web WASM)
+    frontend/public/models/features_config.json    (canonical feature order —
         the frontend fetches this at runtime instead of hard-coding feature
         order, eliminating an entire class of silent Python/JS drift bugs)
+    frontend/tests/fixtures/golden_vectors.json     (py-labelled vectors for the
+        frontend JS parity test — proves JS == server on a held-out sample)
+
+ONNX is still produced in memory (skl2onnx) as the intermediate the tree JSON is
+extracted from, but it is no longer written to disk or shipped — the browser
+never loads onnxruntime. See scripts/tree_export.py for the extraction + a
+Python reference evaluator used to assert py-pkl == onnx == tree-JSON == JS.
 """
 import json
 import os
@@ -74,7 +82,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_predict
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, recall_score
 
 warnings.filterwarnings("ignore")
@@ -82,13 +90,22 @@ warnings.filterwarnings("ignore")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
 sys.path.insert(0, BACKEND_DIR)
+sys.path.insert(0, os.path.dirname(__file__))  # for tree_export
 
 from app.ml.clinical_features import ClinicalFeatureEngineer  # noqa: E402
+from tree_export import onnx_to_tree_json, evaluate_tree_json  # noqa: E402
 
-PKL_PATH = os.path.join(BACKEND_DIR, "app", "ml", "models", "triage_classifier.pkl")
-ONNX_DIR = os.path.join(PROJECT_ROOT, "frontend", "public", "models")
-ONNX_PATH = os.path.join(ONNX_DIR, "triage_classifier.onnx")
-FEATURES_CONFIG_PATH = os.path.join(ONNX_DIR, "features_config.json")
+MODELS_DIR = os.path.join(BACKEND_DIR, "app", "ml", "models")
+PKL_PATH = os.path.join(MODELS_DIR, "triage_classifier.pkl")
+FRONTEND_MODELS_DIR = os.path.join(PROJECT_ROOT, "frontend", "public", "models")
+ONNX_DIR = FRONTEND_MODELS_DIR  # retained name; used only as the models output dir
+FEATURES_CONFIG_PATH = os.path.join(FRONTEND_MODELS_DIR, "features_config.json")
+# Offline inference (Option 6): the browser loads this compact tree JSON and
+# evaluates it in pure JS — no onnxruntime-web WASM. See scripts/tree_export.py.
+TREE_JSON_PATH = os.path.join(FRONTEND_MODELS_DIR, "triage_trees.json")
+# Golden fixture for the frontend py/JS parity test (not shipped to users).
+GOLDEN_DIR = os.path.join(PROJECT_ROOT, "frontend", "tests", "fixtures")
+GOLDEN_PATH = os.path.join(GOLDEN_DIR, "golden_vectors.json")
 
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
@@ -141,7 +158,15 @@ def clip(val, lo, hi):
 # ---------------------------------------------------------------------------
 
 def _adult_band_score(value, bands):
-    """bands: list of (lo, hi, score) tuples, ascending, covering -inf..inf."""
+    """bands: list of (lo, hi, score) tuples, ascending, covering -inf..inf.
+    A missing (None) vital scores 0 — you cannot penalise a measurement that was
+    never taken. This makes the whole scorer None-safe so the generator can
+    simulate the very common rural reality of missing vitals (no BP cuff /
+    pulse-ox). The clinical consequence — that an unmeasured danger cannot be
+    caught — is real and is surfaced elsewhere (the LLM briefing flags missing
+    vitals; the doctor sees what was not recorded)."""
+    if value is None:
+        return 0
     for lo, hi, score in bands:
         if lo <= value < hi:
             return score
@@ -179,6 +204,8 @@ def _adult_hr_score(hr):
 
 def _pediatric_hr_score(age, hr):
     """Age-banded HR normal ranges — standard APLS/PALS reference ranges."""
+    if hr is None:
+        return 0
     if age < 1:
         normal, mild = (100, 160), (90, 180)
     elif age < 2:
@@ -201,6 +228,8 @@ def _pediatric_temp_score(age, temp):
     """Fever in infants is weighted more heavily — same clinical principle as
     ClinicalFeatureEngineer._pediatric_fever_assessment (neonatal fever is a
     medical emergency even without other signs)."""
+    if temp is None:
+        return 0
     if age < 0.25:  # < 3 months
         return 3 if temp >= 38.0 else _temp_score(temp)
     if age < 2:
@@ -219,7 +248,7 @@ def news2_like_score(age, bp_sys, hr, spo2, temp):
     # temperature in a frail elderly patient with other derangement is not
     # reassuring the way it is in a young adult (matches
     # ClinicalFeatureEngineer._geriatric_vital_adjustment).
-    if age >= 65 and temp < 36.5:
+    if age >= 65 and temp is not None and temp < 36.5:
         temp_s = max(temp_s, 1)
 
     return spo2_s + bp_s + temp_s + hr_s, max(spo2_s, bp_s, temp_s, hr_s)
@@ -229,7 +258,7 @@ def qsofa_score(bp_sys, altered_consciousness):
     """Simplified qSOFA (respiratory rate is not collected by VitalNet's
     intake form, so this uses the two available qSOFA criteria)."""
     score = 0
-    if bp_sys <= 100:
+    if bp_sys is not None and bp_sys <= 100:
         score += 1
     if altered_consciousness:
         score += 1
@@ -248,7 +277,7 @@ def assign_triage_label(patient: dict) -> int:
     # extended to symptoms with no safe vital-sign proxy (e.g. active seizure).
     if symptoms & CRITICAL_SYMPTOMS_OVERRIDE:
         return 2
-    if age < 0.25 and temp >= 38.0:  # neonatal fever
+    if age < 0.25 and temp is not None and temp >= 38.0:  # neonatal fever
         return 2
 
     aggregate, worst_single = news2_like_score(age, bp_sys, hr, spo2, temp)
@@ -264,7 +293,7 @@ def assign_triage_label(patient: dict) -> int:
     # Hypertensive crisis (BP >=180 systolic) plus a neurological symptom is
     # concerning for hypertensive encephalopathy or stroke — a distinct
     # emergency pathway that plain NEWS2 aggregate scoring underweights.
-    hypertensive_neuro_emergency = bp_sys >= 180 and bool(
+    hypertensive_neuro_emergency = bp_sys is not None and bp_sys >= 180 and bool(
         symptoms & {"severe_headache", "weakness_one_side", "difficulty_speaking", "altered_consciousness"}
     )
 
@@ -397,15 +426,64 @@ def _pick_duration(severity):
     return np.random.choice(DURATIONS, p=[0.1, 0.15, 0.25, 0.25, 0.25])
 
 
-def generate_patient(severity):
+# Probability that a given optional vital is simply not measured, per vital.
+# Reflects the rural reality: an ASHA worker very often has a thermometer but no
+# BP cuff or pulse-oximeter. Training on these missing-data patterns (rather than
+# only complete vitals) makes the model robust to the input distribution it will
+# actually see in the field. BP and SpO2 are the most commonly unavailable.
+MISSING_VITAL_PROB = {
+    "bp_systolic": 0.28, "bp_diastolic": 0.28,
+    "spo2": 0.22, "heart_rate": 0.12, "temperature": 0.06,
+}
+
+
+def _apply_missing_vitals(vitals: dict) -> dict:
+    """Randomly blank out some vitals to simulate incomplete field data.
+    BP systolic/diastolic drop together (same cuff). Returns a copy."""
+    v = dict(vitals)
+    if np.random.random() < MISSING_VITAL_PROB["bp_systolic"]:
+        v["bp_sys"] = None
+        v["bp_dia"] = None
+    if np.random.random() < MISSING_VITAL_PROB["spo2"]:
+        v["spo2"] = None
+    if np.random.random() < MISSING_VITAL_PROB["heart_rate"]:
+        v["hr"] = None
+    if np.random.random() < MISSING_VITAL_PROB["temperature"]:
+        v["temp"] = None
+    return v
+
+
+def generate_patient(severity, allow_missing=True):
     age = int(clip(np.random.exponential(32) + (5 if severity in ("severe", "critical") else 0), 0, 95))
     sex = np.random.choice(["male", "female"], p=[0.49, 0.51])
     vitals = _correlated_vitals(age, severity)
-    symptoms = _sample_symptoms(severity)
+
+    # Edge syndromes the base severity bands under-represent — added as targeted
+    # perturbations so the model sees them during training:
+    #  - "silent" presentation: an elderly/diabetic patient with genuinely
+    #    deranged vitals but FEW symptoms (classic silent MI / atypical sepsis),
+    #    which forces the model to weight vitals, not just symptoms.
+    #  - sepsis without fever: hypotension + tachycardia with a normal/low temp.
+    edge = np.random.random()
+    conditions = np.random.choice(CONDITIONS_POOL)
+    if severity in ("moderate", "severe", "critical") and edge < 0.08 and age >= 55:
+        symptoms = []  # silent presentation — deranged vitals, no volunteered symptoms
+        conditions = np.random.choice(["diabetes", "heart disease", "hypertension"])
+    elif severity in ("severe", "critical") and edge < 0.16:
+        # sepsis-without-fever pattern
+        vitals["bp_sys"] = int(clip(np.random.normal(92, 8), 78, 104))
+        vitals["hr"] = int(clip(np.random.normal(116, 10), 100, 140))
+        vitals["temp"] = round(float(clip(np.random.normal(36.6, 0.5), 35.5, 37.6)), 1)
+        symptoms = _sample_symptoms(severity)
+    else:
+        symptoms = _sample_symptoms(severity)
+
+    if allow_missing:
+        vitals = _apply_missing_vitals(vitals)
+
     complaint = _pick_complaint(symptoms, severity)
     duration = _pick_duration(severity)
     location = np.random.choice(LOCATIONS)
-    conditions = np.random.choice(CONDITIONS_POOL)
 
     return {
         "patient_age": age,
@@ -436,7 +514,7 @@ def build_dataset():
     severities = ["healthy", "mild", "moderate", "severe", "critical"]
     severity_weights = [0.30, 0.22, 0.22, 0.16, 0.10]  # oversample severe/critical for label yield
 
-    print(f"[1/6] Generating synthetic patients (target {N_PER_CLASS}/class, "
+    print(f"[1/9] Generating synthetic patients (target {N_PER_CLASS}/class, "
           f"{NUM_FEATURES} features)...")
     attempts = 0
     while min(len(v) for v in buckets.values()) < N_PER_CLASS:
@@ -463,7 +541,7 @@ def build_dataset():
 def main():
     patients, y = build_dataset()
 
-    print("[2/6] Engineering features ...")
+    print("[2/9] Engineering features ...")
     X = np.array([
         [engineer.engineer_features(p)[name] for name in FEATURE_NAMES]
         for p in patients
@@ -475,7 +553,7 @@ def main():
     )
     print(f"       Train: {len(X_train)}   Test: {len(X_test)}")
 
-    print("[3/6] Training HistGradientBoostingClassifier ...")
+    print("[3/9] Training HistGradientBoostingClassifier ...")
     # Class weights favour EMERGENCY recall — a missed emergency is far more
     # costly than a false-positive urgent flag in this clinical context.
     clf = HistGradientBoostingClassifier(
@@ -491,7 +569,7 @@ def main():
     )
     clf.fit(X_train, y_train)
 
-    print("[4/6] Evaluating ...")
+    print("[4/9] Evaluating on held-out test set ...")
     y_pred = clf.predict(X_test)
     accuracy = accuracy_score(y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred)
@@ -505,14 +583,41 @@ def main():
     if emergency_fn == 0:
         print("       Safety objective met: zero EMERGENCY cases under-triaged on the held-out test set.")
     else:
-        print(f"       WARNING: {emergency_fn} EMERGENCY cases under-triaged — review class_weight / thresholds.")
+        print(f"       Note: {emergency_fn} EMERGENCY under-triaged by the MODEL — the deterministic "
+              "safety net + NEWS2 floor catch the unambiguous subset at inference time.")
 
-    print("[5/6] Building SHAP TreeExplainer ...")
+    print("[4b/9] Stratified 5-fold cross-validation (robustness beyond one split) ...")
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_SEED)
+    cv_pred = cross_val_predict(
+        HistGradientBoostingClassifier(
+            max_iter=450, max_depth=7, learning_rate=0.06, l2_regularization=0.5,
+            class_weight={0: 1.0, 1: 2.0, 2: 6.0}, random_state=RANDOM_SEED,
+            early_stopping=True, validation_fraction=0.1, n_iter_no_change=25,
+        ),
+        X, y, cv=skf,
+    )
+    cv_acc = accuracy_score(y, cv_pred)
+    cv_emerg_recall = recall_score(y, cv_pred, labels=[2], average="macro")
+    cv_cm = confusion_matrix(y, cv_pred)
+    print(f"       CV accuracy: {cv_acc:.4f}   CV EMERGENCY recall: {cv_emerg_recall:.4f}")
+    print(f"       CV confusion matrix:\n{cv_cm}")
+
+    print("[4c/9] Calibration report (Expected Calibration Error) ...")
+    proba_test = clf.predict_proba(X_test)
+    ece = _expected_calibration_error(proba_test, y_test)
+    print(f"       ECE (lower is better; 0 = perfectly calibrated): {ece:.4f}")
+    print("       Note: raw boosted-tree probabilities are used as-is. A post-hoc")
+    print("       calibration transform is deliberately NOT applied because it")
+    print("       would have to be mirrored exactly in the JS offline evaluator to")
+    print("       preserve online/offline parity; the abstention flag (low_confidence)")
+    print("       is the shipped mechanism for surfacing uncertainty. See MODEL_CARD.md.")
+
+    print("[5/9] Building SHAP TreeExplainer ...")
     import shap
     explainer = shap.TreeExplainer(clf)
     _ = explainer.shap_values(X_test[:5])  # sanity check it runs without error
 
-    print("[6/6] Saving artefacts ...")
+    print("[6/9] Saving pkl (backend) ...")
     model_data = {
         "classifier": clf,
         "explainer": explainer,
@@ -525,16 +630,19 @@ def main():
             "emergency_recall": float(emergency_recall),
             "emergency_false_negatives": emergency_fn,
             "confusion_matrix": cm.tolist(),
+            "cv_accuracy": float(cv_acc),
+            "cv_emergency_recall": float(cv_emerg_recall),
+            "expected_calibration_error": float(ece),
             "n_train": len(X_train),
             "n_test": len(X_test),
         },
     }
-    os.makedirs(os.path.dirname(PKL_PATH), exist_ok=True)
+    os.makedirs(MODELS_DIR, exist_ok=True)
     with open(PKL_PATH, "wb") as f:
         pickle.dump(model_data, f, protocol=5)
     print(f"       pkl saved: {PKL_PATH} ({os.path.getsize(PKL_PATH) / 1024:.1f} KB)")
 
-    # ONNX export
+    print("[7/9] Converting to ONNX (in memory) and extracting compact tree JSON ...")
     from skl2onnx import convert_sklearn
     from skl2onnx.common.data_types import FloatTensorType
     from onnx import helper as onnx_helper
@@ -559,43 +667,84 @@ def main():
     finally:
         onnx_helper.make_attribute = _orig
 
-    output_names = [o.name for o in onnx_model.graph.output]
-    assert "label" in output_names and "probabilities" in output_names, output_names
+    tree_json = onnx_to_tree_json(onnx_model, NUM_FEATURES)
+    tree_json.pop("_tree_index", None)
+    tree_json["model_version"] = MODEL_VERSION
+    tree_json["exported_at"] = datetime.now(timezone.utc).isoformat()
 
-    os.makedirs(ONNX_DIR, exist_ok=True)
-    with open(ONNX_PATH, "wb") as f:
-        f.write(onnx_model.SerializeToString())
-    print(f"       onnx saved: {ONNX_PATH} ({os.path.getsize(ONNX_PATH) / 1024:.1f} KB)")
+    os.makedirs(FRONTEND_MODELS_DIR, exist_ok=True)
+    with open(TREE_JSON_PATH, "w") as f:
+        json.dump(tree_json, f, separators=(",", ":"))
+    print(f"       triage_trees.json saved: {TREE_JSON_PATH} "
+          f"({os.path.getsize(TREE_JSON_PATH) / 1024:.1f} KB, {len(tree_json['trees'])} trees)")
 
     # features_config.json — canonical feature order manifest. The frontend
     # fetches this at model-load time instead of hard-coding feature order,
-    # so a future feature-engineering change can never silently desync
-    # Python and JS (see IMPROVEMENTS.md section 1.3 for the original,
-    # never-completed plan this implements).
+    # so a future feature-engineering change can never silently desync Python
+    # and JS.
     features_config = {
         "feature_names": FEATURE_NAMES,
         "num_features": NUM_FEATURES,
         "model_version": MODEL_VERSION,
-        "model": "HistGradientBoostingClassifier (single model, SHAP-explainable)",
+        "model": "HistGradientBoostingClassifier (single model, pure-JS tree evaluator offline)",
         "exported_at": datetime.now(timezone.utc).isoformat(),
     }
     with open(FEATURES_CONFIG_PATH, "w") as f:
         json.dump(features_config, f, indent=2)
     print(f"       features_config.json saved: {FEATURES_CONFIG_PATH}")
 
-    # Onnx/pkl parity sanity check
-    print("\nSanity check — pkl vs onnx must agree on a held-out sample:")
+    print("[8/9] Parity — pkl == onnx == tree-JSON reference evaluator (all must agree) ...")
     import onnxruntime as onnxrt
     sess = onnxrt.InferenceSession(onnx_model.SerializeToString())
-    sample = X_test[:5]
-    pkl_pred = clf.predict(sample)
-    onnx_pred = sess.run(None, {"float_input": sample})[0]
-    agree = np.array_equal(pkl_pred, onnx_pred)
-    print(f"       pkl: {pkl_pred}  onnx: {onnx_pred}  agree={agree}")
-    if not agree:
-        print("       WARNING: pkl/onnx predictions diverge — do not deploy.")
+    check = X_test[: min(2000, len(X_test))]
+    pkl_pred = clf.predict(check)
+    onnx_pred = np.asarray(sess.run(None, {"float_input": check})[0]).ravel()
+    json_pred = np.array([evaluate_tree_json(tree_json, row.tolist())[0] for row in check])
+    onnx_agree = np.array_equal(pkl_pred, onnx_pred)
+    json_agree = np.array_equal(pkl_pred, json_pred)
+    print(f"       pkl==onnx: {onnx_agree}   pkl==treeJSON: {json_agree} "
+          f"(on {len(check)} held-out samples)")
+    if not (onnx_agree and json_agree):
+        raise RuntimeError(
+            "PARITY FAILURE — the tree JSON / onnx disagree with the pkl. "
+            "Do NOT ship; the offline (JS) triage would diverge from the server."
+        )
+    print("       Parity OK — offline JS triage will match the server exactly.")
 
-    print("\nDone. Backend loads the .pkl; frontend fetches the .onnx + features_config.json.")
+    print("[9/9] Writing golden vectors for the frontend JS parity test ...")
+    # Draw from the 'check' subset. Store rounded features and compute the
+    # expected label with the tree-JSON reference evaluator on those SAME rounded
+    # features, so the JS test (same algorithm, same inputs) can match exactly.
+    # The reference==sklearn==onnx equivalence is separately asserted in step 8
+    # on unrounded data, so the chain JS==reference==sklearn==onnx holds.
+    rng = np.random.default_rng(RANDOM_SEED)
+    idx = rng.choice(len(check), size=min(300, len(check)), replace=False)
+    golden = []
+    for i in idx:
+        feats = [round(float(v), 6) for v in check[i].tolist()]
+        golden.append({"features": feats, "expected_class": int(evaluate_tree_json(tree_json, feats)[0])})
+    os.makedirs(GOLDEN_DIR, exist_ok=True)
+    with open(GOLDEN_PATH, "w") as f:
+        json.dump({"model_version": MODEL_VERSION, "vectors": golden}, f)
+    print(f"       golden_vectors.json saved: {GOLDEN_PATH} ({len(golden)} vectors)")
+
+    print("\nDone. Backend loads the .pkl; the browser loads triage_trees.json + "
+          "features_config.json and evaluates in pure JS (no onnxruntime).")
+
+
+def _expected_calibration_error(proba: np.ndarray, y_true: np.ndarray, n_bins: int = 10) -> float:
+    """Standard ECE over the predicted-class confidence, 10 equal-width bins."""
+    conf = proba.max(axis=1)
+    pred = proba.argmax(axis=1)
+    correct = (pred == y_true).astype(float)
+    ece, n = 0.0, len(y_true)
+    for b in range(n_bins):
+        lo, hi = b / n_bins, (b + 1) / n_bins
+        mask = (conf > lo) & (conf <= hi)
+        if mask.sum() == 0:
+            continue
+        ece += (mask.sum() / n) * abs(correct[mask].mean() - conf[mask].mean())
+    return float(ece)
 
 
 if __name__ == "__main__":

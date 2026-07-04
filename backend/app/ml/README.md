@@ -11,14 +11,25 @@ A single `sklearn.ensemble.HistGradientBoostingClassifier`, trained on 45
 engineered clinical features, that predicts one of three triage tiers:
 `ROUTINE`, `URGENT`, `EMERGENCY`. It is:
 
-- **The only classifier in the app.** It is exported to two formats from one
-  training run: `app/ml/models/triage_classifier.pkl` (loaded by the FastAPI
-  backend, bundled with a `shap.TreeExplainer` for real explanations) and
-  `frontend/public/models/triage_classifier.onnx` (loaded by the browser via
-  `onnxruntime-web` for offline/local inference). Because both come from the
-  same training run, online and offline triage can never disagree for the
-  same input — this was not true of the previous two-model architecture
-  (see `backend/CLASSIFIER_CHANGELOG.md`).
+- **The only classifier in the app.** It is exported from one training run to:
+  `app/ml/models/triage_classifier.pkl` (loaded by the FastAPI backend, bundled
+  with a `shap.TreeExplainer` for real explanations) and
+  `frontend/public/models/triage_trees.json` (loaded by the browser and walked
+  by a **dependency-free pure-JS tree evaluator** —
+  `frontend/src/utils/treeEvaluator.js` — for offline/local inference; there is
+  **no onnxruntime-web WASM** anymore). Because both come from the same training
+  run, online and offline triage can never disagree for the same input — a
+  golden-vector parity test (`npm run test:parity`) enforces this. (ONNX is
+  still produced in-memory during training as the intermediate the tree JSON is
+  extracted from, but it is not shipped.) See `backend/CLASSIFIER_CHANGELOG.md`.
+- **Abstention-aware.** Predictions carry a `low_confidence` flag (top-class
+  probability < 0.55 or top-two margin < 0.15) surfaced in the UI as "model
+  uncertain — clinician review recommended." Calibration is measured (ECE) at
+  training time and reported in `MODEL_CARD.md`.
+- **NEWS2 concerning-vital floor.** Beyond the extreme-vital safety net below,
+  `classifier.py::_news2_concerning_vital` guarantees a concerning single vital
+  (NEWS2 single-parameter score ≥ 2, e.g. SpO2 ≤ 92, HR ≥ 120) is never left as
+  ROUTINE — it floors to URGENT. Mirrored in the JS path.
 - **Explainable.** Every non-safety-net prediction is accompanied by a real
   SHAP (`TreeExplainer`) feature attribution for the model's own predicted
   class, translated into a short clinical-language sentence
@@ -102,19 +113,22 @@ Treat model outputs the same way the app's own disclaimer already frames
 LLM briefings: decision support for a qualified health worker, never a
 diagnosis, never a replacement for clinical judgment.
 
-## Current performance (v3.0.0, held-out 5,400-sample test set)
+## Current performance (v3.0.0)
 
-- Overall accuracy: ~99.4%
-- EMERGENCY recall: ~99.3% (12 false negatives out of 1,800 EMERGENCY test
-  cases from the model alone — the deterministic safety net catches the
-  unambiguous subset of these independently of the model)
-- Model size: ~4-5 MB (`.pkl`), <1 MB (`.onnx`)
+Held-out 5,400-sample test set and 5-fold CV on 36,000 samples:
 
-These numbers describe performance against the synthetic label-generation
-function, not against real clinical outcomes — read them as "how well the
-model learned the scoring heuristic," not "how well it will perform on a
-real patient." See `FEATURES_ROADMAP.md` for the plan to validate against
-real-world outcome data once a feedback loop exists.
+- Accuracy: 98.9% held-out / 99.2% CV
+- EMERGENCY recall (model alone): 98.3% held-out / 98.6% CV
+- Expected Calibration Error: 0.0016
+- Model size: ~5.7 MB (`.pkl`, carries the SHAP explainer), ~1 MB
+  (`triage_trees.json`, gzips far smaller)
+
+The model-alone EMERGENCY false negatives are borderline URGENT/EMERGENCY cases;
+the deterministic safety net + NEWS2 floor escalate the unambiguous critical
+subset regardless of the model, and the `low_confidence` flag + mandatory human
+review cover the ambiguous ones. **These numbers are against the synthetic label
+generator, not real clinical outcomes.** Full metrics, confusion matrix, and the
+honest limitations statement live in `MODEL_CARD.md`.
 
 ## Regenerating the model
 
@@ -125,9 +139,11 @@ pip install -r requirements.txt -r requirements-train.txt
 python scripts/train_classifier.py
 ```
 
-Always commit the regenerated `.pkl`, `.onnx`, and `features_config.json`
-together — they must come from the same run. Never hand-edit or partially
-regenerate one of the three.
+Always commit the regenerated `.pkl`, `triage_trees.json`, `features_config.json`,
+and `golden_vectors.json` together — they must come from the same run. Never
+hand-edit or partially regenerate them. After a `clinical_features.py` change,
+also mirror the change in `frontend/src/utils/triageClassifier.js` and re-run
+`npm run test:parity` (it will fail if the JS offline path desyncs).
 
 ## Why scikit-learn is pinned exactly (not `>=`)
 
