@@ -9,14 +9,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from slowapi import Limiter
 
-from app.core.auth import require_role
+from app.core.auth import require_role, verify_sub_for_rate_limit
+from app.core.config import settings
 from app.core.database import get_supabase_for_user
 from app.models.schemas import IntakeForm
 from app.ml.classifier import run_triage
 from app.services.llm import generate_briefing
-
-import base64
-import json as _json
 
 logger = logging.getLogger("vitalnet")
 
@@ -25,22 +23,26 @@ router = APIRouter()
 
 def _get_user_id(request: Request) -> str:
     """
-    Extract the Supabase user ID (sub) from the Bearer JWT for rate limiting.
-    Falls back to client IP if the token is absent or malformed —
-    this prevents unauthenticated callers from bypassing the limiter.
+    Rate-limit key: the caller's VERIFIED Supabase user id (sub), so a clinic's
+    workers sharing one NATed IP each get their own budget. Uses signature-
+    verified extraction — an attacker cannot forge a token carrying a victim's
+    sub to burn the victim's budget. Falls back to client IP when the token is
+    absent or its signature can't be verified locally (e.g. asymmetric-key
+    projects), which also stops unauthenticated callers from bypassing the limiter.
     """
-    try:
-        auth_header = request.headers.get("authorization", "")
-        token = auth_header.split(" ", 1)[-1]
-        payload_b64 = token.split(".")[1]
-        payload_b64 += "=" * (-len(payload_b64) % 4)
-        payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
-        return payload.get("sub") or request.client.host
-    except Exception:
-        return request.client.host  # fallback: IP-based limiting for bad tokens
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header.split(" ", 1)[-1] if auth_header else ""
+    sub = verify_sub_for_rate_limit(token) if token else None
+    return sub or (request.client.host if request.client else "unknown")
 
 
-limiter = Limiter(key_func=_get_user_id)
+# storage_uri empty -> slowapi's default in-memory store. Set
+# RATE_LIMIT_STORAGE_URI (e.g. redis://...) in multi-instance production so the
+# limit is shared across workers/instances rather than per-process.
+_limiter_kwargs = {"key_func": _get_user_id}
+if settings.rate_limit_storage_uri:
+    _limiter_kwargs["storage_uri"] = settings.rate_limit_storage_uri
+limiter = Limiter(**_limiter_kwargs)
 
 
 # ── Submit Case ────────────────────────────────────────────────────────────────

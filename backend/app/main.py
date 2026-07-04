@@ -52,7 +52,26 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
-# ── 5. CORS — restricted to known origins loaded from settings ────────────────
+# ── 5. Security headers — applied to every response ───────────────────────────
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """
+    Standard hardening headers. Cache-Control: no-store is deliberate — API
+    responses carry patient data and must never be cached by intermediaries or
+    the browser. HSTS is opt-in via settings (off for local HTTP dev).
+    """
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    if settings.security_headers_hsts:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+# ── 6. CORS — restricted to known origins loaded from settings ────────────────
 
 _allowed_origins = [
     "http://localhost:5173",
@@ -67,19 +86,19 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
-# ── 6. Routers ────────────────────────────────────────────────────────────────
+# ── 7. Routers ────────────────────────────────────────────────────────────────
 
 app.include_router(cases.router)
 app.include_router(admin_routes.router)
 app.include_router(analytics_routes.router)
 
 
-# ── 7. Global exception handlers — emit structured JSON, never raw tracebacks ─
+# ── 8. Global exception handlers — emit structured JSON, never raw tracebacks ─
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -90,16 +109,30 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+def _scrub_validation_errors(errors: list) -> list:
+    """
+    Pydantic v2 error dicts include an 'input' field carrying the value that
+    failed validation — for this API that value is patient PII (names, vitals).
+    Strip 'input' (and the noisy 'url') so validation errors can be logged and
+    returned without leaking patient data into logs or error responses.
+    """
+    scrubbed = []
+    for err in errors:
+        scrubbed.append({k: v for k, v in err.items() if k not in ("input", "url", "ctx")})
+    return scrubbed
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    safe_errors = _scrub_validation_errors(exc.errors())
     logger.warning(
         "Validation error",
-        extra={"path": str(request.url.path), "errors": exc.errors()},
+        extra={"path": str(request.url.path), "errors": safe_errors},
     )
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
 
 
-# ── 8. Health Check ───────────────────────────────────────────────────────────
+# ── 9. Health Check ───────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 @cases.limiter.limit("120/minute")
