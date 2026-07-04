@@ -16,11 +16,20 @@ jobs:
         run: |
           cd backend
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio httpx
-      - name: Run Pytest
+          pip install pytest pytest-asyncio httpx ruff
+      - name: Lint (ruff)
         run: |
           cd backend
-          python -m pytest tests/ -v
+          ruff check .
+      - name: Run Pytest
+        # test_e2e.py is an integration test needing a live server + real
+        # Supabase project — excluded from the unit CI. The unit/safety/authz
+        # tests (incl. the classifier safety guarantees and admin-authz
+        # regression) run here; tests/conftest.py provides fallback fake creds
+        # so they pass even without secrets configured.
+        run: |
+          cd backend
+          python -m pytest tests/ -v --ignore=tests/test_e2e.py
         env:
           SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
@@ -36,10 +45,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Install and Build
+      - name: Install
         run: |
           cd frontend
           npm ci
+      - name: Offline-model parity (JS == server model)
+        # Guards that the pure-JS offline tree evaluator produces the SAME
+        # triage as the server model on the committed golden vectors. If this
+        # fails, offline triage would diverge from online — block the merge.
+        run: |
+          cd frontend
+          npm run test:parity
+      - name: Build
+        run: |
+          cd frontend
           npm run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
