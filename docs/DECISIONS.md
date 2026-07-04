@@ -1,0 +1,271 @@
+# VitalNet — Architecture Decisions
+
+Why key parts of this system are built the way they are, consolidated in
+one place. `CODEBASE_MAP.md` tells you *what* exists and *where*; this file
+tells you *why*, including alternatives that were considered and rejected —
+so a future change doesn't accidentally re-introduce a problem that was
+already solved and moved past.
+
+Add a new entry here whenever you make a non-obvious architectural choice,
+especially one you expect someone to question or "simplify" later.
+
+---
+
+### 1. Hybrid JWT verification (local + network fallback), not pure network verification
+
+**Context**: Supabase Auth issues JWTs. The naive approach — call
+`supabase.auth.get_user(token)` on every request — makes a network
+round-trip to Supabase on the hot path of *every authenticated request*.
+
+**Decision**: `app/core/auth.py::get_current_user()` verifies the JWT
+signature/`exp`/`aud` **locally** (HS256 via `SUPABASE_JWT_SECRET`) first —
+no network call. It falls back to the network `get_user()` call only when
+local verification can't apply (asymmetric-key/ES256 Supabase projects).
+Role/`facility_id`/`is_active` are then resolved fresh from the `profiles`
+table on every request, but that result is cached per-user for
+`revocation_recheck_seconds` (default 300s) rather than re-queried every
+single time.
+
+**Consequences**: removes a full network round-trip from the hot path of
+every request and removes Supabase Auth as a single point of failure for
+API availability. The tradeoff: a deactivated user or role change takes
+effect within the cache TTL window, not instantly — judged an acceptable
+bound given the window is short and configurable, versus the alternative of
+paying the network cost on every request forever.
+
+### 2. Offline triage: pure-JS tree evaluator, not onnxruntime-web
+
+**Context**: The trained model must run client-side for offline triage.
+The original approach used `onnxruntime-web` — a ~12 MB WASM runtime — to
+run the exported ONNX model in-browser.
+
+**Decision**: Export the trained tree ensemble to a compact JSON
+(`triage_trees.json`, ~1 MB) and walk it with a ~120-line dependency-free JS
+evaluator (`treeEvaluator.js`) instead. A full comparative analysis (five
+other options, including model-specific WASM and m2cgen) is preserved in
+`FEATURES_ROADMAP.md`'s history; the short version: **the runtime choice
+does not change model accuracy** — it's the same trained model either way,
+verified identical via `npm run test:parity`'s golden-vector check. The
+choice is purely about footprint, cold-start time, and robustness on
+2 GB-class devices.
+
+**Consequences**: ~100x smaller precached payload, no WASM-compile cold
+start, cannot OOM a WASM runtime. Cost: a hand-ported evaluator instead of
+a standard runtime, mitigated entirely by the CI-enforced parity tests
+(`npm run test:parity` — tree-level; `npm run test:feature-parity` —
+feature-engineering level). **Any change to `clinical_features.py` or
+`classifier.py`'s tree logic must be mirrored in `triageClassifier.js`/
+`treeEvaluator.js`/`clinicalRules.js` in the same change**, or these tests
+fail CI — that failure is the system working as designed, not a false
+alarm.
+
+### 3. Layered triage: trained model + deterministic safety net + NEWS2 floor, not model-only
+
+**Context**: A single ML model's raw `predict_proba` output is what most
+triage-ML demos ship. But a boosted-tree model can, on an out-of-distribution
+input, under-triage an unambiguously critical presentation (e.g. SpO2 60%
+that happens to sit in a sparse region of training data).
+
+**Decision**: Three independent layers, in order: (1) `_safety_net_check` —
+hardcoded thresholds on extreme vitals/critical symptoms force EMERGENCY
+regardless of what the model would say; (2) the trained model's own
+prediction, if the safety net didn't already trigger; (3)
+`_news2_concerning_vital` floor — never return ROUTINE if any single NEWS2
+parameter scores ≥2. All three are mirrored exactly in
+`frontend/src/utils/clinicalRules.js` for the offline path.
+
+**Consequences**: this is *why* the offline engine can honestly claim
+"never fails to escalate an unambiguous emergency, even for inputs the
+tree ensemble never saw in training" — the safety net doesn't need the
+model to have learned anything, it's a plain rule. Don't remove or weaken
+any of the three layers "to simplify" — each is an independent backstop
+against a different failure mode of the layer above it.
+
+### 4. A fresh Supabase client per request, not one shared client with a swapped auth token
+
+**Context**: It would be tempting to construct one `supabase-py` client at
+module load and call `client.postgrest.auth(token)` per request to "save"
+object construction cost.
+
+**Decision**: `get_supabase_for_user()` constructs a new client per
+request. This was explicitly investigated and rejected as an optimization
+during a mid-project reconciliation: a shared client's auth token is
+mutable *state* — under concurrent requests (which FastAPI handles
+routinely), one request's token-swap can race with another's in-flight
+query, leaking one user's RLS-scoped data to a different user's response.
+
+**Consequences**: a small, deliberate object-construction cost per request
+in exchange for correctness under concurrency. Do not "optimize" this into
+a shared/pooled client without re-solving the race condition first.
+
+### 5. CSRF token is a shared constant, not a secret — the protection is the preflight
+
+**Context**: `main.py::csrf_and_device_guard` requires an `X-CSRF-Token`
+header matching `settings.csrf_token` on every mutating `/api/*` request.
+This looks like a weak secret (it's a fixed, non-random string in
+`.env.example`) if you assume the security model is "attacker can't guess
+the value."
+
+**Decision**: the actual security model is different: a browser only sends
+a **custom header** after a successful CORS preflight, and the preflight
+only succeeds from an origin in `allow_origins`. A cross-site form/fetch
+from an unlisted origin cannot attach `X-CSRF-Token` at all, regardless of
+whether the value is secret. Bearer-token auth already stops a naive CSRF
+attack; this header is defense-in-depth against a *misconfigured* CORS
+policy, not a secret to protect.
+
+**Consequences**: don't "fix" this by making the token cryptographically
+random per-session — that solves a threat model this design doesn't
+target, and would require plumbing token issuance/rotation for no real
+security gain. `X-Device-Id` is unrelated: it's a stable per-browser id for
+future abuse/anomaly detection, not a security boundary by itself either.
+
+### 6. `client_id` upsert as the offline-queue idempotency key
+
+**Context**: A submission queued in IndexedDB while offline may be retried
+(app restart, sync-loop retry after a partial failure). Retrying a plain
+`INSERT` would create duplicate case records.
+
+**Decision**: every `IntakeForm` carries a client-generated `client_id`
+(UUID). `submit_case` upserts on `client_id` with
+`ignore_duplicates=True` — a retried submission with the same `client_id`
+is silently absorbed rather than duplicated, and the original response is
+looked up and returned.
+
+**Consequences**: this is the mechanism that makes the entire offline-first
+sync design safe to retry blindly. Never remove `client_id` uniqueness or
+change the upsert conflict target without re-verifying retry-safety.
+
+### 7. Service-role admin client: `require_role('admin')` is the *only* boundary
+
+**Context**: `app/api/routes/admin_routes.py` uses `supabase_admin` (the
+service-role client), which bypasses Row Level Security entirely — RLS
+policies on `profiles`/`facilities`/`case_records` simply don't apply to
+these queries.
+
+**Decision**: accepted as intentional (admin operations are inherently
+global/cross-tenant and RLS is user-scoped by design), but this means the
+`require_role('admin')` dependency on every route in that file is **the
+entire access-control boundary** — there is no RLS backstop if one is ever
+missing from a new route. `tests/test_admin_authz.py` asserts this
+mechanically (walks every route in `admin_routes.py`, fails CI if any
+lacks `require_role('admin')` exactly).
+
+**Consequences**: any new route added to `admin_routes.py` **must** carry
+`require_role('admin')` — there's no safety net if it doesn't, other than
+the test. Don't add a new admin route in a hurry without it.
+
+### 8. Rate-limit key: the cryptographically verified JWT `sub`, not client IP
+
+**Context**: The naive `slowapi` setup keys rate limits by client IP —
+fails badly behind NAT (a whole clinic sharing one egress IP shares one
+rate budget) and is spoofable in the other direction (forge a token
+claiming to be another user's `sub` to burn their budget, if the `sub`
+isn't verified).
+
+**Decision**: `cases.py::_get_user_id` extracts `sub` via
+`verify_sub_for_rate_limit()` — a **signature-verified** extraction, not a
+naive base64-decode of the JWT payload. Falls back to client IP only when
+no verifiable token is present (unauthenticated requests, or a token whose
+signature can't be verified locally).
+
+**Consequences**: each authenticated user gets their own budget regardless
+of shared IP, and an attacker cannot forge a token to throttle a victim,
+since a forged token fails signature verification and falls back to being
+rate-limited by the attacker's own IP instead.
+
+### 9. Three git branches (`main`/`dev`/`test`), `dev` as the actively-developed line
+
+**Context**: the repo previously had many stray feature/fix/integration
+branches accumulating from iterative work.
+
+**Decision**: exactly three long-lived branches. `dev` is where active
+development happens (direct pushes allowed, PRs from short-lived feature
+branches merge here via squash — GitHub auto-deletes the head branch on
+merge). `main` is periodically synced to match `dev`'s content once it's in
+a verified-good state (also PR-only, squash-only — see the branch
+protection note below); it is *not* meant to be a second, independently
+evolving line. `test` is a pre-production staging branch.
+`.github/dependabot.yml` targets `dev`.
+
+**Consequences**: **don't develop directly on `main`.** When `main` needs
+to catch up to `dev` (e.g. because GitHub's Dependabot/security scanning
+watches whichever branch is configured as the repo default, which may
+still be `main`), merge `dev` into `main` — resolve the merge in favor of
+`dev`'s content — rather than cherry-picking or re-doing work independently
+on `main`. Both `main` and `dev` have branch protection that rejects plain
+merge commits via the GitHub UI/API (`squash`/`rebase` only) — a local
+`git merge` + push-to-a-branch + PR + squash-merge is the working pattern
+for reconciling them; a direct `git push origin main` of a merge commit
+will be rejected with `GH006`.
+
+### 10. i18n: infrastructure built, translations deliberately left as English placeholders
+
+**Context**: FEATURES_ROADMAP §2.1 calls for Hindi/Tamil translations of
+the intake form. An AI agent or a developer without clinical-translation
+expertise machine-translating symptom/complaint labels is a patient-safety
+risk, not a cosmetic one — a mistranslated symptom option changes what a
+worker believes they're recording.
+
+**Decision**: `react-i18next` is fully wired (language switcher, persisted
+preference, `document.lang` updates, `IntakeForm.jsx` fully using
+translation keys) but `hi.json`/`ta.json` are byte-for-byte copies of
+`en.json` — see `frontend/src/locales/README.md`. Only a clinician review
+pass should populate real translations.
+
+**Consequences**: selecting Hindi/Tamil today changes `document.lang` and
+persists the preference but every string is still English — this is
+intentional, not a bug. Don't "finish" this by machine-translating the
+locale files; that's the exact risk this decision avoids.
+
+### 11. Tier 3 (SMS fallback, photo attachments): scaffolding only, no live endpoints
+
+**Context**: both features need a product/vendor decision an engineering
+pass alone can't make — which SMS aggregator (determines the actual
+webhook payload shape and signature-verification scheme), and a storage
+backend + retention/consent policy for patient photographs (a more
+sensitive data category than structured vitals).
+
+**Decision**: build only the vendor-independent parts — `app/services/
+sms.py`'s gateway interface + strict inbound-format parser (tested), and
+the `case_attachments` schema + `imageCompression.js` client utility. No
+live `/api/sms/inbound` or upload endpoint exists. Wiring either up is a
+small, mechanical follow-on once the blocking decision is made — don't
+guess at a vendor's API shape or a consent policy to make the feature
+"complete" prematurely.
+
+### 12. Golden-vector ML parity tests freeze the clock
+
+**Context**: two engineered features (`time_of_day_risk`, `seasonal_risk`)
+are computed from `datetime.now()`/`new Date()` — a real, intentional
+clinical signal (off-hours short-staffing, seasonal disease patterns), not
+a bug. This makes a frozen fixture file inherently unstable: the fixture
+records a value computed at generation time, but the parity tests
+recompute live at whatever moment they happen to run.
+
+**Decision**: `scripts/export_golden_vectors.py`, `tests/
+test_feature_parity.py`, and `frontend/tests/featureParity.test.mjs` all
+pin the same `FROZEN_REFERENCE_TIME` (noon, July 4) via a monkeypatched
+`datetime`/`Date`, so recomputation is deterministic regardless of real
+wall-clock time.
+
+**Consequences**: this bug was real and did fire mid-development (both
+Python and JS parity tests failed identically — confirming they still
+agreed with *each other*, just not with a stale fixture). If you add a new
+time-dependent engineered feature, you must extend this freeze to cover it
+or the same flakiness returns.
+
+### 13. CodeQL suppression uses `codeql[query-id]`, not the legacy `lgtm[query-id]`
+
+**Context**: two intentional-and-reviewed findings (the PHI audit-trail
+logger; synthetic-fixture prints in a manual test script) were originally
+annotated with lgtm.com's legacy suppression comment syntax.
+
+**Decision**: GitHub's current default CodeQL setup does not honor
+`lgtm[query-id]` — only `codeql[query-id]`, placed on the exact flagged
+line (not just somewhere nearby). Both occurrences were fixed to the
+correct syntax.
+
+**Consequences**: if a future PR shows a CodeQL alert on a line you believe
+is already-reviewed/accepted, check the suppression comment's syntax and
+exact placement before assuming the finding is new.
