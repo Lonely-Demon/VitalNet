@@ -158,6 +158,34 @@ clamped-to-40 age value, so a real newborn (age 0) was silently scored as a
 40-year-old adult in the offline path only — CI now fails immediately if this
 class of bug recurs.
 
+## Fairness audit and drift monitoring (operator-run, not scheduled)
+
+Two diagnostic scripts, neither wired into CI or a schedule — each prints a
+report for a human to read; neither takes automatic action.
+
+```bash
+# Subgroup performance (age band × sex) on a fresh synthetic evaluation set,
+# run through the FULL pipeline (safety net + model + NEWS2 floor):
+PYTHONPATH=. python scripts/fairness_audit.py [--n 6000] [--flag-gap 0.10]
+
+# Feature-distribution drift (Population Stability Index) between the
+# synthetic training distribution and live case_records — needs a real
+# Supabase project configured (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY):
+PYTHONPATH=. python scripts/drift_monitor.py [--reference-n 4000] [--live-n 500] [--since-days 90]
+```
+
+Both are **synthetic-data diagnostics**, not real-world bias/drift audits —
+VitalNet has no real patient data to check either against (see
+`MODEL_CARD.md`'s training-data caveat). `fairness_audit.py` tells you
+whether the model behaves consistently across the synthetic generator's
+age/sex distribution (a large gap would mean the model learned some
+age/sex-correlated shortcut, worth understanding before trusting it on any
+subgroup). `drift_monitor.py` tells you whether the population VitalNet is
+*actually seeing* has drifted from what the model was trained on. Re-run
+both whenever the model is retrained
+(`scripts/retrain_from_outcomes.py`) or before a real deployment — see
+`docs/CLINICAL_GOVERNANCE.md`'s model lifecycle governance section.
+
 ## Why scikit-learn is pinned exactly (not `>=`)
 
 A trained `.pkl` is only guaranteed to unpickle correctly with the exact

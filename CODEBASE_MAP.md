@@ -322,13 +322,22 @@ backend/
 │   │                                 fixed reference (see docs/DECISIONS.md §12) so the
 │   │                                 two time-dependent engineered features don't make
 │   │                                 the fixture flaky.
-│   └── retrain_from_outcomes.py      Retraining pipeline reading real case_outcomes +
-│                                     overridden_triage labels (FEATURES_ROADMAP §1.3),
-│                                     blended with a shrinking proportion of synthetic
-│                                     data. Reports an agreement-rate delta vs. the
-│                                     production model. NEVER touches the production
-│                                     .pkl or auto-deploys — saves a candidate file only;
-│                                     promotion is a manual, human-gated step.
+│   ├── retrain_from_outcomes.py      Retraining pipeline reading real case_outcomes +
+│   │                                 overridden_triage labels (FEATURES_ROADMAP §1.3),
+│   │                                 blended with a shrinking proportion of synthetic
+│   │                                 data. Reports an agreement-rate delta vs. the
+│   │                                 production model. NEVER touches the production
+│   │                                 .pkl or auto-deploys — saves a candidate file only;
+│   │                                 promotion is a manual, human-gated step.
+│   ├── fairness_audit.py             Subgroup (age band × sex) accuracy/EMERGENCY-recall
+│   │                                 report on a fresh synthetic eval set, run through
+│   │                                 the FULL pipeline (safety net + model + NEWS2
+│   │                                 floor). Operator-run, not scheduled/CI — see
+│   │                                 app/ml/README.md.
+│   └── drift_monitor.py              Population Stability Index per engineered feature,
+│                                     live case_records vs. the synthetic training
+│                                     distribution. Needs a real Supabase project.
+│                                     Operator-run, not scheduled/CI.
 ├── prompts/clinical_system_prompt.txt
 │                                     System prompt for the LLM briefing generator.
 ├── tests/

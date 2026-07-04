@@ -123,6 +123,12 @@ preserve parity). The abstention flag is the shipped uncertainty mechanism.
   floor escalations state their deterministic reason.
 - **No PII in logs:** validation errors are scrubbed of input values
   (`app/main.py`).
+- **Fairness and drift monitoring:** `scripts/fairness_audit.py` (subgroup
+  accuracy/EMERGENCY-recall by age band and sex) and `scripts/drift_monitor.py`
+  (feature-distribution drift, live data vs. training distribution) are
+  operator-run diagnostics — see `README.md`'s "Fairness audit and drift
+  monitoring" section. Both are synthetic-data checks, same caveat as the
+  metrics above; neither is a substitute for real-world validation.
 
 ## Regenerating / changing the model
 
