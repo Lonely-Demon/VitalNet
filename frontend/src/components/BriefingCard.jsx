@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { reviewCase, overrideTriage, recordCaseOutcome } from '../lib/api'
+import { reviewCase, overrideTriage, recordCaseOutcome, listActiveFacilities, createReferral } from '../lib/api'
 import TriageBadge from './TriageBadge'
 
 const TIERS = ['ROUTINE', 'URGENT', 'EMERGENCY']
@@ -31,6 +31,15 @@ export default function BriefingCard({ caseData, onReviewed }) {
   const [outcomeNotes, setOutcomeNotes] = useState('')
   const [recordingOutcome, setRecordingOutcome] = useState(false)
   const [outcomeRecorded, setOutcomeRecorded] = useState(false)
+
+  const [showReferral, setShowReferral] = useState(false)
+  const [facilities, setFacilities] = useState(null)   // null = not yet loaded
+  const [facilitiesError, setFacilitiesError] = useState(null)
+  const [referralFacilityId, setReferralFacilityId] = useState('')
+  const [referralReason, setReferralReason] = useState('')
+  const [referralUrgency, setReferralUrgency] = useState(overrideState.triage || caseData.triage_level)
+  const [referring, setReferring] = useState(false)
+  const [referred, setReferred] = useState(null)   // { facilityName } once created
 
   // briefing is already a JSONB object from Supabase — no JSON.parse needed
   const b = caseData.briefing
@@ -76,6 +85,39 @@ export default function BriefingCard({ caseData, onReviewed }) {
       console.error("Recording outcome failed", e)
     } finally {
       setRecordingOutcome(false)
+    }
+  }
+
+  const handleOpenReferral = async () => {
+    setShowReferral(true)
+    if (facilities === null) {
+      try {
+        const data = await listActiveFacilities()
+        setFacilities(data)
+        if (data.length > 0) setReferralFacilityId(data[0].id)
+      } catch (e) {
+        setFacilitiesError(e.message)
+      }
+    }
+  }
+
+  const handleCreateReferral = async () => {
+    if (!referralFacilityId || !referralReason.trim()) return
+    setReferring(true)
+    try {
+      await createReferral(caseData.id, {
+        receiving_facility_id: referralFacilityId,
+        reason: referralReason.trim(),
+        urgency: referralUrgency,
+      })
+      const target = facilities?.find((f) => f.id === referralFacilityId)
+      setReferred({ facilityName: target?.name || 'the receiving facility' })
+      setShowReferral(false)
+    } catch (e) {
+      console.error("Referral failed", e)
+      setFacilitiesError(e.message)
+    } finally {
+      setReferring(false)
     }
   }
 
@@ -311,6 +353,70 @@ export default function BriefingCard({ caseData, onReviewed }) {
           )}
           {outcomeRecorded && (
             <p className="text-xs text-forest font-medium">✓ Outcome recorded</p>
+          )}
+
+          {/* Inter-facility referral (FEATURES_ROADMAP §2.3) */}
+          {referred ? (
+            <p className="text-xs text-forest font-medium">✓ Referred to {referred.facilityName}</p>
+          ) : (
+            showReferral ? (
+              <div className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
+                <label className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
+                  Refer to another facility
+                </label>
+                {facilitiesError && <p className="text-xs text-emergency">{facilitiesError}</p>}
+                {facilities === null ? (
+                  <p className="text-xs text-text3">Loading facilities…</p>
+                ) : (
+                  <select
+                    value={referralFacilityId}
+                    onChange={(e) => setReferralFacilityId(e.target.value)}
+                    className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
+                  >
+                    {facilities.map((f) => (
+                      <option key={f.id} value={f.id}>{f.name}{f.district ? ` — ${f.district}` : ''}</option>
+                    ))}
+                  </select>
+                )}
+                <select
+                  value={referralUrgency}
+                  onChange={(e) => setReferralUrgency(e.target.value)}
+                  className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
+                >
+                  {TIERS.map(t => <option key={t} value={t}>Urgency: {t}</option>)}
+                </select>
+                <textarea
+                  value={referralReason}
+                  onChange={(e) => setReferralReason(e.target.value)}
+                  placeholder="Reason for referral"
+                  rows={2}
+                  maxLength={1000}
+                  className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleCreateReferral}
+                    disabled={referring || !referralFacilityId || !referralReason.trim()}
+                    className="flex-1 bg-forest text-white py-2 rounded-pill text-sm font-medium disabled:opacity-50 cursor-pointer"
+                  >
+                    {referring ? 'Referring…' : 'Confirm referral'}
+                  </button>
+                  <button
+                    onClick={() => setShowReferral(false)}
+                    className="px-4 py-2 text-sm text-text2 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={handleOpenReferral}
+                className="text-xs text-text3 hover:text-forest underline cursor-pointer"
+              >
+                Refer to another facility
+              </button>
+            )
           )}
 
           {/* Actions */}

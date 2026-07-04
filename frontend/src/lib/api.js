@@ -29,3 +29,4 @@ export {
   adminGetAuditLog,
 } from '@/api/admin'
 export { getAnalyticsSummary, getEmergencyRate, getResponseTimes, getMlAgreement, exportCases } from '@/api/analytics'
+export { listActiveFacilities, createReferral, listReferrals, updateReferralStatus } from '@/api/referrals'
