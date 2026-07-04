@@ -1,47 +1,81 @@
 // frontend/src/utils/triageClassifier.js
 //
-// Client-side ONNX triage inference using the enhanced 45-feature model.
-// Ports backend/clinical_features.py ClinicalFeatureEngineer to JavaScript.
+// Client-side ONNX triage inference using the ClinicalFeatureEngineer's
+// 45-feature pipeline. Ports backend/app/ml/clinical_features.py to JS.
 //
-import * as ort from 'onnxruntime-web'
-
-// Disable multi-threading — requires COOP/COEP headers that Vite dev server
-// and many production hosts don't set.  Single-threaded WASM is fast enough
-// for a 45-feature model inference (<10 ms).
-ort.env.wasm.numThreads = 1
+// The onnxruntime-web JS glue (~250 KB) is loaded via a DYNAMIC import
+// inside loadModel(), not a static top-level import. A static import would
+// bundle it into the main chunk that every user downloads and parses on
+// first paint — including doctors, admins, and online ASHA workers who may
+// never trigger offline/local triage in a session. Dynamic import defers
+// that cost to the moment it's actually needed (device goes offline, or
+// the backend becomes unreachable), which matters a lot for initial page
+// load speed on weak/old hardware.
+//
+// Imports the WASM-only build ('onnxruntime-web/wasm'), not the default
+// 'onnxruntime-web' entry point. The default entry bundles the WebGPU (JSEP)
+// execution provider, which roughly doubles the shipped WASM binary
+// (~25 MB vs ~12 MB) — pure dead weight here since executionProviders is
+// hard-coded to ['wasm'] below and the app never uses WebGPU. This matters
+// a lot for rural/low-bandwidth deployments where the PWA install and every
+// service-worker cache refresh must pull this binary over a slow link.
 
 const MODEL_PATH = '/models/triage_classifier.onnx'
+const FEATURES_CONFIG_PATH = '/models/features_config.json'
 const TRIAGE_LABELS = ['ROUTINE', 'URGENT', 'EMERGENCY']
-const NUM_FEATURES = 45
+const FALLBACK_NUM_FEATURES = 45 // used only for the pre-warmup dummy tensor shape
 
 // ---------------------------------------------------------------------------
 // Session management
 // ---------------------------------------------------------------------------
 
+let _ort = null            // the dynamically-imported onnxruntime-web module
 let _session = null
+let _featureNames = null   // canonical feature order, fetched from features_config.json
 let _loadPromise = null
 
 /**
- * Load and cache the ONNX session.
- * Called once on ASHA panel mount — not on every submission.
- * Retries on failure (resets _loadPromise so next call retries).
+ * Load and cache the onnxruntime-web module, the ONNX session, and the
+ * canonical feature-order manifest. Called once on ASHA panel mount — not
+ * on every submission. Retries on failure (resets _loadPromise so the next
+ * call retries).
+ *
+ * Fetching feature order from features_config.json (rather than
+ * hard-coding it here) means a future change to the Python
+ * ClinicalFeatureEngineer feature set can never silently desync this file
+ * from the trained model — the frontend always uses whatever order the
+ * model was actually trained and exported with.
  */
 export async function loadModel() {
-  if (_session) return _session
+  if (_session && _featureNames) return _session
   if (_loadPromise) return _loadPromise
 
-  _loadPromise = ort.InferenceSession.create(MODEL_PATH, {
-    executionProviders: ['wasm'],
-    graphOptimizationLevel: 'all',
-  }).then((session) => {
-    _session = session
-    _loadPromise = null
-    console.log('[VitalNet] ONNX model loaded (enhanced 45-feature)')
-    return session
+  _loadPromise = Promise.all([
+    import('onnxruntime-web/wasm'),
+    fetch(FEATURES_CONFIG_PATH).then((r) => {
+      if (!r.ok) throw new Error(`features_config.json fetch failed: ${r.status}`)
+      return r.json()
+    }),
+  ]).then(([ort, config]) => {
+    _ort = ort
+    // Disable multi-threading — requires COOP/COEP headers that Vite dev
+    // server and many production hosts don't set. Single-threaded WASM is
+    // fast enough for a 45-feature model inference (<10 ms).
+    _ort.env.wasm.numThreads = 1
+    return _ort.InferenceSession.create(MODEL_PATH, {
+      executionProviders: ['wasm'],
+      graphOptimizationLevel: 'all',
+    }).then((session) => {
+      _session = session
+      _featureNames = config.feature_names
+      _loadPromise = null
+      console.log(`[VitalNet] ONNX model loaded (${config.num_features}-feature, v${config.model_version})`)
+      return session
+    })
   }).catch((err) => {
     // Reset so next call retries instead of returning the failed promise
     _loadPromise = null
-    console.error('[VitalNet] ONNX model load failed:', err)
+    console.error('[VitalNet] ONNX model or feature config load failed:', err)
     throw err
   })
 
@@ -58,8 +92,9 @@ export async function warmupModel() {
   if (_warmupPromise) return _warmupPromise
   _warmupPromise = (async () => {
     const session = await loadModel()
-    const dummyInput = new Float32Array(NUM_FEATURES).fill(0)
-    const tensor = new ort.Tensor('float32', dummyInput, [1, NUM_FEATURES])
+    const n = _featureNames?.length ?? FALLBACK_NUM_FEATURES
+    const dummyInput = new Float32Array(n).fill(0)
+    const tensor = new _ort.Tensor('float32', dummyInput, [1, n])
     await session.run({ float_input: tensor })
     console.log('[VitalNet] ONNX warmup complete — ready for offline triage')
   })()
@@ -121,10 +156,13 @@ function containsAny(text, termSet) {
 }
 
 /**
- * Build the full 45-feature Float32Array from IntakeForm data.
- * Feature order MUST match the Python ClinicalFeatureEngineer exactly.
+ * Compute the clinical feature map from IntakeForm data.
+ * Key names MUST match the Python ClinicalFeatureEngineer output keys
+ * exactly — the assembly ORDER is handled separately by
+ * orderFeatureVector() using features_config.json, so key order in the
+ * returned object here does not need to match the model's input order.
  */
-function buildFeatureVector(formData) {
+function buildFeatureMap(formData) {
   const symptoms = formData.symptoms || []
   const age = formData.patient_age ?? -1
   const sex = formData.patient_sex === 'male' ? 1 : 0
@@ -338,26 +376,47 @@ function buildFeatureVector(formData) {
   if (ruralTerms.some(t => location.includes(t))) healthcareAccessibility = 0.5
   else if (urbanTerms.some(t => location.includes(t))) healthcareAccessibility = 1.0
 
-  // --- Assemble the 45-feature vector in exact order ---
-  const features = [
-    // Basic (14)
-    age, sex, bpSys, bpDia, spo2, hr, temp, symptomCount,
-    chestPain, breathlessness, alteredConsciousness, severeBleeding, seizure, highFever,
-    // Vital derived (12)
-    pulsePressure, meanArterialPressure, shockIndex, spo2AgeRatio, tempDeviation,
-    cardiacRisk, respDistress, hemodynamic, sepsisRisk,
-    pediatricAdj, geriatricAdj, pregnancyAdj,
-    // Symptom interaction (8)
-    cardiopulmonaryCluster, neurologicalCluster, hemorrhagicCluster, infectiousCluster,
-    symptomSeverity, durationRisk, complaintRisk, comorbidityMult,
-    // Age-specific (6)
-    pediatricFeverRisk, elderlyFallRisk, adultCardiacRisk, obstetricRisk,
-    traumaSeverity, mentalHealthCrisis,
-    // Contextual (5)
-    timeOfDayRisk, seasonalRisk, geographicRisk, epidemicAlertLevel, healthcareAccessibility,
-  ]
+  // --- Feature map, keyed by the same names ClinicalFeatureEngineer uses ---
+  // Values are assembled into the final vector using the canonical order
+  // fetched from features_config.json (see loadModel()) — NOT the order
+  // they're listed here, so this object's key order is not load-bearing.
+  return {
+    age, sex, bp_systolic: bpSys, bp_diastolic: bpDia, spo2, heart_rate: hr,
+    temperature: temp, symptom_count: symptomCount,
+    chest_pain: chestPain, breathlessness, altered_consciousness: alteredConsciousness,
+    severe_bleeding: severeBleeding, seizure, high_fever: highFever,
+    pulse_pressure: pulsePressure, mean_arterial_pressure: meanArterialPressure,
+    shock_index: shockIndex, spo2_age_ratio: spo2AgeRatio, temp_deviation: tempDeviation,
+    cardiac_risk_score: cardiacRisk, respiratory_distress_score: respDistress,
+    hemodynamic_instability: hemodynamic, sepsis_risk_score: sepsisRisk,
+    pediatric_adjustment: pediatricAdj, geriatric_adjustment: geriatricAdj,
+    pregnancy_adjustment: pregnancyAdj,
+    cardiopulmonary_cluster: cardiopulmonaryCluster, neurological_cluster: neurologicalCluster,
+    hemorrhagic_cluster: hemorrhagicCluster, infectious_cluster: infectiousCluster,
+    symptom_severity_score: symptomSeverity, symptom_duration_risk: durationRisk,
+    chief_complaint_risk: complaintRisk, comorbidity_multiplier: comorbidityMult,
+    pediatric_fever_risk: pediatricFeverRisk, elderly_fall_risk: elderlyFallRisk,
+    adult_cardiac_risk: adultCardiacRisk, obstetric_emergency_risk: obstetricRisk,
+    trauma_severity_score: traumaSeverity, mental_health_crisis: mentalHealthCrisis,
+    time_of_day_risk: timeOfDayRisk, seasonal_risk: seasonalRisk,
+    geographic_risk: geographicRisk, epidemic_alert_level: epidemicAlertLevel,
+    healthcare_accessibility: healthcareAccessibility,
+  }
+}
 
-  return new Float32Array(features)
+/**
+ * Assemble the ordered Float32Array using the canonical feature order
+ * fetched from features_config.json. Throws if loadModel() hasn't been
+ * called yet (there is no safe default order to fall back to).
+ */
+function orderFeatureVector(featureMap) {
+  if (!_featureNames) {
+    throw new Error('Feature order not loaded yet — call loadModel() before running inference')
+  }
+  return new Float32Array(_featureNames.map((name) => {
+    const v = featureMap[name]
+    return typeof v === 'number' ? v : 0
+  }))
 }
 
 // ---------------------------------------------------------------------------
@@ -371,8 +430,9 @@ function buildFeatureVector(formData) {
 export async function runTriage(formData) {
   const session = await loadModel()
 
-  const featureVector = buildFeatureVector(formData)
-  const tensor = new ort.Tensor('float32', featureVector, [1, NUM_FEATURES])
+  const featureMap = buildFeatureMap(formData)
+  const featureVector = orderFeatureVector(featureMap)
+  const tensor = new _ort.Tensor('float32', featureVector, [1, featureVector.length])
 
   const results = await session.run({ float_input: tensor })
 
