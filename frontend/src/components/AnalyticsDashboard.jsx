@@ -2,7 +2,17 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../store/authStore'
 import { useRealtimeCases } from '../hooks/useRealtimeCases'
-import { getAnalyticsSummary, getResponseTimes } from '../lib/api'
+import { getAnalyticsSummary, getResponseTimes, exportCases } from '../lib/api'
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function daysAgoIso(days) {
+  const d = new Date()
+  d.setDate(d.getDate() - days)
+  return d.toISOString().slice(0, 10)
+}
 
 const TRIAGE_COLORS = {
   EMERGENCY: 'bg-emergency',
@@ -29,8 +39,24 @@ export default function AnalyticsDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [liveCount, setLiveCount] = useState(0)
+  const [exportFrom, setExportFrom] = useState(daysAgoIso(30))
+  const [exportTo, setExportTo] = useState(todayIso())
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState(null)
 
   const facilityId = profile?.facility_id
+
+  async function handleExport() {
+    setExporting(true)
+    setExportError(null)
+    try {
+      await exportCases({ dateFrom: exportFrom, dateTo: exportTo })
+    } catch (err) {
+      setExportError(err.message)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   async function fetchStats() {
     try {
@@ -216,6 +242,46 @@ export default function AnalyticsDashboard() {
           </div>
         </div>
       )}
+
+      {/* CSV export (FEATURES_ROADMAP §1b.3) */}
+      <div className="rounded-lg border border-leaf/40 bg-surface p-4 shadow-card">
+        <p className="mb-3 text-xs font-mono font-semibold uppercase tracking-wide text-text3">
+          Export Case Data
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-text3">From</span>
+            <input
+              type="date"
+              value={exportFrom}
+              max={exportTo}
+              onChange={(e) => setExportFrom(e.target.value)}
+              className="rounded-lg border border-leaf/40 bg-bg px-2 py-1.5 text-sm text-text"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-text3">To</span>
+            <input
+              type="date"
+              value={exportTo}
+              min={exportFrom}
+              max={todayIso()}
+              onChange={(e) => setExportTo(e.target.value)}
+              className="rounded-lg border border-leaf/40 bg-bg px-2 py-1.5 text-sm text-text"
+            />
+          </label>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="rounded-lg bg-forest px-4 py-1.5 text-sm font-semibold text-white hover:bg-forest/90 transition-colors disabled:opacity-60"
+          >
+            {exporting ? 'Exporting…' : 'Download CSV'}
+          </button>
+        </div>
+        {exportError && (
+          <p className="mt-2 text-xs text-emergency">Export failed: {exportError}</p>
+        )}
+      </div>
 
     </div>
   )

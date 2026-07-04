@@ -652,9 +652,30 @@ this turns it into an active escalation.
    duplicate spam.
 3. No new user-facing surface required beyond the existing dashboard + push.
 
-### 1b.3 Case CSV / PDF export for facility reporting
+### 1b.3 Case CSV / PDF export for facility reporting — ✅ DONE (CSV only)
 
-**Why**: PHC/district administrators must submit periodic reports up the
+**Status**: Implemented for CSV. `GET /api/analytics/export?date_from=&date_to=`
+(`require_role('doctor', 'admin')`, 10/minute rate limit, facility-scoped
+exactly like the other analytics endpoints, capped to a 366-day range)
+streams a CSV via the stdlib `csv` module (no new dependency) with columns
+matching what these same roles already see through `GET /api/cases` — this
+is a different export *format* of already-authorized data, not a new access
+grant, so the earlier "line-list needs separate authorization" concern in
+the spec below doesn't add a new exposure here. Every export is logged via
+`log_phi_access(AuditEventType.PHI_EXPORT, ...)` with the row count and date
+range. Frontend: `exportCases()` in `api/analytics.js` (triggers a browser
+file download from the streamed response), a date-range picker + "Download
+CSV" button in `AnalyticsDashboard.jsx`.
+
+**PDF is deliberately deferred**: it needs a real rendering dependency
+(`reportlab` or similar) that isn't in `requirements.txt` yet and deserves
+its own vetting (size, license, pinned version, a golden-output test) rather
+than being rushed into this pass. CSV covers the actual stated need — feeding
+a PHC/district report — without that cost. Re-open this as a small, scoped
+follow-on if a PDF-specific requirement (e.g. an official reporting template)
+shows up.
+
+**Why (original)**: PHC/district administrators must submit periodic reports up the
 health-system chain. Today that means manual re-entry from the dashboard. A
 scoped export is low-effort and removes a real recurring chore.
 
@@ -670,9 +691,27 @@ scoped export is low-effort and removes a real recurring chore.
 3. Governance: document who may export line-level (patient) data vs aggregates,
    and log every export via the §2.4 audit log.
 
-### 1b.4 Bulk ASHA onboarding via CSV
+### 1b.4 Bulk ASHA onboarding via CSV — ✅ DONE
 
-**Why**: Standing up a new facility means creating many ASHA accounts. The admin
+**Status**: Implemented. `POST /api/admin/users/bulk` (`require_role('admin')`,
+3/minute rate limit — much stricter than the single-user endpoint's 10/minute
+since one request can create up to 100 accounts, capped via
+`BulkCreateUsersRequest.users: list[..., max_length=100]`) reuses the exact
+same `_provision_user()` logic the single-user endpoint calls (extracted from
+what was previously `create_user`'s inline body) per row, so every row gets
+the identical password-policy enforcement and orphaned-auth-user rollback on
+profile-provisioning failure. One bad row (duplicate email, weak password,
+missing facility) is caught and reported per-row rather than failing the
+whole batch; a `PHI_CREATE` audit entry is still logged per successfully
+created user. Frontend: a CSV upload + client-side preview/validate step in
+`AdminUsers.jsx` (a small hand-rolled RFC4180-ish parser — handles quoted
+fields, no new dependency) showing which rows will succeed/fail *before*
+committing, with a `facility` column matched by name against the already-
+loaded facilities list (falling back to a raw `facility_id` if provided) so
+admins don't need to know facility UUIDs. Passwords are never echoed back in
+the per-row result report.
+
+**Why (original)**: Standing up a new facility means creating many ASHA accounts. The admin
 UI creates them one at a time. A CSV import makes facility rollout practical.
 
 **Implementation**:

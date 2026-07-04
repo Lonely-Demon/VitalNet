@@ -51,6 +51,16 @@ export async function adminReactivateUser(userId) {
   return res.json()
 }
 
+/** Bulk ASHA/doctor onboarding via CSV import (FEATURES_ROADMAP §1b.4). */
+export async function adminBulkCreateUsers(users) {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE}/api/admin/users/bulk`, {
+    method: 'POST', headers, body: JSON.stringify({ users }),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()   // Returns { results, succeeded, failed }
+}
+
 // ── Facilities ────────────────────────────────────────────────────────────────
 
 export async function adminListFacilities() {
