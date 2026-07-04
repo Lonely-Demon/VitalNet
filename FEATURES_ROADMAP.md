@@ -82,9 +82,23 @@ identical to production.
 
 ---
 
-### 1.2 Golden-vector Python/JS feature-engineering parity test (CI-enforced)
+### 1.2 Golden-vector Python/JS feature-engineering parity test (CI-enforced) — ✅ DONE
 
-**Why**: `backend/app/ml/clinical_features.py::ClinicalFeatureEngineer` is
+**Status**: Implemented. `backend/scripts/export_golden_vectors.py` generates
+240 synthetic patients across all four severities and writes
+`tests/fixtures/golden_feature_vectors.json` (mirrored into
+`frontend/tests/fixtures/`); `backend/tests/test_feature_parity.py` and
+`frontend/tests/featureParity.test.mjs` both replay it, wired into
+`.github/workflows/ci.yml`'s PR and push frontend jobs alongside the existing
+tree-parity check. This immediately caught a real bug (see
+`backend/app/ml/README.md`): `buildFeatureMap()` was clamping a real age of 0
+(a newborn) up to a 40-year-old default before several age-banded risk
+checks, so newborns received adult-cardiac/obstetric scoring instead of
+pediatric-fever scoring in the offline path only — fixed by introducing a
+second age variable (`ageOrDefault`) that only substitutes on a truly-missing
+age, matching `clinical_features.py`'s own `.get('patient_age', 40)` pattern.
+
+**Why (original)**: `backend/app/ml/clinical_features.py::ClinicalFeatureEngineer` is
 hand-ported into `frontend/src/utils/triageClassifier.js::buildFeatureMap()`.
 If a future change to one is not mirrored in the other, the offline
 (browser) triage classification silently diverges from the online (server)
@@ -131,9 +145,30 @@ on it.
 
 ---
 
-### 1.3 Doctor outcome feedback loop + real-data model retraining
+### 1.3 Doctor outcome feedback loop + real-data model retraining — ✅ DONE
 
-**Why**: The classifier is currently trained entirely on synthetic,
+**Status**: Fully implemented. `case_outcomes` table (migration `phase17_...`,
+immutable/insert-only via RLS), `PATCH /api/cases/{case_id}/outcome`
+(`CaseOutcomeInput`-validated, same facility-scoping as `review_case`), a
+"Record patient outcome" control on `BriefingCard.jsx` (shown once a case is
+reviewed), `scripts/retrain_from_outcomes.py` (blends recorded outcomes with
+a shrinking proportion of synthetic data, trains a candidate model, reports
+its agreement rate against the recorded outcomes vs. the current production
+model's — never auto-promotes; saves to `candidate_triage_classifier.pkl`
+for human review), and `GET /api/analytics/ml-agreement` + an "ML Triage
+Agreement" card on the admin System tab.
+
+Verified end-to-end against `tests/fixtures/synthetic_outcomes.json` (75
+synthetic outcomes with ~15% simulated doctor/model disagreement, via
+`--force` to bypass the production minimum-sample-size gate): the candidate's
+agreement with the recorded outcomes measurably exceeded the untouched
+production model's (0.947 vs 0.867) — the acceptance criterion. The
+retraining script is deliberately **not** wired into CI (per its own spec —
+a silently-regressing clinical model in production is worse than a slower
+manual cadence) and is slow (~30-60s, generates the full 36k-patient
+synthetic pool) — run it manually, not as part of the fast test suite.
+
+**Why (original)**: The classifier is currently trained entirely on synthetic,
 evidence-informed-but-unvalidated data (see `backend/app/ml/README.md`).
 There is no mechanism to learn from what actually happened to patients —
 the single highest-leverage improvement available for genuine clinical
@@ -258,9 +293,20 @@ notification within a few seconds.
 
 ---
 
-### 1.5 Facility response-time SLA dashboard
+### 1.5 Facility response-time SLA dashboard — ✅ DONE
 
-**Why**: VitalNet already records everything needed for this
+**Status**: Implemented. `GET /api/analytics/response-times` (same
+facility/admin scoping as `get_summary`) computes per-tier median/p90 review
+latency over the last 30 days plus an "overdue" count (EMERGENCY >15 min,
+URGENT >2h, ROUTINE >24h, still unreviewed) using `statistics.median` and a
+nearest-rank percentile helper — no percentile math pushed into PostgREST.
+New section in `AnalyticsDashboard.jsx` rendering median/p90 per tier with
+the overdue count in the emergency color when non-zero. The §1.4 escalation
+follow-on (re-notify past threshold) needs push notifications first — not
+built this pass (see §1.4/§1b.2, still speculative pending the Web Push
+implementation).
+
+**Why (original)**: VitalNet already records everything needed for this
 (`created_at`, `reviewed_at`, `triage_level`) but never surfaces it. "How
 long did it take from an EMERGENCY case being flagged to a doctor actually
 reviewing it" is arguably the single most important operational metric a
@@ -407,9 +453,18 @@ beyond just triage.
 
 ---
 
-### 2.4 Admin audit log
+### 2.4 Admin audit log — ✅ DONE
 
-**Why**: `admin_routes.py` lets an admin change any user's role, deactivate
+**Status**: Implemented, reusing the existing `phi_audit_log` table and
+`log_phi_access()` helper (already called from every admin_routes.py mutation
+as part of round-3 reconciliation) rather than a separate `audit_log` table
+as originally spec'd — same shape, same purpose, avoids a duplicate audit
+mechanism. `log_phi_access()` now also persists to the DB (previously
+log-only; the DB write is best-effort/non-blocking so a transient failure
+never breaks the calling request). New `GET /api/admin/audit-log` (paginated,
+admin-only) and an "Audit Log" tab in `AdminPanel.jsx`.
+
+**Why (original)**: `admin_routes.py` lets an admin change any user's role, deactivate
 accounts, and create/toggle facilities — all currently unlogged beyond
 whatever Supabase's own database logs capture (not queryable from the
 app). For a system managing access to patient health data, "who changed
@@ -508,9 +563,15 @@ These emerged from the second hardening pass. They are documented as
 ready-to-execute specs (per the decision to keep new features as specs this
 round). 1b.1 is the highest-value follow-on to the round-2 ML work.
 
-### 1b.1 Doctor triage-override + reason capture (unlocks real-label collection)
+### 1b.1 Doctor triage-override + reason capture (unlocks real-label collection) — ✅ DONE
 
-**Why**: Round 2 added a `low_confidence` abstention flag and a deterministic
+**Status**: Implemented. Migration `phase17_triage_provenance_and_override.sql`
+adds the nullable columns; `PATCH /api/cases/{case_id}/triage-override` in
+`cases.py` (schema-validated via `TriageOverride`, same facility-scoping as
+`review_case`); `BriefingCard.jsx` has an inline override control showing the
+adjusted tier + reason with visible provenance once saved.
+
+**Why (original)**: Round 2 added a `low_confidence` abstention flag and a deterministic
 NEWS2 floor, but the model still has no way to learn from a doctor disagreeing
 with its triage. Letting a reviewing doctor override the ML triage and record a
 one-line reason is the single smallest change that starts accumulating real,
@@ -586,9 +647,17 @@ UI creates them one at a time. A CSV import makes facility rollout practical.
 3. Security: enforce the same 12-char password policy per row; never echo
    passwords back in the result report.
 
-### 1b.5 Model-version display + per-case model provenance
+### 1b.5 Model-version display + per-case model provenance — ✅ DONE
 
-**Why**: Once the model retrains from real outcomes (§1.3), different cases will
+**Status**: Implemented. `triage_model_version` column added (migration
+`phase17_...`), populated in `submit_case` from `run_triage()`'s existing
+`model_version` field, shown on `BriefingCard.jsx` next to the timestamp
+(`low_confidence` was already added and surfaced in round 3's reconciliation,
+under that name rather than `triage_low_confidence` — same thing, no
+duplicate column). The admin System tab already showed `/api/health`'s model
+version pre-existing this change.
+
+**Why (original)**: Once the model retrains from real outcomes (§1.3), different cases will
 have been triaged by different model versions. A doctor auditing an old case, or
 an admin investigating a mis-triage, needs to know *which* model produced it.
 The backend already returns `model_version` from `predict_triage`; it just isn't

@@ -432,3 +432,43 @@ async def get_stats(
         'active_users':  active_count,
         'role_counts':   role_counts,
     }
+
+
+# ── Audit Log ──────────────────────────────────────────────────────────────────
+
+@router.get('/audit-log')
+@limiter.limit("60/minute")
+async def get_audit_log(
+    request: Request,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role('admin')),
+    before: Optional[str] = None,  # created_at ISO cursor
+    limit: int = 50,
+):
+    """
+    Paginated, chronological view of phi_audit_log (FEATURES_ROADMAP §2.4) —
+    every PHI access and admin mutation is logged there via log_phi_access().
+    admin-only; RLS on phi_audit_log independently restricts SELECT to admins
+    too, so this is defense in depth, not the only access boundary.
+    """
+    limit = max(1, min(limit, 200))
+
+    query = (
+        supabase_admin.table('phi_audit_log')
+        .select('id, event_type, user_id, user_role, resource_type, resource_id, facility_id, ip_address, details, created_at')
+        .order('created_at', desc=True)
+        .limit(limit + 1)
+    )
+    if before:
+        query = query.lt('created_at', before)
+
+    result = query.execute()
+    rows = result.data or []
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    return {
+        'entries': rows,
+        'hasMore': has_more,
+        'nextCursor': rows[-1]['created_at'] if has_more and rows else None,
+    }

@@ -86,3 +86,15 @@ export async function adminGetStats() {
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
+
+// ── Audit Log ─────────────────────────────────────────────────────────────────
+
+export async function adminGetAuditLog({ before } = {}) {
+  const headers = await authHeaders()
+  const url = new URL(`${BASE}/api/admin/audit-log`)
+  if (before) url.searchParams.set('before', before)
+  url.searchParams.set('limit', '50')
+  const res = await getWithRetry(url.toString(), headers)
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()   // Returns { entries, hasMore, nextCursor }
+}

@@ -15,7 +15,7 @@ from app.core.auth import require_role, verify_sub_for_rate_limit
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
 from app.core.database import get_supabase_for_user
-from app.models.schemas import IntakeForm
+from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput
 from app.ml.classifier import run_triage
 from app.services.llm import generate_briefing
 
@@ -167,6 +167,7 @@ async def submit_case(
             "triage_level": triage_result["triage_level"],
             "triage_confidence": triage_result["confidence_score"],
             "risk_driver": triage_result["risk_driver"],
+            "triage_model_version": triage_result.get("model_version"),
             "low_confidence": bool(triage_result.get("low_confidence")),
             "llm_status": briefing.get("llm_status", "generated"),
             "needs_review": bool(briefing.get("needs_review") or form.human_review_requested),
@@ -272,6 +273,7 @@ async def get_cases(
             "id, patient_name, patient_age, patient_sex, patient_location, chief_complaint, "
             "triage_level, triage_priority, triage_confidence, risk_driver, briefing, "
             "low_confidence, needs_review, human_review_requested, human_review_reason, "
+            "triage_model_version, overridden_triage, override_reason, overridden_by, overridden_at, "
             "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
         )
         .is_("deleted_at", "null")
@@ -380,6 +382,138 @@ async def review_case(
     )
 
     return {"status": "reviewed", "case_id": case_uuid, "reviewed_by": user["sub"]}
+
+
+# ── Triage Override ──────────────────────────────────────────────────────────────
+
+
+@router.patch("/api/cases/{case_id}/triage-override")
+@limiter.limit("30/minute")
+async def override_triage(
+    request: Request,
+    case_id: str,
+    body: TriageOverride,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("doctor", "admin")),
+):
+    """
+    Lets a reviewing doctor correct the ML triage tier with a required reason.
+    This is the primary real-label source for the outcome-retraining loop
+    (FEATURES_ROADMAP §1.3) — the override is never hidden, always shown with
+    its provenance (who, when, why) alongside the original ML tier.
+    Scoped the same way as review_case.
+    """
+    case_uuid = _parse_uuid(case_id, "case_id")
+    raw_token = (authorization or "").split(" ", 1)[-1]
+    db = get_supabase_for_user(raw_token)
+    role = _resolved_role(user)
+
+    case_result = (
+        db.table("case_records")
+        .select("id, facility_id, submitted_by, deleted_at")
+        .eq("id", case_uuid)
+        .maybe_single()
+        .execute()
+    )
+    case_row = (case_result.data if case_result else None) or {}
+    if not case_row or case_row.get("deleted_at") is not None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    _authorize_case_row_access(user, case_row)
+
+    update_result = db.table("case_records").update(
+        {
+            "overridden_triage": body.overridden_triage,
+            "override_reason": body.override_reason,
+            "overridden_by": user["sub"],
+            "overridden_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", case_uuid).is_("deleted_at", "null").execute()
+
+    if not update_result.data:
+        raise HTTPException(status_code=409, detail="Case could not be updated or already deleted")
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=role,
+        resource_type="case_records",
+        resource_id=case_uuid,
+        facility_id=case_row.get("facility_id"),
+        ip_address=get_client_ip(request),
+        details={"action": "triage_override", "overridden_triage": body.overridden_triage},
+    )
+
+    return {
+        "status": "overridden",
+        "case_id": case_uuid,
+        "overridden_triage": body.overridden_triage,
+        "overridden_by": user["sub"],
+    }
+
+
+# ── Case Outcome ─────────────────────────────────────────────────────────────────
+
+
+@router.patch("/api/cases/{case_id}/outcome")
+@limiter.limit("30/minute")
+async def record_case_outcome(
+    request: Request,
+    case_id: str,
+    body: CaseOutcomeInput,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("doctor", "admin")),
+):
+    """
+    Records what actually happened to a patient after triage — the real-world
+    outcome that closes the feedback loop for future retraining (FEATURES_ROADMAP
+    §1.3). Immutable audit trail: each call inserts a new case_outcomes row;
+    corrections are new rows, not edits, matching medical record conventions.
+    Scoped the same way as review_case.
+    """
+    case_uuid = _parse_uuid(case_id, "case_id")
+    raw_token = (authorization or "").split(" ", 1)[-1]
+    db = get_supabase_for_user(raw_token)
+    role = _resolved_role(user)
+
+    case_result = (
+        db.table("case_records")
+        .select("id, facility_id, submitted_by, deleted_at")
+        .eq("id", case_uuid)
+        .maybe_single()
+        .execute()
+    )
+    case_row = (case_result.data if case_result else None) or {}
+    if not case_row or case_row.get("deleted_at") is not None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    _authorize_case_row_access(user, case_row)
+
+    result = db.table("case_outcomes").insert(
+        {
+            "case_id": case_uuid,
+            "recorded_by": user["sub"],
+            "actual_severity": body.actual_severity,
+            "patient_disposition": body.patient_disposition,
+            "outcome_notes": body.outcome_notes,
+        }
+    ).execute()
+
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to record outcome")
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_CREATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=role,
+        resource_type="case_outcomes",
+        resource_id=case_uuid,
+        facility_id=case_row.get("facility_id"),
+        ip_address=get_client_ip(request),
+        details={"actual_severity": body.actual_severity, "patient_disposition": body.patient_disposition},
+    )
+
+    return result.data[0]
 
 
 # ── ASHA: My Submissions ───────────────────────────────────────────────────────

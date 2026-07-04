@@ -3,6 +3,7 @@ import NavBar from '../components/NavBar'
 import AdminUsers from '../components/admin/AdminUsers'
 import AdminFacilities from '../components/admin/AdminFacilities'
 import AdminStats from '../components/admin/AdminStats'
+import AdminAuditLog from '../components/admin/AdminAuditLog'
 import AnalyticsDashboard from '../components/AnalyticsDashboard'
 
 const TABS = [
@@ -10,6 +11,7 @@ const TABS = [
   { id: 'users',      label: 'Users' },
   { id: 'facilities', label: 'Facilities' },
   { id: 'system',     label: 'System' },
+  { id: 'audit',      label: 'Audit Log' },
 ]
 
 export default function AdminPanel() {
@@ -23,6 +25,7 @@ export default function AdminPanel() {
         {activeTab === 'users'      && <AdminUsers />}
         {activeTab === 'facilities' && <AdminFacilities />}
         {activeTab === 'system'     && <AdminStats />}
+        {activeTab === 'audit'      && <AdminAuditLog />}
       </main>
     </div>
   )

@@ -145,6 +145,19 @@ hand-edit or partially regenerate them. After a `clinical_features.py` change,
 also mirror the change in `frontend/src/utils/triageClassifier.js` and re-run
 `npm run test:parity` (it will fail if the JS offline path desyncs).
 
+**Separately**, after any `clinical_features.py` change, regenerate the
+feature-level golden fixture: `python scripts/export_golden_vectors.py`
+(writes `tests/fixtures/golden_feature_vectors.json`; copy it to
+`frontend/tests/fixtures/` too), then run `npm run test:feature-parity`. This
+is a finer-grained parity check than `test:parity` — it catches a
+`buildFeatureMap()`/`ClinicalFeatureEngineer` divergence in a single named
+feature, even when the final triage tier happens to land the same. It has
+already caught one real bug: `buildFeatureMap()` was gating several age-band
+risk scores (adult cardiac, pediatric fever, obstetric/pregnancy) on a
+clamped-to-40 age value, so a real newborn (age 0) was silently scored as a
+40-year-old adult in the offline path only — CI now fails immediately if this
+class of bug recurs.
+
 ## Why scikit-learn is pinned exactly (not `>=`)
 
 A trained `.pkl` is only guaranteed to unpickle correctly with the exact
