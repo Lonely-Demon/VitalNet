@@ -16,6 +16,11 @@ allow a reasonable window to fix the issue before any public disclosure.
 Do not test against production data or a live deployment you don't
 control; use a local instance with synthetic test data.
 
+If you're responding to an incident already in progress rather than
+reporting a new finding, see `docs/INCIDENT_RESPONSE.md` for the runbook
+(detection through post-incident review, including the DPDP breach-
+notification hook).
+
 ## Security model overview
 
 Defense in depth, not a single boundary. Each layer below is expected to
@@ -134,6 +139,13 @@ graph LR
   line, with a rationale comment — see `docs/DECISIONS.md` §13 for the
   correct (current) suppression syntax; the legacy `lgtm[query-id]` syntax
   is silently ignored by GitHub's current default CodeQL setup.
+- **Software Bill of Materials (SBOM):** the `sbom` CI job (push-only)
+  generates a CycloneDX SBOM for both the backend (`cyclonedx-py
+  requirements backend/requirements.txt`) and frontend
+  (`@cyclonedx/cyclonedx-npm`), uploaded as a 90-day build artifact — supply-
+  chain transparency and a machine-readable dependency inventory for
+  correlating against a future CVE disclosure. It's a diagnostic artifact,
+  not a merge gate: it only fails if the SBOM tooling itself breaks.
 
 ## Known limitations (accepted, not oversights)
 

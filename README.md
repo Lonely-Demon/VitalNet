@@ -24,6 +24,7 @@ docs — start with whichever matches what you're trying to do:
 | **[docs/ONBOARDING.md](./docs/ONBOARDING.md)** | New-developer first-day checklist |
 | **[docs/GLOSSARY.md](./docs/GLOSSARY.md)** | Domain terms (ASHA, PHC, NEWS2, triage tiers, etc.) |
 | **[docs/DISASTER_RECOVERY.md](./docs/DISASTER_RECOVERY.md)** | RTO/RPO targets, restore procedures |
+| **[docs/INCIDENT_RESPONSE.md](./docs/INCIDENT_RESPONSE.md)** | Security incident runbook — detection through post-incident review |
 | **[docs/CLINICAL_GOVERNANCE.md](./docs/CLINICAL_GOVERNANCE.md)** | Regulatory posture (CDSCO), model lifecycle governance, guardrail architecture |
 | **[docs/COMPLIANCE_DPDP.md](./docs/COMPLIANCE_DPDP.md)** | India DPDP Act 2023 mapping — data-principal rights, fiduciary obligations, gaps |
 | **[backend/app/ml/README.md](./backend/app/ml/README.md)** + **[MODEL_CARD.md](./backend/app/ml/MODEL_CARD.md)** | ML architecture, clinical grounding, intended use/limitations |

@@ -98,6 +98,10 @@ VitalNet/
 ├── frontend/           React 19 + Vite PWA — see §4
 ├── docs/
 │   ├── DISASTER_RECOVERY.md   Ops runbook: RTO/RPO targets, restore procedures
+│   ├── INCIDENT_RESPONSE.md   Security incident runbook: severity classification,
+│   │                     detection → containment → eradication → post-incident
+│   │                     review, DPDP breach-notification hook (distinct from
+│   │                     DISASTER_RECOVERY.md — adversary-involved vs. not)
 │   ├── CLINICAL_GOVERNANCE.md Regulatory posture (CDSCO SaMD), model lifecycle
 │   │                     governance, five-layer guardrail architecture
 │   ├── COMPLIANCE_DPDP.md     India DPDP Act 2023 mapping — data-principal
@@ -120,7 +124,9 @@ VitalNet/
 │                       removed as fully superseded by this file / FEATURES_ROADMAP.md —
 │                       recoverable from git history if ever needed.
 ├── .github/
-│   ├── workflows/ci.yml  Lint (PR) + pytest/build (push) on main and dev
+│   ├── workflows/ci.yml  Lint (PR) + pytest/build (push) on main and dev, plus an
+│   │                     SBOM job (push-only, CycloneDX for backend+frontend deps,
+│   │                     uploaded as a build artifact — docs/SECURITY.md)
 │   └── dependabot.yml    Daily pip/npm/actions update PRs, targeting dev
 ├── README.md           Setup, features, deployment — start here
 ├── AGENTS.md           Conventions for coding agents working in this repo
@@ -334,10 +340,15 @@ backend/
 │   │                                 the FULL pipeline (safety net + model + NEWS2
 │   │                                 floor). Operator-run, not scheduled/CI — see
 │   │                                 app/ml/README.md.
-│   └── drift_monitor.py              Population Stability Index per engineered feature,
-│                                     live case_records vs. the synthetic training
-│                                     distribution. Needs a real Supabase project.
-│                                     Operator-run, not scheduled/CI.
+│   ├── drift_monitor.py              Population Stability Index per engineered feature,
+│   │                                 live case_records vs. the synthetic training
+│   │                                 distribution. Needs a real Supabase project.
+│   │                                 Operator-run, not scheduled/CI.
+│   └── load_test.py                  asyncio+httpx load generator (no new dependency —
+│                                     httpx is already required). Refuses to target
+│                                     anything but localhost without
+│                                     --confirm-non-local — see docs/INCIDENT_RESPONSE.md.
+│                                     Operator-run, not CI.
 ├── prompts/clinical_system_prompt.txt
 │                                     System prompt for the LLM briefing generator.
 ├── tests/
