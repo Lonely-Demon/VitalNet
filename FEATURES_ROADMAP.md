@@ -240,9 +240,31 @@ produces a model that measurably shifts toward the recorded outcomes.
 
 ---
 
-### 1.4 Web Push notifications for EMERGENCY cases
+### 1.4 Web Push notifications for EMERGENCY cases — ✅ DONE
 
-**Why**: Today, a doctor only learns about a new EMERGENCY case if their
+**Status**: Implemented. New `push_subscriptions` table (migration
+`phase18_push_subscriptions.sql`), `POST`/`DELETE /api/push/subscribe`
+(`require_role('doctor', 'admin')`) in `app/api/routes/push_routes.py`, VAPID
+settings (`vapid_public_key`/`vapid_private_key`/`vapid_subject`) in
+`config.py`. `app/services/push.py` holds the actual send logic (kept in a
+separate module from `push_routes.py` to avoid a circular import with
+`cases.py`, which calls it) — it no-ops cleanly if VAPID keys are unconfigured,
+and deletes a subscription on a `410 Gone` response (expired subscription).
+`cases.py::submit_case` fires `push_emergency_alert` via FastAPI
+`BackgroundTasks` after a successful EMERGENCY-tier submission, so the push
+send never adds latency to the ASHA worker's response. Frontend:
+`frontend/src/lib/push.js` (permission request + `pushManager.subscribe()` +
+POST to the backend), `frontend/src/components/PushPrompt.jsx` (a dismissible
+bottom-left prompt, shown once per browser via `localStorage`, mounted from
+`DoctorPanel.jsx` — never forced, since Realtime-while-open remains the
+primary channel), and `frontend/public/sw-push.js` (the `push` /
+`notificationclick` handlers, injected into the Workbox-generated service
+worker via `workbox.importScripts` in `vite.config.js` — no `injectManifest`
+mode needed for this one script). New env vars: `VAPID_PUBLIC_KEY` /
+`VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` (backend `.env.example`) and
+`VITE_VAPID_PUBLIC_KEY` (frontend `.env.example`).
+
+**Why (original)**: Today, a doctor only learns about a new EMERGENCY case if their
 dashboard tab is open and they notice the toast (`Dashboard.jsx`'s
 `useRealtimeCases` `onInsert` handler). If the tablet's screen is off, the
 browser tab is backgrounded or closed, or the doctor is away from the
@@ -599,7 +621,23 @@ tool uses it more readily than one who cannot.
 4. This is the data source `retrain_from_outcomes.py` (§1.3) reads — the two
    specs are designed to compose.
 
-### 1b.2 Unreviewed-EMERGENCY deterioration re-alert
+### 1b.2 Unreviewed-EMERGENCY deterioration re-alert — ✅ DONE
+
+**Status**: Implemented as `POST /api/push/check-emergency-escalations`
+(`require_role('admin')`, rate-limited) in `push_routes.py`. It scans
+`case_records` for `triage_level = 'EMERGENCY' AND reviewed_at IS NULL AND
+deleted_at IS NULL AND created_at < now() - 15 min`, re-emits a push via
+`push_emergency_alert` for each candidate not already escalated within the
+current threshold window, and stamps `last_escalated_at` (new column, same
+migration as §1.4) so a case is escalated at most once per
+`ESCALATION_THRESHOLD_MINUTES` interval rather than on every scheduler tick.
+This is deliberately an idempotent, repeatedly-safe-to-call endpoint rather
+than an in-process cron — intended to be invoked on a schedule by an external
+scheduler (a plain cron job, a Supabase `pg_cron` job, or a Railway cron
+add-on), since the backend itself has no persistent scheduler process. Wiring
+up that external scheduler call is an ops/deployment step, not application
+code — document the chosen scheduler and its cadence (5–15 min recommended)
+in the deployment runbook.
 
 **Why**: An EMERGENCY case that sits unreviewed past a threshold is the exact
 failure the tool exists to prevent. §1.5 surfaces this as a dashboard metric;

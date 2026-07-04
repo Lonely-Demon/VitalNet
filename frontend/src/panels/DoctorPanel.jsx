@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import NavBar from '../components/NavBar'
 import Dashboard from '../pages/Dashboard'
+import { PushPrompt } from '../components/PushPrompt'
 
 const TABS = [
   { id: 'pending', label: 'Pending Review' },
@@ -19,6 +20,7 @@ export default function DoctorPanel() {
         - 'all':     no filter
       */}
       <Dashboard filter={activeTab} />
+      <PushPrompt />
     </div>
   )
 }

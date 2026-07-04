@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     # token being unguessable.
     csrf_token: str = "vitalnet-spa"
 
+    # ── Web Push (FEATURES_ROADMAP §1.4) ──────────────────────────────────────
+    # Generate a keypair once with `vapid --gen` (from the py-vapid package,
+    # a pywebpush dependency) or `npx web-push generate-vapid-keys`. Empty
+    # values disable push entirely — submit_case's push fan-out no-ops and
+    # /api/push/subscribe returns 503, so this is safe to leave unset.
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_subject: str = "mailto:admin@example.com"
+
     @property
     def allowed_origins(self) -> list[str]:
         origins: list[str] = []
