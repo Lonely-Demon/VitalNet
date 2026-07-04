@@ -52,6 +52,11 @@ def log_phi_access(
         "ip_address": ip_address,
         "details": details or {},
     }
+    # lgtm[py/clear-text-logging-sensitive-data] — intentional: this IS the PHI
+    # access audit trail (ROOT-COMPLY-002). Recording who/what/when/where in
+    # plain, greppable text is the entire point of an audit log; only coarse
+    # identifiers are logged here (never patient free-text/vitals — see the
+    # module docstring), which is the accepted shape for compliance logging.
     audit_logger.info(
         "event=%s user=%s role=%s resource=%s:%s facility=%s ip=%s details=%s",
         event_type, user_id, user_role, resource_type, resource_id, facility_id, ip_address, details,

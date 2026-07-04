@@ -101,6 +101,9 @@ def test_classifier_direct():
         try:
             result = predict_triage(test_case["data"])
 
+            # lgtm[py/clear-text-logging-sensitive-data] — synthetic fixture
+            # data defined in this file, printed to stdout for a human running
+            # this script locally; no real patient data ever reaches this path.
             print(f"Triage Level: {result['triage_level']}")
             print(f"Confidence: {result['confidence_score']:.3f}")
             print(f"Risk Driver: {result['risk_driver']}")

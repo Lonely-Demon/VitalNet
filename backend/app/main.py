@@ -211,12 +211,16 @@ async def health(request: Request, authorization: str = Header(default=None)):
     from app.ml.classifier import get_classifier_info
     from app.core.auth import get_current_user
 
-    # 1. Database connectivity check
+    # 1. Database connectivity check. The exception detail is logged
+    # server-side only — never put exception text in the HTTP response, even
+    # for the authenticated-diagnostics path below (CodeQL: information
+    # exposure through an exception).
     try:
         supabase_anon.table("facilities").select("id").limit(1).execute()
         db_status = "connected"
     except Exception as e:
-        db_status = f"error: {str(e)[:80]}"  # Truncate — never expose full errors
+        logger.warning("Health check DB connectivity failed: %s", e)
+        db_status = "error"
 
     # 2. Classifier state
     info = get_classifier_info()
