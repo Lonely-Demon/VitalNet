@@ -8,12 +8,36 @@
 // backend/scripts/export_golden_vectors.py and re-runs buildFeatureMap() on
 // every recorded input, asserting an exact (tolerance-bounded) match.
 //
+// time_of_day_risk/seasonal_risk are computed from `new Date()` — the global
+// Date constructor is frozen to FROZEN_REFERENCE_TIME below (must match
+// export_golden_vectors.py's FROZEN_REFERENCE_TIME and
+// test_feature_parity.py's twin) so this test's outcome is independent of
+// what real wall-clock time it happens to run at. Without this, the fixture
+// silently goes stale as real time crosses an hour/month bucket boundary —
+// confirmed mid-development: this test and its Python counterpart started
+// failing identically (not diverging from each other, just from the frozen
+// fixture) purely because enough wall-clock time had passed.
+//
 // Run: node frontend/tests/featureParity.test.mjs
 
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { buildFeatureMap } from '../src/utils/triageClassifier.js'
+
+const FROZEN_REFERENCE_TIME = new Date(2026, 6, 4, 12, 0, 0) // month is 0-indexed: 6 = July
+
+const RealDate = Date
+class FrozenDate extends RealDate {
+  constructor(...args) {
+    super(...(args.length ? args : [FROZEN_REFERENCE_TIME]))
+  }
+  static now() {
+    return FROZEN_REFERENCE_TIME.getTime()
+  }
+}
+globalThis.Date = FrozenDate
+
+const { buildFeatureMap } = await import('../src/utils/triageClassifier.js')
 
 const here = dirname(fileURLToPath(import.meta.url))
 const vectors = JSON.parse(readFileSync(join(here, 'fixtures/golden_feature_vectors.json'), 'utf8'))

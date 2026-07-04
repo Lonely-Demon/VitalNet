@@ -4,25 +4,47 @@ of the Python/JS parity guarantee (FEATURES_ROADMAP.md §1.2) — the JS half
 lives in frontend/tests/featureParity.test.mjs, replaying the same fixture
 against triageClassifier.js::buildFeatureMap(). Both must match the fixture
 exactly or offline (browser) triage can silently diverge from online triage.
+
+time_of_day_risk/seasonal_risk are computed from datetime.now() — freezing it
+to the same FROZEN_REFERENCE_TIME used by scripts/export_golden_vectors.py
+(and featureParity.test.mjs's JS-side reference) keeps this test's outcome
+independent of what real wall-clock time it happens to run at. Without this,
+the fixture silently goes stale as real time crosses an hour/month bucket
+boundary — confirmed mid-development: both this test and its JS counterpart
+started failing identically (not diverging from each other, just from the
+frozen fixture) purely because enough wall-clock time had passed.
 """
 import json
+from datetime import datetime as _real_datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from app.ml.clinical_features import ClinicalFeatureEngineer
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "golden_feature_vectors.json"
 TOLERANCE = 1e-6
 
+# Must match scripts/export_golden_vectors.py's FROZEN_REFERENCE_TIME exactly.
+FROZEN_REFERENCE_TIME = _real_datetime(2026, 7, 4, 12, 0, 0)
+
+
+class _FrozenDateTime(_real_datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_REFERENCE_TIME.replace(tzinfo=tz)
+
 
 def test_feature_engineering_matches_golden_vectors():
     vectors = json.loads(FIXTURE_PATH.read_text())
     assert len(vectors) > 0, "golden_feature_vectors.json is empty — regenerate it"
 
-    engineer = ClinicalFeatureEngineer()
     mismatches = []
 
-    for i, vector in enumerate(vectors):
-        computed = engineer.engineer_features(vector["input"])
+    with patch("app.ml.clinical_features.datetime", _FrozenDateTime):
+        engineer = ClinicalFeatureEngineer()
+        computed_vectors = [engineer.engineer_features(vector["input"]) for vector in vectors]
+
+    for i, (vector, computed) in enumerate(zip(vectors, computed_vectors)):
         expected = vector["features"]
 
         if set(computed.keys()) != set(expected.keys()):
