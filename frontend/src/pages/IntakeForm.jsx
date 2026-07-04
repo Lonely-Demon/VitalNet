@@ -417,6 +417,11 @@ export default function IntakeForm() {
               Preliminary triage
             </span>
           </div>
+          {localResult.lowConfidence && (
+            <p className="mt-2 text-xs text-urgent font-medium">
+              ⚠ Model uncertain on this case — please have a clinician review carefully.
+            </p>
+          )}
           <p className="mt-2 text-xs text-text3">
             {navigator.onLine
               ? 'Sending to server for full analysis…'

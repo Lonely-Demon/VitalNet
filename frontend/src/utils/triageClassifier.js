@@ -1,81 +1,73 @@
 // frontend/src/utils/triageClassifier.js
 //
-// Client-side ONNX triage inference using the ClinicalFeatureEngineer's
-// 45-feature pipeline. Ports backend/app/ml/clinical_features.py to JS.
+// Client-side (offline) triage using the ClinicalFeatureEngineer's 45-feature
+// pipeline (ported from backend/app/ml/clinical_features.py) plus a pure-JS
+// evaluation of the trained tree ensemble — NO onnxruntime-web WASM.
 //
-// The onnxruntime-web JS glue (~250 KB) is loaded via a DYNAMIC import
-// inside loadModel(), not a static top-level import. A static import would
-// bundle it into the main chunk that every user downloads and parses on
-// first paint — including doctors, admins, and online ASHA workers who may
-// never trigger offline/local triage in a session. Dynamic import defers
-// that cost to the moment it's actually needed (device goes offline, or
-// the backend becomes unreachable), which matters a lot for initial page
-// load speed on weak/old hardware.
+// Why no ONNX runtime: the model is a gradient-boosted tree ensemble, which
+// evaluates in a few thousand float comparisons. Shipping a general ~12 MB WASM
+// inference engine to precache and cold-compile for that is pure overhead on the
+// 2 GB-class Android tablets and metered rural links this app targets. Instead
+// the model is exported as compact JSON (/models/triage_trees.json, ~1 MB, gzips
+// far smaller) and walked by treeEvaluator.js. Predictions are argmax-identical
+// to the server, enforced by a golden-vector parity test.
 //
-// Imports the WASM-only build ('onnxruntime-web/wasm'), not the default
-// 'onnxruntime-web' entry point. The default entry bundles the WebGPU (JSEP)
-// execution provider, which roughly doubles the shipped WASM binary
-// (~25 MB vs ~12 MB) — pure dead weight here since executionProviders is
-// hard-coded to ['wasm'] below and the app never uses WebGPU. This matters
-// a lot for rural/low-bandwidth deployments where the PWA install and every
-// service-worker cache refresh must pull this binary over a slow link.
+// Layered design (mirrors backend/app/ml/classifier.py, so offline == online):
+//   1. Deterministic safety net → EMERGENCY for extreme presentations, even for
+//      inputs the model never saw ("classify under any circumstances").
+//   2. The tree model for everything else.
+//   3. A NEWS2 concerning-vital floor: never leave a concerning vital as ROUTINE.
+//   4. If the tree JSON can't load at all, rules-only triage still returns a
+//      safe result — triage never fails.
 
-const MODEL_PATH = '/models/triage_classifier.onnx'
+import { evaluateTrees } from './treeEvaluator'
+import { safetyNetCheck, news2ConcerningVital } from './clinicalRules'
+
+const TREES_PATH = '/models/triage_trees.json'
 const FEATURES_CONFIG_PATH = '/models/features_config.json'
 const TRIAGE_LABELS = ['ROUTINE', 'URGENT', 'EMERGENCY']
-const FALLBACK_NUM_FEATURES = 45 // used only for the pre-warmup dummy tensor shape
+
+// Abstention thresholds — mirror classifier.py (LOW_CONFIDENCE_PROBA/MARGIN).
+const LOW_CONFIDENCE_PROBA = 0.55
+const LOW_CONFIDENCE_MARGIN = 0.15
 
 // ---------------------------------------------------------------------------
-// Session management
+// Model loading (compact tree JSON + canonical feature order)
 // ---------------------------------------------------------------------------
 
-let _ort = null            // the dynamically-imported onnxruntime-web module
-let _session = null
+let _treeJson = null
 let _featureNames = null   // canonical feature order, fetched from features_config.json
 let _loadPromise = null
 
 /**
- * Load and cache the onnxruntime-web module, the ONNX session, and the
- * canonical feature-order manifest. Called once on ASHA panel mount — not
- * on every submission. Retries on failure (resets _loadPromise so the next
- * call retries).
- *
- * Fetching feature order from features_config.json (rather than
- * hard-coding it here) means a future change to the Python
- * ClinicalFeatureEngineer feature set can never silently desync this file
- * from the trained model — the frontend always uses whatever order the
- * model was actually trained and exported with.
+ * Load and cache the tree ensemble JSON + the feature-order manifest. Called
+ * once (warmup) — not per submission. Resets its promise on failure so a later
+ * call retries. Fetching feature order from features_config.json (not a
+ * hard-coded array) means a backend feature-set change can never silently
+ * desync this file from the trained model.
  */
 export async function loadModel() {
-  if (_session && _featureNames) return _session
+  if (_treeJson && _featureNames) return _treeJson
   if (_loadPromise) return _loadPromise
 
   _loadPromise = Promise.all([
-    import('onnxruntime-web/wasm'),
+    fetch(TREES_PATH).then((r) => {
+      if (!r.ok) throw new Error(`triage_trees.json fetch failed: ${r.status}`)
+      return r.json()
+    }),
     fetch(FEATURES_CONFIG_PATH).then((r) => {
       if (!r.ok) throw new Error(`features_config.json fetch failed: ${r.status}`)
       return r.json()
     }),
-  ]).then(([ort, config]) => {
-    _ort = ort
-    // Disable multi-threading — requires COOP/COEP headers that Vite dev
-    // server and many production hosts don't set. Single-threaded WASM is
-    // fast enough for a 45-feature model inference (<10 ms).
-    _ort.env.wasm.numThreads = 1
-    return _ort.InferenceSession.create(MODEL_PATH, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all',
-    }).then((session) => {
-      _session = session
-      _featureNames = config.feature_names
-      _loadPromise = null
-      console.log(`[VitalNet] ONNX model loaded (${config.num_features}-feature, v${config.model_version})`)
-      return session
-    })
-  }).catch((err) => {
-    // Reset so next call retries instead of returning the failed promise
+  ]).then(([trees, config]) => {
+    _treeJson = trees
+    _featureNames = config.feature_names
     _loadPromise = null
-    console.error('[VitalNet] ONNX model or feature config load failed:', err)
+    console.log(`[VitalNet] Offline triage model loaded (${config.num_features}-feature, v${config.model_version}, pure-JS)`)
+    return trees
+  }).catch((err) => {
+    _loadPromise = null
+    console.error('[VitalNet] Offline model load failed (rules-only fallback will be used):', err)
     throw err
   })
 
@@ -83,20 +75,16 @@ export async function loadModel() {
 }
 
 /**
- * Warm up the model with a dummy inference pass.
- * Eliminates first-submission latency.
- * Guarded against concurrent calls (React strict mode calls useEffect twice).
+ * Prefetch + a dummy evaluation so the first real offline submission is instant.
+ * Guarded against concurrent calls (React strict mode double-invokes effects).
  */
 let _warmupPromise = null
 export async function warmupModel() {
   if (_warmupPromise) return _warmupPromise
   _warmupPromise = (async () => {
-    const session = await loadModel()
-    const n = _featureNames?.length ?? FALLBACK_NUM_FEATURES
-    const dummyInput = new Float32Array(n).fill(0)
-    const tensor = new _ort.Tensor('float32', dummyInput, [1, n])
-    await session.run({ float_input: tensor })
-    console.log('[VitalNet] ONNX warmup complete — ready for offline triage')
+    const trees = await loadModel()
+    evaluateTrees(trees, new Array(_featureNames.length).fill(0))
+    console.log('[VitalNet] Offline triage warmup complete')
   })()
   try {
     await _warmupPromise
@@ -405,53 +393,81 @@ function buildFeatureMap(formData) {
 }
 
 /**
- * Assemble the ordered Float32Array using the canonical feature order
- * fetched from features_config.json. Throws if loadModel() hasn't been
- * called yet (there is no safe default order to fall back to).
+ * Assemble the ordered plain-number array using the canonical feature order
+ * fetched from features_config.json. Throws if the feature order hasn't loaded.
  */
 function orderFeatureVector(featureMap) {
   if (!_featureNames) {
     throw new Error('Feature order not loaded yet — call loadModel() before running inference')
   }
-  return new Float32Array(_featureNames.map((name) => {
+  return _featureNames.map((name) => {
     const v = featureMap[name]
     return typeof v === 'number' ? v : 0
-  }))
+  })
 }
 
 // ---------------------------------------------------------------------------
-// Inference
+// Inference — layered, mirrors backend/app/ml/classifier.py::predict_triage
 // ---------------------------------------------------------------------------
 
 /**
- * Run triage inference on form data.
- * Returns { triageLevel, confidence, isLocal: true }
+ * Run offline triage on form data. Always returns a result — never throws for
+ * well-formed input, even if the tree model failed to load (rules-only
+ * fallback). Shape:
+ *   { triageLevel, confidence, lowConfidence, isLocal: true,
+ *     safetyNet, news2Floor, modelUnavailable }
  */
 export async function runTriage(formData) {
-  const session = await loadModel()
+  // Layer 1 — deterministic safety net. Works with no model at all.
+  const safetyReason = safetyNetCheck(formData)
+  if (safetyReason) {
+    return {
+      triageLevel: 'EMERGENCY',
+      confidence: 1,
+      lowConfidence: false,
+      isLocal: true,
+      safetyNet: true,
+      news2Floor: false,
+      modelUnavailable: false,
+    }
+  }
 
-  const featureMap = buildFeatureMap(formData)
-  const featureVector = orderFeatureVector(featureMap)
-  const tensor = new _ort.Tensor('float32', featureVector, [1, featureVector.length])
-
-  const results = await session.run({ float_input: tensor })
-
-  // label output: int64 tensor, value is 0/1/2
-  const labelIndex = Number(results.label.data[0])
-  const triageLevel = TRIAGE_LABELS[labelIndex] ?? 'ROUTINE'
-
-  // probabilities: flat array [prob_0, prob_1, prob_2]
+  // Layer 2 — trained tree model (fall back to rules if it can't load).
+  let triageLevel = 'ROUTINE'
   let confidence = null
+  let lowConfidence = false
+  let modelUnavailable = false
+
   try {
-    const probData = results.probabilities.data
-    confidence = probData[labelIndex]
+    const trees = await loadModel()
+    const featureVector = orderFeatureVector(buildFeatureMap(formData))
+    const { classIndex, probabilities } = evaluateTrees(trees, featureVector)
+    triageLevel = TRIAGE_LABELS[classIndex] ?? 'ROUTINE'
+    confidence = probabilities[classIndex]
+    const sorted = [...probabilities].sort((a, b) => b - a)
+    const margin = sorted.length > 1 ? sorted[0] - sorted[1] : 1
+    lowConfidence = confidence < LOW_CONFIDENCE_PROBA || margin < LOW_CONFIDENCE_MARGIN
   } catch {
-    // non-critical — confidence display is optional
+    // Model unavailable — rules-only fallback. Never fail to triage.
+    modelUnavailable = true
+    triageLevel = 'ROUTINE'
+  }
+
+  // Layer 3 — NEWS2 concerning-vital floor: never leave a concerning vital as ROUTINE.
+  let news2Floor = false
+  if (triageLevel === 'ROUTINE' && news2ConcerningVital(formData)) {
+    triageLevel = 'URGENT'
+    lowConfidence = false
+    news2Floor = true
   }
 
   return {
     triageLevel,
     confidence,
-    isLocal: true, // flags this as a preliminary local result
+    lowConfidence,
+    isLocal: true,
+    safetyNet: false,
+    news2Floor,
+    modelUnavailable,
   }
 }
