@@ -322,6 +322,23 @@ checked, purged }`.
 
 ---
 
+## Voice transcription (`app/api/routes/voice_routes.py`, prefix `/api/voice`)
+
+### `POST /transcribe` — 20/min — `asha_worker`, `doctor`, `admin`
+Server-side transcription (Groq Whisper `whisper-large-v3`) — the accuracy
+layer behind `useVoiceInput.js`'s primary voice path, with the browser's
+own `SpeechRecognition` as fallback (`docs/DECISIONS.md` §15).
+**Multipart body**: `file` (audio, ≤10 MB, one of
+`audio/webm|wav|wave|x-wav|mp4|mpeg|ogg|m4a|x-m4a` — codec suffixes like
+`;codecs=opus` are stripped before matching). **Query param**: `language`
+(optional, `en`/`hi`/`ta` — anything else is ignored, letting Whisper
+auto-detect). **Response**: `{ transcript }`. `415` on an unsupported
+content type, `413` over the size cap, `503` if `GROQ_API_KEY` isn't
+configured. No audio is persisted — transcribed and discarded within the
+request.
+
+---
+
 ## Security (`app/api/routes/security.py`, prefix `/api/security`)
 
 ### `DELETE /cases/{case_id}` — 30/min

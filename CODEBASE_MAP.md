@@ -236,14 +236,18 @@ backend/
 │   │   │                             /api/cases/{id}/refer, GET /api/referrals,
 │   │   │                             PATCH /api/referrals/{id}/status (forward-only
 │   │   │                             state machine, receiving-facility-only).
-│   │   └── dsr_routes.py             DPDP data-subject-request lifecycle
-│   │                                 (docs/COMPLIANCE_DPDP.md), admin-only, scoped
-│   │                                 to a single case_id: GET .../export (right to
-│   │                                 access), POST .../erase (right to erasure —
-│   │                                 redacts identifying fields, never touches the
-│   │                                 immutable case_outcomes table), POST
-│   │                                 .../purge-expired (retention sweep, external-
-│   │                                 scheduler-driven like the re-alert endpoint).
+│   │   ├── dsr_routes.py             DPDP data-subject-request lifecycle
+│   │   │                             (docs/COMPLIANCE_DPDP.md), admin-only, scoped
+│   │   │                             to a single case_id: GET .../export (right to
+│   │   │                             access), POST .../erase (right to erasure —
+│   │   │                             redacts identifying fields, never touches the
+│   │   │                             immutable case_outcomes table), POST
+│   │   │                             .../purge-expired (retention sweep, external-
+│   │   │                             scheduler-driven like the re-alert endpoint).
+│   │   └── voice_routes.py           POST /api/voice/transcribe — Groq Whisper voice
+│   │                                 transcription (app/services/voice.py). Online-only,
+│   │                                 no audio persisted; the browser-STT path is the
+│   │                                 fallback, not this (docs/DECISIONS.md §15).
 │   ├── models/schemas.py            Pydantic request/response models. IntakeForm is
 │   │                                 the case-submission contract — every field is
 │   │                                 bounded (min/max length, numeric ranges, enums),
@@ -291,11 +295,15 @@ backend/
 │   │   │                             cases.py. No-ops silently if VAPID keys aren't
 │   │   │                             configured. Deletes a subscription on a 410-Gone
 │   │   │                             send response (stale subscription cleanup).
-│   │   └── sms.py                    SMS fallback SCAFFOLDING ONLY (FEATURES_ROADMAP
-│   │                                  §3.1) — SmsGateway protocol, NullSmsGateway
-│   │                                  (logs instead of sending), parse_inbound_sms()
-│   │                                  strict-format parser. No live webhook endpoint —
-│   │                                  see docs/DECISIONS.md §11.
+│   │   ├── sms.py                    SMS fallback SCAFFOLDING ONLY (FEATURES_ROADMAP
+│   │   │                             §3.1) — SmsGateway protocol, NullSmsGateway
+│   │   │                             (logs instead of sending), parse_inbound_sms()
+│   │   │                             strict-format parser. No live webhook endpoint —
+│   │   │                             see docs/DECISIONS.md §11.
+│   │   └── voice.py                  Groq Whisper transcription (transcribe()) behind
+│   │                                 voice_routes.py. i18n language codes map directly
+│   │                                 onto Whisper's ISO-639-1 codes. Audio is transcribed
+│   │                                 and discarded, never persisted (docs/DECISIONS.md §15).
 │   └── __init__.py files (package markers, no logic)
 ├── scripts/
 │   ├── train_classifier.py          THE training entrypoint (single unified model —
@@ -350,6 +358,10 @@ backend/
 │   │                                 functions — redaction field coverage, deleted_at
 │   │                                 idempotency, and that case_outcomes is never
 │   │                                 written (immutable-by-design invariant).
+│   ├── test_voice_transcription.py   Unit tests for app/services/voice.py — not-
+│   │                                 configured error, language-code pass-through/
+│   │                                 fallback-to-None, Groq-failure wrapping. Uses
+│   │                                 asyncio.run() directly (no pytest-asyncio dep).
 │   └── test_e2e.py                   Full integration test against a running server +
 │                                     real Supabase auth (needs seeded test users).
 │                                     NOT run in unit CI (needs a live server).
@@ -466,8 +478,10 @@ frontend/src/
 ├── stores/syncStore.js        submitCase() (online+offline paths) and processQueue()
 │                              (drains the offline queue with a paced delay to stay
 │                              under the backend rate limit).
-├── api/{auth,cases,admin,analytics,referrals}.js
+├── api/{auth,cases,admin,analytics,referrals,voice}.js
 │                              Stateless fetch wrappers per domain, all via authHeaders().
+│                              voice.js strips Content-Type from authHeaders() before a
+│                              multipart upload so fetch can set its own boundary.
 ├── hooks/
 │   ├── useLocalTriage.js      Wires up offline-model warmup (triggered on offline/
 │   │                          unreachable events) and classify().
@@ -478,9 +492,15 @@ frontend/src/
 │   ├── useRealtimeReferrals.js Same pattern, but binds TWO postgres_changes filters
 │   │                          (referring_facility_id / receiving_facility_id) since a
 │   │                          facility can be on either side of a referral.
-│   └── useVoiceInput.js       Wraps the browser Web Speech API (SpeechRecognition).
-│                              Gated on BOTH feature support and navigator.onLine — Chrome's
-│                              engine calls a Google speech API and silently fails offline.
+│   └── useVoiceInput.js       Voice-to-text — tries server-side Groq Whisper
+│                              (MediaRecorder + POST /api/voice/transcribe, the
+│                              accuracy layer for Indic medical speech) first, falls
+│                              back to the browser's own SpeechRecognition only if
+│                              MediaRecorder/mic access is unavailable or the server
+│                              call fails. BOTH paths need connectivity — the browser
+│                              engine also calls a network speech API — so availability
+│                              is still gated on navigator.onLine either way
+│                              (docs/DECISIONS.md §15).
 ├── utils/
 │   ├── triageClassifier.js    Offline triage orchestrator (NO onnxruntime). Loads
 │   │                          /models/triage_trees.json + features_config.json;

@@ -25,3 +25,6 @@ slowapi==0.1.9
 json-repair==0.36.0
 python-json-logger==4.1.0
 pywebpush==2.3.0
+# Required by FastAPI/Starlette to parse multipart/form-data — used by
+# POST /api/voice/transcribe's audio file upload (app/services/voice.py).
+python-multipart==0.0.32

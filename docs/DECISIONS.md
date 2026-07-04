@@ -302,3 +302,38 @@ receipt is tracked). It is deliberately separate from both the Web Push
 re-alert (online-only) and the Tier-3 SMS-inbound scaffolding
 (`app/services/sms.py`, ASHA→backend submission direction) — three
 different features that happen to share the same underlying transport.
+
+### 15. Server-side Whisper transcription is the primary voice path; browser STT is the fallback
+
+**Context**: VitalNet's original design intent was that the browser's
+built-in speech recognizer would be a UX-layer convenience only (fast
+waveform-style feedback) while a real Whisper-class model did the actual
+clinical transcription — browser recognizer accuracy on Indic medical
+speech was judged insufficient to be the transcript of record. The first
+build of voice-to-text (`docs/DECISIONS.md`, Tier 2 §2.2) shipped with only
+the browser path, because it was the faster ship-first option; this was a
+deliberate scope cut at the time, not a reversal of the original intent.
+
+**Decision**: `useVoiceInput.js` now tries `MediaRecorder` +
+`POST /api/voice/transcribe` (`app/services/voice.py`, Groq
+`whisper-large-v3`, reusing the already-configured `GROQ_API_KEY` — no new
+credential) first, and falls back to the browser's
+`SpeechRecognition`/`webkitSpeechRecognition` only if `MediaRecorder`/mic
+access isn't available, or if the server call itself fails (misconfigured
+key, Groq outage). No audio is persisted server-side — it's transcribed
+and discarded in the same request.
+
+**A nuance worth stating plainly**: the browser fallback is *not* a true
+offline path either — Chrome's `SpeechRecognition` routes audio through a
+Google speech service over the network, same as the server path. Both
+transcription paths require connectivity; `useVoiceInput.js` gates on
+`navigator.onLine` either way. What changed is which *online* path is
+primary — Whisper for accuracy, browser recognizer as a same-cost fallback
+rather than the primary — not an offline/online split.
+
+**Consequences**: Firefox (no `SpeechRecognition`) now gets voice input for
+the first time via the server path, since availability no longer requires
+`SpeechRecognition` support specifically. If `GROQ_API_KEY` is unset in a
+deployment, the endpoint returns `503` and the hook silently falls back to
+the browser path on browsers that support it, or surfaces the existing
+`unsupported`/`failed` error state on ones that don't.
