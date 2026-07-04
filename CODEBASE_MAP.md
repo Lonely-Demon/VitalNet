@@ -8,8 +8,9 @@ this document in the same commit**. Stale maps are worse than no map —
 see the "Keeping this document current" section at the bottom for the
 specific rule.
 
-Last verified against the codebase: 2026-07-03 (post security/ML audit —
-see git log around this date for the full change list).
+Last verified against the codebase: 2026-07-04 (post round-2 enterprise
+hardening — hybrid auth, pure-JS offline engine, ML safety layers — see git
+log for the full change list).
 
 ---
 
@@ -63,11 +64,20 @@ backend/
 │   │                                /api/health. No route logic lives here.
 │   ├── core/
 │   │   ├── config.py                Pydantic Settings — all env vars, fails fast at
-│   │   │                            import if required vars are missing.
-│   │   ├── auth.py                  get_current_user() (validates JWT via Supabase's
-│   │   │                            get_user() — network call, supports instant
-│   │   │                            revocation + ES256) and require_role(*roles)
-│   │   │                            dependency factory.
+│   │   │                            import if required vars are missing. Round-2
+│   │   │                            adds: jwt_local_verification, revocation_
+│   │   │                            recheck_seconds, rate_limit_storage_uri,
+│   │   │                            security_headers_hsts.
+│   │   ├── auth.py                  HYBRID JWT verification: verifies signature/
+│   │   │                            exp/aud LOCALLY (HS256 via jwt_secret) on the
+│   │   │                            hot path — no Supabase round-trip per request —
+│   │   │                            with a network get_user() fallback for
+│   │   │                            asymmetric-key projects. Short-TTL is_active/
+│   │   │                            revocation re-check cuts off deactivated users
+│   │   │                            within revocation_recheck_seconds (previously
+│   │   │                            the backend never checked is_active at all).
+│   │   │                            Also exposes verify_sub_for_rate_limit().
+│   │   │                            require_role(*roles) dependency factory.
 │   │   ├── database.py              Three Supabase clients: supabase_anon (public
 │   │   │                            reads), get_supabase_for_user() (RLS-scoped,
 │   │   │                            per-request), supabase_admin (service_role,
@@ -94,19 +104,23 @@ backend/
 │   │                                 If you add a field here, add a matching bound to
 │   │                                 frontend/src/utils/validation.js.
 │   ├── ml/
-│   │   ├── README.md                 Full ML architecture + clinical grounding — READ
-│   │   │                             THIS before touching classifier.py or
-│   │   │                             clinical_features.py.
+│   │   ├── README.md                 ML architecture + clinical grounding — READ
+│   │   │                             before touching classifier.py / clinical_features.py.
+│   │   ├── MODEL_CARD.md              Intended use, metrics (and what they do/don't
+│   │   │                             mean), limitations, ethics — the honest record.
 │   │   ├── classifier.py             Public ML API: load_classifier(), predict_triage()
-│   │   │                             / run_triage(), get_classifier_info(). Loads
-│   │   │                             app/ml/models/triage_classifier.pkl. Runs the
-│   │   │                             deterministic safety-net check BEFORE the trained
-│   │   │                             model — see _safety_net_check().
+│   │   │                             / run_triage(), get_classifier_info(). Three
+│   │   │                             layers per prediction: (1) _safety_net_check →
+│   │   │                             EMERGENCY for extreme vitals/critical symptoms,
+│   │   │                             (2) the trained model, (3) _news2_concerning_vital
+│   │   │                             floor → never ROUTINE on a concerning vital.
+│   │   │                             Also emits a low_confidence abstention flag.
 │   │   ├── clinical_features.py     ClinicalFeatureEngineer — expands ~14 raw intake
 │   │   │                             fields into 45 engineered features. MIRRORED in
-│   │   │                             JS at frontend/src/utils/triageClassifier.js —
-│   │   │                             if you change this file, port the change to JS
-│   │   │                             too and retrain (see below).
+│   │   │                             JS (frontend triageClassifier.js). The safety
+│   │   │                             net + floor are mirrored in JS clinicalRules.js.
+│   │   │                             Change one side → change the other → retrain →
+│   │   │                             `npm run test:parity` (CI-enforced).
 │   │   └── models/triage_classifier.pkl
 │   │                                 The trained model + SHAP explainer bundle.
 │   │                                 Regenerate via scripts/train_classifier.py — never
@@ -121,19 +135,30 @@ backend/
 │   │                                 (_sanitize_field()) to resist prompt injection.
 │   └── __init__.py files (package markers, no logic)
 ├── scripts/
-│   └── train_classifier.py          THE training entrypoint (single unified model —
-│                                     see app/ml/README.md). Outputs
-│                                     app/ml/models/triage_classifier.pkl AND
-│                                     frontend/public/models/{triage_classifier.onnx,
-│                                     features_config.json} from one run.
+│   ├── train_classifier.py          THE training entrypoint (single unified model —
+│   │                                 see app/ml/README.md). One run outputs the
+│   │                                 backend .pkl, frontend triage_trees.json +
+│   │                                 features_config.json, and the golden-vector
+│   │                                 fixture; asserts pkl==onnx==tree-JSON parity;
+│   │                                 reports 5-fold CV + calibration (ECE).
+│   └── tree_export.py                Converts the (in-memory) ONNX tree ensemble to
+│                                     the compact triage_trees.json + a Python
+│                                     reference evaluator used for the parity assert.
 ├── prompts/clinical_system_prompt.txt
 │                                     System prompt for the LLM briefing generator.
 ├── tests/
-│   ├── test_direct.py                Classifier-only tests, no server/DB required —
-│   │                                 fastest feedback loop for ML changes.
+│   ├── conftest.py                   Sets fallback fake (JWT-format) Supabase creds so
+│   │                                 unit tests run offline; real CI secrets win.
+│   ├── test_direct.py                Classifier smoke tests, no server/DB required.
+│   ├── test_classifier_safety.py     Property tests for the safety guarantees (extreme
+│   │                                 vitals → EMERGENCY; concerning vital never ROUTINE;
+│   │                                 low_confidence present). Run in CI.
+│   ├── test_admin_authz.py           Asserts every /api/admin route is require_role
+│   │                                 ('admin')-guarded (the only boundary on the RLS-
+│   │                                 bypassing service-role client). Run in CI.
 │   └── test_e2e.py                   Full integration test against a running server +
-│                                     real Supabase auth (needs seeded test users, see
-│                                     Context/test_credentials.md).
+│                                     real Supabase auth (needs seeded test users).
+│                                     NOT run in unit CI (needs a live server).
 ├── seed_user.py                      One-off script to create/fix a test doctor
 │                                     account. Mutates your Supabase project directly.
 ├── requirements.txt                  Runtime dependencies. scikit-learn and shap are
@@ -196,23 +221,24 @@ frontend/src/
 ├── api/{auth,cases,admin,analytics}.js
 │                              Stateless fetch wrappers per domain, all via authHeaders().
 ├── hooks/
-│   ├── useLocalTriage.js      Wires up ONNX warmup (triggered on offline/unreachable
-│                              events) and classify().
+│   ├── useLocalTriage.js      Wires up offline-model warmup (triggered on offline/
+│                              unreachable events) and classify().
 │   ├── useDraftSave.js        Auto-saves IntakeForm state to IndexedDB keyed by
 │                              client_id (survives tab eviction on low-RAM devices).
 │   └── useRealtimeCases.js    Supabase Realtime subscription wrapper (INSERT/UPDATE),
 │                              used by Dashboard, ASHAPanel history, AnalyticsDashboard.
 ├── utils/
-│   ├── triageClassifier.js    Offline ONNX inference. buildFeatureMap() MIRRORS
-│   │                          backend/app/ml/clinical_features.py — keep them in sync.
-│   │                          Feature ORDER is fetched dynamically from
-│   │                          /models/features_config.json at load time (not
-│   │                          hard-coded) so a backend feature-set change can't
-│   │                          silently desync this file. onnxruntime-web is imported
-│   │                          dynamically (not at module top level) and from the
-│   │                          '/wasm' subpath (not the default WebGPU-inclusive
-│   │                          entry) to keep the initial bundle small — see the
-│   │                          comments at the top of the file for the size rationale.
+│   ├── triageClassifier.js    Offline triage orchestrator (NO onnxruntime). Loads
+│   │                          /models/triage_trees.json + features_config.json;
+│   │                          layered: safetyNetCheck → tree eval → NEWS2 floor →
+│   │                          low_confidence, with a rules-only fallback if the model
+│   │                          can't load (triage never fails). buildFeatureMap()
+│   │                          MIRRORS backend clinical_features.py; feature ORDER is
+│   │                          fetched from features_config.json (never hard-coded).
+│   ├── treeEvaluator.js       ~120-line dependency-free evaluator for the tree JSON —
+│   │                          a 1:1 port of scripts/tree_export.py::evaluate_tree_json.
+│   ├── clinicalRules.js       safetyNetCheck() + news2ConcerningVital() — 1:1 mirror
+│   │                          of the deterministic rules in classifier.py.
 │   └── validation.js          Zod schema — MUST mirror the bounds in
 │                              backend/app/models/schemas.py::IntakeForm.
 ├── pages/
@@ -225,24 +251,28 @@ frontend/src/
 │   │                          (PWA update-available prompt), AnalyticsDashboard.
 │   └── admin/                 AdminUsers, AdminFacilities, AdminStats.
 public/models/
-│   ├── triage_classifier.onnx   Exported by scripts/train_classifier.py
-│   └── features_config.json     Canonical feature-order manifest, ditto
+│   ├── triage_trees.json        Compact tree ensemble (~1 MB), walked in pure JS.
+│   └── features_config.json     Canonical feature-order manifest.
+                                 Both exported by scripts/train_classifier.py.
+tests/
+│   ├── treeParity.test.mjs      `npm run test:parity` — asserts the JS evaluator
+│   │                            matches the server model on golden vectors (CI).
+│   └── fixtures/golden_vectors.json   py-labelled vectors, written by training.
 ```
 
 ### Frontend build-size notes (see FEATURES_ROADMAP.md for more)
 
-- `onnxruntime-web/wasm` subpath (WASM-only, no WebGPU/JSEP) instead of the
-  default `onnxruntime-web` entry: ~12 MB WASM instead of ~25 MB.
-- The onnxruntime-web JS glue is dynamically `import()`-ed inside
-  `loadModel()`, not statically imported — it's excluded from the main
-  bundle for users who never trigger offline/local inference.
+- **No onnxruntime-web at all.** Offline triage runs in pure JS
+  (`treeEvaluator.js`) over `triage_trees.json`. Round 2 deleted the
+  onnxruntime-web dependency and its ~12 MB WASM binary entirely — the single
+  biggest weak-hardware / low-bandwidth win. The compact tree JSON (~1 MB, gzips
+  far smaller) *is* now precached by the service worker (raised
+  `maximumFileSizeToCacheInBytes` in `vite.config.js`), so offline triage is
+  available instantly rather than being a large on-demand fetch that could fail
+  exactly when connectivity drops.
 - Role panels (`ASHAPanel`/`DoctorPanel`/`AdminPanel`) are `React.lazy()`-
   loaded from `App.jsx` — each user downloads only their own role's panel.
-- The PWA service worker still *precaches* the ONNX model + WASM runtime on
-  first visit (via `workbox` `globPatterns` in `vite.config.js`) regardless
-  of role, because an offline-first app cannot fetch a 12 MB model for the
-  first time exactly when connectivity is lost — this is a deliberate
-  tradeoff, not an oversight.
+- Typical initial JS bundle ~380 KB (was ~908 KB pre-audit).
 
 ## 5. Database (Supabase)
 
@@ -268,23 +298,27 @@ fix (Supabase CLI migrations, version-controlled).
   `reviewed_at`, `created_offline`, `client_submitted_at`, `deleted_at`
   (soft delete), `created_at`.
 
-**Role scoping model** (this IS enforced consistently in application code
-as of this audit — see §3's route descriptions): `admin` = global scope
-(sees/manages everything). `doctor` = scoped to their own `facility_id`
-when one is set (dashboard, analytics). `asha_worker` = sees only their own
-submissions (`submitted_by = self`, also enforced by RLS).
+**Role scoping model** (enforced consistently in application code — see §3's
+route descriptions): `admin` = global scope (sees/manages everything). `doctor`
+= scoped to their own `facility_id` when one is set (dashboard, analytics, AND —
+since round 2 — the single-case detail/review endpoints, closing an IDOR).
+`asha_worker` = sees only their own submissions (`submitted_by = self`, also
+enforced by RLS).
 
 ## 6. Auth model
 
-Supabase Auth issues JWTs with `user_metadata`/`app_metadata` claims
-including `role` and `facility_id`. Backend validates every request via
-`get_current_user()` (`app/core/auth.py`), which calls Supabase's
-`auth.get_user(token)` — a network round-trip, but it gets you instant
-token revocation and ES256 signature support for free, which local-only JWT
-verification would not provide. This is a deliberate latency-for-correctness
-tradeoff; see `FEATURES_ROADMAP.md` if you want to explore a cached/hybrid
-approach. `require_role(*roles)` is a FastAPI dependency factory checking
-the decoded role against an allow-list, returning 403 otherwise.
+Supabase Auth issues JWTs with `user_metadata`/`app_metadata` claims including
+`role` and `facility_id`. `get_current_user()` (`app/core/auth.py`) uses HYBRID
+verification: it verifies the signature/exp/aud LOCALLY (HS256 via
+`supabase_jwt_secret`) on the hot path — no Supabase round-trip per request —
+and falls back to a network `get_user()` only when local verification can't
+apply (asymmetric-key projects). It additionally re-checks `profiles.is_active`
+per user on a short TTL (`revocation_recheck_seconds`, default 300s), so a
+deactivated user is cut off within that window rather than working until token
+expiry (~1h) — the backend previously never checked is_active at all.
+`require_role(*roles)` is a dependency factory checking the decoded role against
+an allow-list, 403 otherwise. Rate-limit keys use the *verified* sub
+(`verify_sub_for_rate_limit`), so a forged token can't burn a victim's budget.
 
 ## 7. What NOT to change without strong reason
 
@@ -294,13 +328,18 @@ the decoded role against an allow-list, returning 403 otherwise.
 - `briefing["triage_level"] = triage_result["triage_level"]` in
   `llm.py::_enforce_schema` — the life-safety guarantee that no LLM output
   can override the ML classifier's triage decision.
-- The safety-net override in `classifier.py::_safety_net_check` — a
-  deterministic backstop independent of the trained model; don't remove it
-  to "simplify," it's the guarantee against ML error on unambiguous cases.
+- The three deterministic layers in `classifier.py` — `_safety_net_check`
+  (→ EMERGENCY) and the `_news2_concerning_vital` floor (→ never ROUTINE) — and
+  their exact JS mirrors in `clinicalRules.js`. Independent backstops against ML
+  error on unambiguous/concerning cases; don't remove to "simplify."
+- `require_role('admin')` on every `/api/admin` route — the ONLY access-control
+  boundary on the RLS-bypassing service-role client (test_admin_authz enforces).
 - `client_id` as the upsert idempotency key in `cases.py::submit_case` —
   what makes offline-queue retry-safe without creating duplicate cases.
-- The backend `.pkl` and frontend `.onnx` must always be regenerated
-  together from the same `train_classifier.py` run — never independently.
+- The backend `.pkl`, the frontend `triage_trees.json`, `features_config.json`,
+  and `golden_vectors.json` must always be regenerated together from the same
+  `train_classifier.py` run — never independently. The `npm run test:parity` CI
+  check fails if the JS offline path desyncs from the server model.
 
 ## 8. Keeping this document current
 

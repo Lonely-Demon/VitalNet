@@ -167,9 +167,10 @@ periodic — not real-time — retraining job).
      real signal dominates as volume grows but the model doesn't overfit
      to a small early sample.
    - Retrains via the same `HistGradientBoostingClassifier` pipeline,
-     produces a candidate `.pkl`/`.onnx`, and — critically — runs the
-     candidate against the full existing test suite
-     (`tests/test_direct.py` plus a regression check against the last N
+     produces candidate artifacts (`.pkl` + `triage_trees.json`), and —
+     critically — runs the candidate against the full existing test suite
+     (`tests/test_direct.py`, `tests/test_classifier_safety.py`, the JS
+     parity test, plus a regression check against the last N
      production `case_outcomes`) before it's eligible for deployment. A
      human (not a cron job) reviews the accuracy/recall diff and decides
      whether to promote the candidate.
@@ -311,7 +312,7 @@ triage context.
    API, e.g. `"chest_pain"`) as stable English identifiers — only the
    *displayed labels* are translated; the wire format and ML feature names
    never change. This keeps the backend, `ClinicalFeatureEngineer`, and
-   the ONNX model completely untouched by this feature.
+   the triage model completely untouched by this feature.
 5. `document.documentElement.lang` should update with the selected
    language for accessibility/screen-reader correctness.
 
@@ -486,6 +487,110 @@ something like 1024px max dimension, JPEG quality ~0.6, before enqueueing),
 a new `case_attachments` table + Supabase Storage bucket with RLS matching
 `case_records` access rules, and a queued-upload path in `syncStore.js`
 parallel to the existing case-submission queue.
+
+---
+
+## Tier 1b — Round-2 additions (specs; not yet built)
+
+These emerged from the second hardening pass. They are documented as
+ready-to-execute specs (per the decision to keep new features as specs this
+round). 1b.1 is the highest-value follow-on to the round-2 ML work.
+
+### 1b.1 Doctor triage-override + reason capture (unlocks real-label collection)
+
+**Why**: Round 2 added a `low_confidence` abstention flag and a deterministic
+NEWS2 floor, but the model still has no way to learn from a doctor disagreeing
+with its triage. Letting a reviewing doctor override the ML triage and record a
+one-line reason is the single smallest change that starts accumulating real,
+expert-labelled disagreement data — the exact input the outcome-retraining loop
+(§1.3) needs. It also improves day-to-day trust: a doctor who can correct the
+tool uses it more readily than one who cannot.
+
+**Effort**: Small.
+
+**Implementation**:
+1. Schema (migration, see §1.1): add nullable columns to `case_records`:
+   `overridden_triage` (text, one of the tiers), `override_reason` (text,
+   bounded), `overridden_by` (fk user), `overridden_at` (timestamptz). Nullable
+   so existing rows are unaffected. Also add the round-2 `triage_low_confidence`
+   boolean column here (see 1b.5) so the doctor UI can show the flag the backend
+   already computes.
+2. Backend: `PATCH /api/cases/{case_id}/triage-override` in `cases.py`,
+   `require_role('doctor', 'admin')`, same facility-scoping as `review_case`,
+   rate-limited. A new `TriageOverride` Pydantic model validates the tier enum
+   and reason length. Persist via the user-scoped client (RLS).
+3. Frontend: an "Override triage" control on `BriefingCard.jsx` (tier dropdown
+   pre-filled with the ML triage, reason textarea) posting via a new
+   `overrideTriage()` wrapper in `api/cases.js`. Show the overridden tier with a
+   visible "adjusted by Dr. X" marker so the provenance is never hidden.
+4. This is the data source `retrain_from_outcomes.py` (§1.3) reads — the two
+   specs are designed to compose.
+
+### 1b.2 Unreviewed-EMERGENCY deterioration re-alert
+
+**Why**: An EMERGENCY case that sits unreviewed past a threshold is the exact
+failure the tool exists to prevent. §1.5 surfaces this as a dashboard metric;
+this turns it into an active escalation.
+
+**Implementation** (pairs with the §1.4 push spec):
+1. A periodic backend job (or a Supabase scheduled function) scans for
+   `triage_level = 'EMERGENCY' AND reviewed_at IS NULL AND created_at < now() -
+   interval '15 min'`.
+2. For each, re-emit a push (§1.4) to the facility's doctors, escalating to a
+   wider on-call list on a second threshold. Record `last_escalated_at` to avoid
+   duplicate spam.
+3. No new user-facing surface required beyond the existing dashboard + push.
+
+### 1b.3 Case CSV / PDF export for facility reporting
+
+**Why**: PHC/district administrators must submit periodic reports up the
+health-system chain. Today that means manual re-entry from the dashboard. A
+scoped export is low-effort and removes a real recurring chore.
+
+**Implementation**:
+1. Backend: `GET /api/analytics/export?from=&to=&format=csv|pdf`
+   (`require_role('doctor', 'admin')`, facility-scoped, rate-limited). CSV via
+   the stdlib `csv` module streamed as a response; PDF via a lightweight server-
+   side generator (e.g. `reportlab`) — keep columns to non-identifying
+   aggregates unless an explicit, separately-authorised "line list" scope is
+   requested (patient-level export is a data-governance decision — gate it).
+2. Frontend: an "Export" control on the analytics view with a date range and
+   format toggle, calling a new `exportCases()` wrapper.
+3. Governance: document who may export line-level (patient) data vs aggregates,
+   and log every export via the §2.4 audit log.
+
+### 1b.4 Bulk ASHA onboarding via CSV
+
+**Why**: Standing up a new facility means creating many ASHA accounts. The admin
+UI creates them one at a time. A CSV import makes facility rollout practical.
+
+**Implementation**:
+1. Backend: `POST /api/admin/users/bulk` (`require_role('admin')`, stricter rate
+   limit) accepting a validated list (reuse `CreateUserRequest` per row, cap the
+   batch size, and return a per-row success/error report rather than failing the
+   whole batch on one bad row). Reuse the existing `create_user` logic per row.
+2. Frontend: a CSV upload + preview/validate step in `AdminUsers.jsx` before
+   committing, showing which rows will succeed/fail.
+3. Security: enforce the same 12-char password policy per row; never echo
+   passwords back in the result report.
+
+### 1b.5 Model-version display + per-case model provenance
+
+**Why**: Once the model retrains from real outcomes (§1.3), different cases will
+have been triaged by different model versions. A doctor auditing an old case, or
+an admin investigating a mis-triage, needs to know *which* model produced it.
+The backend already returns `model_version` from `predict_triage`; it just isn't
+persisted or shown.
+
+**Implementation**:
+1. Schema: add `triage_model_version` (text) and `triage_low_confidence`
+   (boolean) columns to `case_records` (the latter shared with 1b.1). Populate
+   them in `cases.py::submit_case` from the `run_triage` result.
+2. Frontend: show the model version + the low-confidence flag as small metadata
+   on `BriefingCard.jsx`. Show the current loaded model version in the admin
+   System tab (it's already in `/api/health`).
+3. This closes the loop with the audit/traceability posture and is a
+   prerequisite for trustworthy A/B comparison of model versions.
 
 ---
 

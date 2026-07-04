@@ -18,7 +18,7 @@ Always operate within a virtual environment (`python -m venv venv && source venv
 - **Linting**: `cd backend && ruff check .`
 - **Formatting**: `cd backend && ruff format .`
 - **Regenerate ML Models**: `cd backend && pip install -r requirements-train.txt && python scripts/train_classifier.py`
-  (regenerates `app/ml/models/triage_classifier.pkl`, `frontend/public/models/triage_classifier.onnx`, and `frontend/public/models/features_config.json` from ONE training run — the backend .pkl and the offline .onnx must always come from the same run so online/offline triage never disagree)
+  (regenerates `app/ml/models/triage_classifier.pkl` (backend), `frontend/public/models/triage_trees.json` + `features_config.json` (offline, pure-JS — no ONNX runtime), and `frontend/tests/fixtures/golden_vectors.json` from ONE training run so online/offline triage can never disagree. After changing `clinical_features.py`, mirror it in `frontend/src/utils/triageClassifier.js` and run `cd frontend && npm run test:parity`.)
 
 ### Frontend (React/Vite)
 - **Install Dependencies**: `cd frontend && npm install`
@@ -67,7 +67,7 @@ The backend currently uses standalone Python scripts under `backend/tests/` for 
 - **Machine Learning Constraints**:
   - **CRITICAL**: `scikit-learn` is pinned to an *exact* version (`==1.9.0`) in `requirements.txt`, not `>=`. A trained `.pkl` only reliably unpickles with the scikit-learn version that trained it — a prior unpinned `>=` constraint let a newer scikit-learn install that broke loading the committed model with `ModuleNotFoundError: No module named '_loss'`, a live startup-crashing bug. If you bump the scikit-learn version, you MUST re-run `scripts/train_classifier.py` and commit the regenerated `.pkl`/`.onnx`/`features_config.json` in the same change.
   - `shap==0.51.0` is also pinned — do not downgrade to 0.46.0 (source build fails on Windows+Python 3.13) or upgrade past 0.51.x without re-verifying the SHAP round-trip on `triage_classifier.pkl`.
-  - Never hand-edit `backend/app/ml/models/*.pkl` directly. Use `cd backend && python scripts/train_classifier.py` to regenerate — it is the single source of truth for both the backend `.pkl` and the frontend `.onnx`/`features_config.json`, produced from one training run so online and offline triage can never disagree. See `backend/app/ml/README.md` for the full architecture.
+  - Never hand-edit `backend/app/ml/models/*.pkl` directly. Use `cd backend && python scripts/train_classifier.py` to regenerate — it is the single source of truth for the backend `.pkl` and the frontend `triage_trees.json`/`features_config.json` (offline triage runs in pure JS via `frontend/src/utils/treeEvaluator.js`; there is no onnxruntime dependency). See `backend/app/ml/README.md` and `backend/app/ml/MODEL_CARD.md`.
 
 ### 2. JavaScript/React (Frontend)
 - **File Extensions**: Use `.jsx` for React components and `.js` for utility functions/stores.

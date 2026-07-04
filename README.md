@@ -17,9 +17,12 @@ For the proposed feature roadmap with implementation-ready specs, see
 - **Local + Offline ML Triage**: A single `HistGradientBoostingClassifier`
   (trained on 45 engineered clinical features) predicts urgency
   (EMERGENCY/URGENT/ROUTINE). It runs server-side (Python) for online
-  submissions and client-side (ONNX via `onnxruntime-web`, WASM) for offline
-  submissions — the **same trained model** in both places, so online and
-  offline triage never disagree.
+  submissions and client-side for offline submissions — as a compact tree
+  JSON walked by a **dependency-free pure-JS evaluator** (no onnxruntime/WASM),
+  which keeps the offline model ~1 MB instead of a ~12 MB WASM runtime, so it
+  runs comfortably on 2 GB-class devices over metered rural links. The **same
+  trained model** runs in both places (golden-vector parity test enforced), so
+  online and offline triage never disagree.
 - **Deterministic safety-net escalation**: Independent of the trained
   model's own prediction, an explicit rule set force-escalates unambiguous
   critical presentations (e.g. SpO2 < 85%, extreme vitals, altered
