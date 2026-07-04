@@ -2,6 +2,7 @@
  * admin.js — Stateless API wrappers for all admin endpoints.
  */
 import { authHeaders } from '@/api/auth'
+import { getWithRetry } from '@/api/retry'
 
 const BASE = import.meta.env.VITE_API_BASE_URL
 
@@ -9,7 +10,7 @@ const BASE = import.meta.env.VITE_API_BASE_URL
 
 export async function adminListUsers() {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/admin/users`, { headers })
+  const res = await getWithRetry(`${BASE}/api/admin/users`, headers)
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
@@ -54,7 +55,7 @@ export async function adminReactivateUser(userId) {
 
 export async function adminListFacilities() {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/admin/facilities`, { headers })
+  const res = await getWithRetry(`${BASE}/api/admin/facilities`, headers)
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
@@ -81,7 +82,7 @@ export async function adminToggleFacility(facilityId) {
 
 export async function adminGetStats() {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/admin/stats`, { headers })
+  const res = await getWithRetry(`${BASE}/api/admin/stats`, headers)
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }

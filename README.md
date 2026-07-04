@@ -79,9 +79,10 @@ See [CODEBASE_MAP.md](./CODEBASE_MAP.md) for the full file-by-file map.
   also works for local development)
 - **Node.js** (v20+ recommended)
 - **A Supabase project** (PostgreSQL + Auth + Realtime) — VitalNet has no
-  other database backend. Create tables `profiles`, `facilities`,
-  `case_records` per your Supabase project setup, and run
-  `database/phase10_realtime_setup.sql` to enable Realtime on `case_records`.
+  other database backend. Run the migrations in
+  `backend/supabase/migrations/` (in order) against your Supabase project's
+  SQL editor to create/harden `profiles`, `facilities`, `case_records`,
+  `case_reviews`, `phi_audit_log`, and enable Realtime on `case_records`.
 - **Groq API Key** (required — primary LLM tier)
 - **Gemini API Key** (optional — tiers 3/4 fallback; app starts and runs
   fine without it, briefings just have fewer fallback tiers)
@@ -196,9 +197,9 @@ specifics. Key points for anyone extending the API:
 - Free-text fields reaching the LLM prompt are sanitised
   (`app/services/llm.py::_sanitize_field`) — never interpolate raw
   user input into a prompt without it.
-- RLS policies live in the Supabase project itself and are **not fully
-  version-controlled in this repo** (only `database/phase10_realtime_setup.sql`
-  is checked in) — this is a known gap, see `FEATURES_ROADMAP.md`.
+- RLS policies are version-controlled in `backend/supabase/migrations/`
+  (`phase15_data_security_hardening.sql` and later) and must be re-applied to
+  the live Supabase project's SQL editor when they change.
 
 ---
 

@@ -63,6 +63,13 @@ export default function BriefingCard({ caseData, onReviewed }) {
           <p className="text-xs text-text3 mt-1 font-mono">
             {timeStr}
           </p>
+          {(caseData.needs_review || caseData.low_confidence || caseData.human_review_requested) && (
+            <p className="text-xs text-urgent font-bold mt-1">
+              {caseData.human_review_requested
+                ? '⚑ Review requested by submitter'
+                : '⚠ Model uncertain — clinician review recommended'}
+            </p>
+          )}
         </div>
         <span className="text-text3 ml-2">{expanded ? "▲" : "▼"}</span>
       </div>
@@ -118,6 +125,12 @@ export default function BriefingCard({ caseData, onReviewed }) {
           <BriefingSection title="Uncertainty Flags">
             <p className="text-sm text-urgent">{b.uncertainty_flags}</p>
           </BriefingSection>
+
+          {caseData.human_review_requested && caseData.human_review_reason && (
+            <BriefingSection title="Review Requested By Submitter">
+              <p className="text-sm text-text2">{caseData.human_review_reason}</p>
+            </BriefingSection>
+          )}
 
           {/* Disclaimer — non-removable */}
           <div className="bg-surface2 border border-leaf/40 rounded-lg p-3 mt-2 shadow-card">

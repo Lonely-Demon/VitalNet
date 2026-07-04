@@ -1,33 +1,36 @@
 # VitalNet Test Credentials
 
-> [!CAUTION]
-> **These are throwaway TEST credentials, committed to the repository in plaintext.**
-> They must **never** exist in a production Supabase project. Anyone with repo
-> access can read these passwords. Before any production deployment: (1) ensure
-> the production project has none of these accounts, (2) use a separate Supabase
-> project for testing, and (3) rotate immediately if these ever were used
-> against a project that also holds real patient data.
+> [!WARNING]
+> **SECURITY**: Never commit real or plaintext passwords to this repository —
+> not even for throwaway test accounts, since anyone with repo access (now or
+> in the git history, forever) can read them. Set actual passwords via the
+> Supabase Admin Panel (Authentication > Users) or a secure secret manager
+> (1Password, Supabase Vault), and reference them here only by account pattern.
 
-Use these accounts to test role-based routing and permissions in a **dedicated
-test** Supabase project only.
+Use these account patterns to test role-based routing and permissions in a
+**dedicated test** Supabase project only — never in a project that also holds
+real patient data.
 
 ## ASHA Worker
 - **Email**: `asha@test.vitalnet`
-- **Password**: `TestASHA2026!`
+- **Password**: `[SET_VIA_SUPABASE_ADMIN]`
 - **Role**: `asha_worker`
 - **View**: Intake Form
 
 ## Doctor
 - **Email**: `doctor@test.vitalnet`
-- **Password**: `TestDoctor2026!`
+- **Password**: `[SET_VIA_SUPABASE_ADMIN]`
 - **Role**: `doctor`
 - **View**: Dashboard
 
 ## Administrator
 - **Email**: `admin@test.vitalnet`
-- **Password**: `TestAdmin2026!`
+- **Password**: `[SET_VIA_SUPABASE_ADMIN]`
 - **Role**: `admin`
 - **View**: Dashboard (Global access)
 
 > [!IMPORTANT]
-> These accounts are for testing only. Ensure that a similar pattern is used if re-creating users in the Supabase dashboard.
+> Passwords must meet the backend's policy (`CreateUserRequest` in
+> `backend/app/api/routes/admin_routes.py`): 12–128 characters. Set them
+> directly in the Supabase Admin Panel, never in plaintext documentation or
+> commit history.

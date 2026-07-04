@@ -12,7 +12,7 @@ export function useLocalTriage() {
     warmupModel()
       .then(() => setModelReady(true))
       .catch((err) => {
-        console.warn('[VitalNet] ONNX warmup failed:', err)
+        console.warn('[VitalNet] Offline triage model warmup failed:', err)
         setModelError(err.message)
         // Non-fatal — form still works, local triage just unavailable
       })

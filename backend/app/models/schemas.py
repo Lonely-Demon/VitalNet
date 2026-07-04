@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Literal
 from datetime import datetime
 import uuid
@@ -40,6 +40,29 @@ class IntakeForm(BaseModel):
     client_submitted_at: Optional[datetime] = None
     created_offline: bool = False   # True when submitted via offline queue sync
 
+    # Lets the submitting ASHA worker flag a case for human (doctor) review
+    # with a reason, independent of what tier the classifier assigned.
+    human_review_requested: bool = False
+    human_review_reason: Optional[str] = Field(None, max_length=500)
+
+    # Patient (or guardian) consent to data collection and AI-assisted triage.
+    # Enforced server-side, not just as a frontend UX gate.
+    consent_captured: bool = False
+    consent_captured_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def _validate_bp_pair(self):
+        if self.bp_systolic is not None and self.bp_diastolic is not None:
+            if self.bp_diastolic >= self.bp_systolic:
+                raise ValueError("Diastolic BP must be lower than systolic BP")
+        return self
+
+    @model_validator(mode="after")
+    def _require_consent(self):
+        if not self.consent_captured:
+            raise ValueError("Patient consent is required before submission")
+        return self
+
     @field_validator("symptoms")
     @classmethod
     def _validate_symptoms(cls, v: List[str]) -> List[str]:
@@ -51,7 +74,7 @@ class IntakeForm(BaseModel):
     @field_validator(
         "chief_complaint", "complaint_duration", "location",
         "observations", "known_conditions", "current_medications",
-        "patient_name",
+        "patient_name", "human_review_reason",
     )
     @classmethod
     def _strip_control_chars(cls, v: Optional[str]) -> Optional[str]:
@@ -72,3 +95,5 @@ class BriefingOutput(BaseModel):
     recommended_tests: List[str]
     uncertainty_flags: str
     disclaimer: str
+    llm_status: str = "generated"
+    needs_review: bool = False

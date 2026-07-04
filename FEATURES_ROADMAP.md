@@ -15,9 +15,21 @@ product decision before implementation starts.
 
 ## Tier 1 — Do first
 
-### 1.1 Version-controlled Supabase migrations + RLS policies
+### 1.1 Version-controlled Supabase migrations + RLS policies — ✅ DONE
 
-**Why**: The audit that produced this roadmap found that VitalNet's entire
+**Status**: Implemented in the round-3 reconciliation. Migrations now live
+in `backend/supabase/migrations/` (`phase10_realtime_setup.sql`,
+`phase15_data_security_hardening.sql`, `phase16_llm_review_fields.sql`) —
+idempotent, hand-written SQL covering schema constraints, indexes, the
+`case_reviews` and `phi_audit_log` tables, consent-capture columns, and the
+actual RLS policies (documented in `CODEBASE_MAP.md` §5). Steps 1-2 and 5-8
+below (Supabase CLI linking, `supabase db pull` reconciliation workflow, CI
+lint job) are not yet done — the migrations are hand-written and applied
+manually via the SQL editor rather than through the CLI push/pull workflow.
+That remains a reasonable follow-up but the core structural gap (schema/RLS
+unauditable from the repo) is closed.
+
+**Why (original)**: The audit that produced this roadmap found that VitalNet's entire
 database schema and every Row Level Security policy exist only inside the
 live Supabase project — `database/` contains exactly one SQL file
 (Realtime setup). This means: no code review ever happens on an RLS policy

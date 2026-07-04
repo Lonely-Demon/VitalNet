@@ -70,6 +70,9 @@ const emptyForm = {
   observations: "",
   known_conditions: "",
   current_medications: "",
+  human_review_requested: false,
+  human_review_reason: "",
+  consent_captured: false,
 }
 
 export default function IntakeForm() {
@@ -132,11 +135,19 @@ export default function IntakeForm() {
     }))
   }
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (e) => {
+    if (e?.preventDefault) e.preventDefault()
     setError(null)
     setFieldErrors({})
     setLocalResult(null)
     setLoading(true)
+
+    if (!form.consent_captured) {
+      setError("Patient consent is required before submitting case data.")
+      setFieldErrors({ consent_captured: "Please confirm patient consent" })
+      setLoading(false)
+      return
+    }
 
     const payload = {
       ...form,
@@ -148,6 +159,9 @@ export default function IntakeForm() {
       spo2: form.spo2 ? parseInt(form.spo2) : null,
       heart_rate: form.heart_rate ? parseInt(form.heart_rate) : null,
       temperature: form.temperature ? parseFloat(form.temperature) : null,
+      human_review_requested: Boolean(form.human_review_requested),
+      human_review_reason: form.human_review_reason?.trim() || null,
+      consent_captured_at: new Date().toISOString(),
     }
 
     // Zod clinical boundary validation
@@ -159,7 +173,7 @@ export default function IntakeForm() {
       return
     }
 
-    // Run local ONNX triage immediately — before any network call
+    // Run local offline triage immediately — before any network call
     const local = await classify(payload)
     if (local) {
       setLocalResult(local)
@@ -204,10 +218,8 @@ export default function IntakeForm() {
                   <span className={`inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono ${BADGE_COLORS[offlineTriage.triageLevel]}`}>
                     {offlineTriage.triageLevel}
                   </span>
-                  {offlineTriage.confidence != null && (
-                    <p className="text-xs text-text3 mt-2 font-mono">
-                      Confidence: {(offlineTriage.confidence * 100).toFixed(0)}%
-                    </p>
+                  {offlineTriage.lowConfidence && (
+                    <p className="text-xs text-urgent mt-2 font-mono">Model uncertain — human review required</p>
                   )}
                 </div>
               )}
@@ -246,11 +258,11 @@ export default function IntakeForm() {
   }
 
   return (
-    <div className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300">
+    <form onSubmit={handleSubmit} className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300 relative pb-32">
       <h1 className="text-2xl font-display italic text-forest tracking-tight mb-8 text-center">Patient Intake Form</h1>
 
       {error && (
-        <div className="bg-emergency/10 border border-emergency/30 text-emergency px-4 py-3 rounded-md mb-4 text-sm">
+        <div role="alert" aria-live="assertive" className="bg-emergency/10 border border-emergency/30 text-emergency px-4 py-3 rounded-md mb-4 text-sm">
           {error}
         </div>
       )}
@@ -274,16 +286,19 @@ export default function IntakeForm() {
             onChange={handleChange} placeholder="e.g. 45" className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
         <Field label="Sex *" error={fieldErrors.patient_sex}>
-          <div className="flex gap-4 mt-1">
-            {["male", "female", "other"].map(s => (
-              <label key={s} className="flex items-center gap-2 cursor-pointer group">
-                <input type="radio" name="patient_sex" value={s}
-                  checked={form.patient_sex === s} onChange={handleChange}
-                  className="accent-forest" />
-                <span className="capitalize text-sm text-text2 group-hover:text-forest transition-colors">{s}</span>
-              </label>
-            ))}
-          </div>
+          <fieldset className="mt-1">
+            <legend className="sr-only">Sex</legend>
+            <div className="flex gap-4" aria-describedby={fieldErrors.patient_sex ? "patient_sex_error" : undefined}>
+              {["male", "female", "other"].map(s => (
+                <label key={s} className="flex items-center gap-2 cursor-pointer group p-2 min-w-[44px] min-h-[44px]">
+                  <input type="radio" name="patient_sex" value={s}
+                    checked={form.patient_sex === s} onChange={handleChange}
+                    className="accent-forest w-5 h-5" />
+                  <span className="capitalize text-sm text-text2 group-hover:text-forest transition-colors">{s}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
         </Field>
       </Section>
 
@@ -385,14 +400,75 @@ export default function IntakeForm() {
         </Field>
       </Section>
 
+      {/* Patient Consent */}
+      <Section title="Patient Consent">
+        <div className={`p-4 rounded-lg border ${fieldErrors.consent_captured ? 'border-emergency/50 bg-emergency/5' : 'border-surface3 bg-surface2'}`}>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              name="consent_captured"
+              checked={form.consent_captured}
+              onChange={(e) => setForm(prev => ({ ...prev, consent_captured: e.target.checked }))}
+              className="mt-1 w-5 h-5 accent-forest rounded"
+            />
+            <span className="text-sm text-text2 leading-relaxed">
+              <strong className="text-text">Patient consent obtained *</strong>
+              <br />
+              I confirm that the patient (or their guardian) has been informed about and consented to:
+              <ul className="mt-2 ml-4 list-disc space-y-1 text-text3">
+                <li>Collection and storage of their health information</li>
+                <li>Use of AI-assisted triage for clinical decision support</li>
+                <li>Sharing of data with healthcare providers at the PHC</li>
+              </ul>
+            </span>
+          </label>
+          {fieldErrors.consent_captured && (
+            <p className="text-emergency text-xs mt-2 font-medium">{fieldErrors.consent_captured}</p>
+          )}
+        </div>
+      </Section>
+
+      {/* Clinician Review Request */}
+      <Section title="Clinician Review">
+        <div className="p-4 rounded-lg border border-leaf/40 bg-surface2">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              name="human_review_requested"
+              checked={form.human_review_requested}
+              onChange={(e) => setForm(prev => ({ ...prev, human_review_requested: e.target.checked }))}
+              className="mt-1 w-5 h-5 accent-forest rounded"
+            />
+            <span className="text-sm text-text2 leading-relaxed">
+              <strong className="text-text">Request human review</strong>
+              <br />
+              Flag this case for explicit clinician review before disposition.
+            </span>
+          </label>
+          {form.human_review_requested && (
+            <textarea
+              name="human_review_reason"
+              value={form.human_review_reason}
+              onChange={handleChange}
+              placeholder="Why does this case need manual review?"
+              rows={2}
+              maxLength={500}
+              className={`${inputClass} mt-3 resize-none`}
+            />
+          )}
+        </div>
+      </Section>
+
       {/* Submit */}
-      <button
-        onClick={handleSubmit}
-        disabled={loading}
-        className="w-full bg-forest text-white py-4 rounded-pill font-bold text-lg mt-6 shadow-btn hover:shadow-card-hover disabled:opacity-75 disabled:cursor-wait transition-all duration-200 active:scale-[0.98] cursor-pointer flex justify-center items-center"
-      >
-        {loading ? <span className="animate-pulse">Analyzing Case...</span> : "Submit Case"}
-      </button>
+      <div className="fixed sm:absolute bottom-0 left-0 right-0 sm:left-auto sm:right-auto sm:w-full p-4 bg-surface sm:bg-transparent border-t border-surface3 sm:border-none shadow-[0_-4px_10px_rgba(0,0,0,0.1)] sm:shadow-none z-20">
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-forest text-white py-4 rounded-pill font-bold text-lg shadow-btn hover:shadow-card-hover disabled:opacity-75 disabled:cursor-wait transition-all duration-200 active:scale-[0.98] cursor-pointer flex justify-center items-center min-h-[56px]"
+        >
+          {loading ? <span className="animate-pulse">Analyzing Case...</span> : "Submit Case"}
+        </button>
+      </div>
 
       {/* Preliminary Triage Result Display */}
       {localResult && (
@@ -429,7 +505,7 @@ export default function IntakeForm() {
           </p>
         </div>
       )}
-    </div>
+    </form>
   )
 }
 

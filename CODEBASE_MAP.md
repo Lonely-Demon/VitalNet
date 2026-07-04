@@ -8,9 +8,10 @@ this document in the same commit**. Stale maps are worse than no map —
 see the "Keeping this document current" section at the bottom for the
 specific rule.
 
-Last verified against the codebase: 2026-07-04 (post round-2 enterprise
-hardening — hybrid auth, pure-JS offline engine, ML safety layers — see git
-log for the full change list).
+Last verified against the codebase: 2026-07-04 (post round-3 reconciliation —
+merged an independently-developed `dev` branch's security/reliability work
+on top of round-2's hybrid auth, pure-JS offline engine, and ML safety
+layers; see git log for the full change list).
 
 ---
 
@@ -18,27 +19,41 @@ log for the full change list).
 
 An offline-first clinical triage PWA for rural Indian healthcare. ASHA
 (community health) workers fill out a patient intake form — works with or
-without connectivity. A local ML classifier (same model, running either in
-Python server-side or as ONNX in the browser) instantly assigns EMERGENCY /
-URGENT / ROUTINE. An LLM (Groq, with Gemini fallback) generates a
-structured clinical briefing for the case. Doctors see a real-time,
-priority-sorted dashboard of incoming cases and mark them reviewed. Admins
-manage users and facilities. Three roles, enforced by both backend checks
-and Supabase Row Level Security.
+without connectivity, and requires explicit patient-consent capture before
+submission. A local ML classifier (same model, running either in Python
+server-side or as a pure-JS tree evaluator in the browser — no
+onnxruntime-web, see Option 6 in the ML README) instantly assigns EMERGENCY /
+URGENT / ROUTINE, backed by a deterministic safety net that can never be
+overridden. An LLM (Groq, with Gemini fallback) generates a structured
+clinical briefing for the case. Doctors see a real-time, priority-sorted
+dashboard of incoming cases, see low-confidence/review-requested flags, and
+mark cases reviewed (soft-deletable, audit-logged). Admins manage users and
+facilities. Three roles (asha_worker, doctor, admin), enforced by both
+backend checks (role/facility_id resolved fresh from the `profiles` table
+every request — never trusted from JWT claims) and Supabase Row Level
+Security.
 
 ## 2. Repository layout
 
 ```
 VitalNet/
-├── backend/            FastAPI Python app — see §3
+├── backend/            FastAPI Python app — see §3. Migrations live in
+│                       backend/supabase/migrations/ (version-controlled,
+│                       idempotent SQL — the canonical schema source; see §5)
 ├── frontend/           React 19 + Vite PWA — see §4
-├── database/           Supabase SQL setup scripts (NOT the full schema — see §5)
+├── docs/
+│   ├── DISASTER_RECOVERY.md   Ops runbook: RTO/RPO targets, restore procedures
+│   └── security-audits/       Historical red-team audit trail (dated folders).
+│                       Read-only historical record — do not treat findings as
+│                       current state without cross-checking the code.
 ├── colab/              Legacy Google Colab training script — historical reference only,
 │                       NOT wired into the app, trains on only 14 raw features (predates
 │                       ClinicalFeatureEngineer). Do not use its output as a production model.
 ├── Context/            Historical phase-by-phase planning documents from earlier
 │                       development sprints. Read for history/rationale, not current state.
-├── .github/workflows/  CI (ci.yml) — backend pytest + frontend build, on PRs to main
+├── .github/
+│   ├── workflows/ci.yml  Lint (PR) + pytest/build (push) on main and dev
+│   └── dependabot.yml    Daily pip/npm/actions update PRs, targeting dev
 ├── README.md           Setup, features, deployment — start here
 ├── AGENTS.md           Conventions for coding agents working in this repo
 ├── CODEBASE_MAP.md     This file
@@ -58,49 +73,93 @@ briefings, scikit-learn for ML triage.
 ```
 backend/
 ├── app/
-│   ├── main.py                     Entry point ONLY: logging setup, lifespan (loads
-│   │                                the ML classifier once), CORS, rate-limiter wiring,
-│   │                                router registration, global exception handlers,
-│   │                                /api/health. No route logic lives here.
+│   ├── main.py                     Entry point ONLY: logging setup, DB schema-
+│   │                                compatibility gate + lifespan (loads the ML
+│   │                                classifier, degraded/rules-only boot on failure),
+│   │                                middleware stack (rate limiter, GZip, CSRF +
+│   │                                X-Device-Id guard, security headers, correlation
+│   │                                ID, CORS), router registration, global exception
+│   │                                handlers (PII-scrubbed validation errors),
+│   │                                role-gated /api/health. No route logic lives here.
 │   ├── core/
 │   │   ├── config.py                Pydantic Settings — all env vars, fails fast at
-│   │   │                            import if required vars are missing. Round-2
-│   │   │                            adds: jwt_local_verification, revocation_
-│   │   │                            recheck_seconds, rate_limit_storage_uri,
-│   │   │                            security_headers_hsts.
+│   │   │                            import if required vars are missing. Includes:
+│   │   │                            jwt_local_verification, revocation_recheck_seconds,
+│   │   │                            rate_limit_storage_uri, environment (gates HSTS/
+│   │   │                            dev CORS origins/whether .env.local loads at all),
+│   │   │                            api_docs_enabled, csrf_token, cors_allowed_origins.
 │   │   ├── auth.py                  HYBRID JWT verification: verifies signature/
 │   │   │                            exp/aud LOCALLY (HS256 via jwt_secret) on the
 │   │   │                            hot path — no Supabase round-trip per request —
 │   │   │                            with a network get_user() fallback for
-│   │   │                            asymmetric-key projects. Short-TTL is_active/
-│   │   │                            revocation re-check cuts off deactivated users
-│   │   │                            within revocation_recheck_seconds (previously
-│   │   │                            the backend never checked is_active at all).
+│   │   │                            asymmetric-key projects. Every request resolves
+│   │   │                            is_active/role/facility_id fresh from `profiles`
+│   │   │                            (one combined query, short-TTL cached per user) —
+│   │   │                            NEVER trusts JWT user_metadata for these, since
+│   │   │                            it's client-settable and can go stale. Fails
+│   │   │                            CLOSED on a confirmed-missing profile, OPEN only
+│   │   │                            on a transient DB error. get_current_user() sets
+│   │   │                            resolved_role/resolved_facility_id on the returned
+│   │   │                            dict; require_role(*roles) reads resolved_role.
 │   │   │                            Also exposes verify_sub_for_rate_limit().
-│   │   │                            require_role(*roles) dependency factory.
 │   │   ├── database.py              Three Supabase clients: supabase_anon (public
-│   │   │                            reads), get_supabase_for_user() (RLS-scoped,
-│   │   │                            per-request), supabase_admin (service_role,
-│   │   │                            auth.admin.* ONLY — never for case_records/profiles).
+│   │   │                            reads), get_supabase_for_user() (RLS-scoped, a
+│   │   │                            FRESH client per request — deliberate: a shared
+│   │   │                            client with a mutated per-request auth token
+│   │   │                            would race across concurrent requests and leak
+│   │   │                            one user's data to another), supabase_admin
+│   │   │                            (service_role, auth.admin.* AND admin-only
+│   │   │                            cross-tenant ops — require_role('admin') is the
+│   │   │                            only access boundary, no RLS backstop).
+│   │   │                            extract_bearer_token() validates header format
+│   │   │                            before any signature check. validate_schema_
+│   │   │                            compatibility() is the startup gate.
+│   │   ├── audit.py                  PHI access audit logging (log_phi_access,
+│   │   │                            AuditEventType, get_client_ip) — dedicated
+│   │   │                            'vitalnet.audit' logger. The phi_audit_log
+│   │   │                            Postgres table (migrations) is a prepared
+│   │   │                            destination for a future log-shipper; this
+│   │   │                            module does not write to it directly.
+│   │   ├── correlation.py            Single contextvar for X-Request-ID, shared by
+│   │   │                            the logging formatter and route handlers.
 │   │   └── logging.py                JSON structured logging setup (setup_logging()),
-│   │                                 called first in main.py.
+│   │                                 includes correlation_id via CorrelationIdFilter.
 │   ├── api/routes/
 │   │   ├── cases.py                  /api/submit, /api/cases, /api/cases/{id}/review,
 │   │   │                             /api/cases/mine, /api/cases/{id}. Owns the shared
 │   │   │                             slowapi `limiter` instance (imported by the other
-│   │   │                             two route modules). Doctor case list is
-│   │   │                             facility-scoped for 'doctor' role, global for
-│   │   │                             'admin' — see §5's role-scoping note.
-│   │   ├── admin_routes.py           /api/admin/* — user CRUD, facility CRUD, system
-│   │   │                             stats. All admin-only (require_role('admin')),
-│   │   │                             all rate-limited.
-│   │   └── analytics_routes.py       /api/analytics/* — aggregate stats, EMERGENCY
-│   │                                  rate trend. Facility-scoped for 'doctor',
-│   │                                  global for 'admin' (GLOBAL_SCOPE_ROLE constant).
+│   │   │                             route modules) keyed on the verified JWT sub.
+│   │   │                             Cursor pagination has an id tie-breaker for
+│   │   │                             stability across equal timestamps. Row-level
+│   │   │                             authorization via _authorize_case_row_access()
+│   │   │                             (admin global, doctor facility-scoped, asha_worker
+│   │   │                             own-submissions-only — also used by security.py).
+│   │   │                             Every create/read/update is PHI-audit-logged.
+│   │   ├── admin_routes.py           /api/admin/* — user CRUD (password complexity
+│   │   │                             policy, orphan rollback on profile-provisioning
+│   │   │                             failure, profile/auth-metadata rollback on
+│   │   │                             partial failure), facility CRUD (optimistic-
+│   │   │                             concurrency toggle), system stats. All
+│   │   │                             admin-only (require_role('admin')), all
+│   │   │                             rate-limited and PHI-audit-logged.
+│   │   ├── analytics_routes.py       /api/analytics/* — aggregate stats, EMERGENCY
+│   │   │                             rate trend. Facility-scoped for 'doctor',
+│   │   │                             global for 'admin' (GLOBAL_SCOPE_ROLE constant).
+│   │   │                             Queries run concurrently (asyncio.gather over
+│   │   │                             asyncio.to_thread) with a per-query timeout and
+│   │   │                             graceful degradation (_degraded flag) instead of
+│   │   │                             failing the whole dashboard on one slow query.
+│   │   └── security.py               DELETE /api/security/cases/{id} — soft-delete
+│   │                                  (sets deleted_at, requires X-Device-Id), reuses
+│   │                                  cases.py's row-level authz helper. PHI-audit-logged.
 │   ├── models/schemas.py            Pydantic request/response models. IntakeForm is
 │   │                                 the case-submission contract — every field is
-│   │                                 bounded (min/max length, numeric ranges, enums)
-│   │                                 and free-text fields are control-character-stripped.
+│   │                                 bounded (min/max length, numeric ranges, enums),
+│   │                                 free-text fields are control-character-stripped,
+│   │                                 symptoms are allow-listed, and consent_captured
+│   │                                 must be true (server-enforced, not just UI).
+│   │                                 human_review_requested/reason let an ASHA worker
+│   │                                 flag a case for review independent of ML tier.
 │   │                                 If you add a field here, add a matching bound to
 │   │                                 frontend/src/utils/validation.js.
 │   ├── ml/
@@ -276,15 +335,17 @@ tests/
 
 ## 5. Database (Supabase)
 
-**Important limitation of this repo**: the full database schema and Row
-Level Security (RLS) policies are **not fully version-controlled**. Only
-`database/phase10_realtime_setup.sql` (enables Realtime on `case_records`)
-is checked in. The `profiles`, `facilities`, and `case_records` tables,
-their columns, and their RLS policies exist only in the live Supabase
-project. This is a known gap — see `FEATURES_ROADMAP.md` for the proposed
-fix (Supabase CLI migrations, version-controlled).
+Schema is version-controlled via idempotent SQL migrations in
+`backend/supabase/migrations/` (`phase10_realtime_setup.sql` — enables
+Realtime on `case_records`; `phase15_data_security_hardening.sql` — CHECK
+constraints, FKs, indexes, the `case_reviews` and `phi_audit_log` tables,
+consent-capture columns, RLS policies, a `submitted_by`-immutability trigger;
+`phase16_llm_review_fields.sql` — `low_confidence`/`llm_status`/
+`needs_review`/`human_review_requested`/`human_review_reason` columns). Run
+them in order against the live Supabase project's SQL editor (or via the
+Supabase CLI) — they're written to be safe to re-run.
 
-**Known tables** (inferred from backend queries — not authoritative):
+**Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`
   (`asha_worker`/`doctor`/`admin`), `facility_id`, `asha_id`, `is_active`,
   `created_at`.
@@ -293,32 +354,50 @@ fix (Supabase CLI migrations, version-controlled).
 - `case_records` — patient/vitals/symptom fields (mirrors `IntakeForm`),
   `triage_level`, `triage_priority` (computed column: 0=EMERGENCY,
   1=URGENT, 2=ROUTINE, used for dashboard sort), `triage_confidence`,
-  `risk_driver`, `briefing` (JSONB), `llm_model_used`, `client_id` (unique,
-  idempotency key), `submitted_by`, `facility_id`, `reviewed_by`,
-  `reviewed_at`, `created_offline`, `client_submitted_at`, `deleted_at`
-  (soft delete), `created_at`.
+  `risk_driver`, `low_confidence`, `llm_status`, `needs_review`,
+  `human_review_requested`, `human_review_reason`, `consent_captured`,
+  `consent_captured_at`, `briefing` (JSONB), `llm_model_used`, `client_id`
+  (unique, idempotency key), `submitted_by` (immutable — trigger-enforced),
+  `facility_id`, `reviewed_by`, `reviewed_at`, `created_offline`,
+  `client_submitted_at`, `deleted_at` (soft delete via
+  `DELETE /api/security/cases/{id}`), `created_at`.
+- `case_reviews` — append-only per-review audit trail (`case_id`,
+  `reviewer_id`, `reviewed_at`, `note`), one row inserted per
+  `PATCH /api/cases/{id}/review`.
+- `phi_audit_log` — `event_type`, `user_id`, `user_role`, `resource_type`,
+  `resource_id`, `facility_id`, `ip_address`, `details` (JSONB),
+  `created_at`. INSERT-only via RLS; SELECT restricted to `admin`. Currently
+  a prepared destination — `app/core/audit.py` logs structured lines to the
+  `vitalnet.audit` logger but does not write rows here yet (future
+  log-shipper integration point).
 
 **Role scoping model** (enforced consistently in application code — see §3's
 route descriptions): `admin` = global scope (sees/manages everything). `doctor`
-= scoped to their own `facility_id` when one is set (dashboard, analytics, AND —
-since round 2 — the single-case detail/review endpoints, closing an IDOR).
-`asha_worker` = sees only their own submissions (`submitted_by = self`, also
-enforced by RLS).
+= scoped to their own `facility_id` when one is set (dashboard, analytics, and
+the single-case detail/review/delete endpoints). `asha_worker` = sees only
+their own submissions (`submitted_by = self`, also enforced by RLS and by
+`_authorize_case_row_access()` in `cases.py`).
 
 ## 6. Auth model
 
-Supabase Auth issues JWTs with `user_metadata`/`app_metadata` claims including
-`role` and `facility_id`. `get_current_user()` (`app/core/auth.py`) uses HYBRID
-verification: it verifies the signature/exp/aud LOCALLY (HS256 via
-`supabase_jwt_secret`) on the hot path — no Supabase round-trip per request —
-and falls back to a network `get_user()` only when local verification can't
-apply (asymmetric-key projects). It additionally re-checks `profiles.is_active`
-per user on a short TTL (`revocation_recheck_seconds`, default 300s), so a
-deactivated user is cut off within that window rather than working until token
-expiry (~1h) — the backend previously never checked is_active at all.
-`require_role(*roles)` is a dependency factory checking the decoded role against
-an allow-list, 403 otherwise. Rate-limit keys use the *verified* sub
-(`verify_sub_for_rate_limit`), so a forged token can't burn a victim's budget.
+Supabase Auth issues JWTs with `user_metadata`/`app_metadata` claims — these
+are **never trusted** for authorization. `get_current_user()`
+(`app/core/auth.py`) uses HYBRID verification: it verifies the signature/exp/
+aud LOCALLY (HS256 via `supabase_jwt_secret`) on the hot path — no Supabase
+round-trip per request — and falls back to a network `get_user()` only when
+local verification can't apply (asymmetric-key projects). It then resolves
+`is_active`, `role`, and `facility_id` fresh from a single `profiles` query,
+cached per-user on a short TTL (`revocation_recheck_seconds`, default 300s):
+a deactivated user is cut off, and a role/facility change takes effect,
+within that window rather than the full token lifetime (~1h). A confirmed-
+missing profile row fails CLOSED (403); a transient DB error fails OPEN to
+the last cached state so an outage doesn't lock out every user. The resolved
+values are attached to the returned dict as `resolved_role` /
+`resolved_facility_id` — every route's authorization logic reads those, not
+`user_metadata`. `require_role(*roles)` is a dependency factory checking
+`resolved_role` against an allow-list, 403 otherwise. Rate-limit keys use the
+*verified* sub (`verify_sub_for_rate_limit`), so a forged token can't burn a
+victim's budget.
 
 ## 7. What NOT to change without strong reason
 

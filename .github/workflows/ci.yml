@@ -1,66 +1,120 @@
 name: VitalNet CI
 
 on:
+  push:
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vitalnet-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test-backend:
+  lint-backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
+    if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
       - name: Install Dependencies
         run: |
-          cd backend
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio httpx ruff
-      - name: Lint (ruff)
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -r backend/requirements.txt
+          pip install --no-cache-dir ruff==0.13.2
+      - name: Run Ruff
+        run: python -m ruff check backend
+
+  build-frontend-pr:
+    # PR-triggered build + the offline-model parity check. Deliberately does
+    # NOT receive repository secrets (untrusted PR code, e.g. from a fork or
+    # Dependabot, could exfiltrate them) — uses placeholder env values, which
+    # is safe because this job only validates the build compiles and that the
+    # committed golden vectors parity-check against the committed tree JSON
+    # (neither requires live credentials).
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+      - name: Install (no install scripts)
+        run: npm ci --prefix frontend --ignore-scripts
+      - name: Offline-model parity (JS == server model)
+        # Guards that the pure-JS offline tree evaluator produces the SAME
+        # triage as the server model on the committed golden vectors. If this
+        # fails, offline triage would diverge from online — block the merge.
+        run: npm run test:parity --prefix frontend
+      - name: Build
+        run: npm run build --prefix frontend
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+          VITE_API_BASE_URL: http://localhost:8000
+
+  test-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Install Dependencies
         run: |
-          cd backend
-          ruff check .
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -r backend/requirements.txt
+          pip install --no-cache-dir pytest==8.3.4 pytest-asyncio==0.24.0 httpx==0.27.2
       - name: Run Pytest
         # test_e2e.py is an integration test needing a live server + real
-        # Supabase project — excluded from the unit CI. The unit/safety/authz
-        # tests (incl. the classifier safety guarantees and admin-authz
-        # regression) run here; tests/conftest.py provides fallback fake creds
-        # so they pass even without secrets configured.
-        run: |
-          cd backend
-          python -m pytest tests/ -v --ignore=tests/test_e2e.py
+        # Supabase project — excluded here. tests/conftest.py supplies
+        # fallback fake creds for the unit/safety/authz tests when secrets
+        # aren't configured for this run.
+        run: python -m pytest backend/tests/ -v --ignore=backend/tests/test_e2e.py
         env:
           SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
           SUPABASE_JWT_SECRET: ${{ secrets.TEST_SUPABASE_JWT_SECRET }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.TEST_SUPABASE_SERVICE_ROLE_KEY }}
           GROQ_API_KEY: ${{ secrets.TEST_GROQ_API_KEY }}
-          # Gemini and LLM mocked out during unit tests
 
   build-frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
+    if: github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '20'
-      - name: Install
-        run: |
-          cd frontend
-          npm ci
+      - name: Install (no install scripts)
+        run: npm ci --prefix frontend --ignore-scripts
       - name: Offline-model parity (JS == server model)
-        # Guards that the pure-JS offline tree evaluator produces the SAME
-        # triage as the server model on the committed golden vectors. If this
-        # fails, offline triage would diverge from online — block the merge.
-        run: |
-          cd frontend
-          npm run test:parity
+        run: npm run test:parity --prefix frontend
       - name: Build
-        run: |
-          cd frontend
-          npm run build
+        run: npm run build --prefix frontend
         env:
           VITE_SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
-          VITE_API_BASE_URL: https://vitalnet-staging.app
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}

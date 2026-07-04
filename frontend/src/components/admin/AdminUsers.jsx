@@ -43,7 +43,7 @@ export default function AdminUsers() {
     setError(null)
     try {
       const [u, f] = await Promise.all([adminListUsers(), adminListFacilities()])
-      setUsers(u)
+      setUsers(u.data || [])
       setFacilities(f)
     } catch (e) {
       setError(e.message)

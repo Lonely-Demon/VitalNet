@@ -2,6 +2,16 @@ import logging
 import sys
 from pythonjsonlogger import jsonlogger
 
+from app.core.correlation import get_correlation_id
+
+
+class CorrelationIdFilter(logging.Filter):
+    """Logging filter that adds the request correlation_id to each log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.correlation_id = get_correlation_id()
+        return True
+
 
 def setup_logging() -> logging.Logger:
     """
@@ -19,9 +29,10 @@ def setup_logging() -> logging.Logger:
 
     handler = logging.StreamHandler(sys.stdout)
     formatter = jsonlogger.JsonFormatter(
-        "%(asctime)s %(levelname)s %(name)s %(module)s %(message)s"
+        "%(asctime)s %(levelname)s %(name)s %(module)s %(message)s %(correlation_id)s"
     )
     handler.setFormatter(formatter)
+    handler.addFilter(CorrelationIdFilter())
     root_logger.addHandler(handler)
 
     return logging.getLogger("vitalnet")

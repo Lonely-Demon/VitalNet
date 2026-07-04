@@ -1,8 +1,10 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { AuthProvider, useAuth } from './store/authStore'
 import { RouteGuard } from './components/RouteGuard'
 import ToastProvider from './components/ToastProvider'
 import { UpdatePrompt } from './components/UpdatePrompt'
+import ErrorBoundary from './components/ErrorBoundary'
+import { purgeExpiredDrafts } from './hooks/useDraftSave'
 
 // Lazy-loaded per role — a given user only ever renders ONE of these three
 // panels (their own role), so bundling all three into the main chunk makes
@@ -53,14 +55,20 @@ function AppInner() {
 }
 
 export default function App() {
+  useEffect(() => {
+    purgeExpiredDrafts().catch((err) => console.error('Failed to purge expired drafts:', err))
+  }, [])
+
   return (
-    <AuthProvider>
-      <ToastProvider>
-        <UpdatePrompt />
-        <RouteGuard>
-          <AppInner />
-        </RouteGuard>
-      </ToastProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <ToastProvider>
+          <UpdatePrompt />
+          <RouteGuard>
+            <AppInner />
+          </RouteGuard>
+        </ToastProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   )
 }

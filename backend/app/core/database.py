@@ -18,6 +18,10 @@ Supabase database clients.
    on those endpoints; there is no RLS backstop. Do not use supabase_admin in
    any route that isn't admin-gated. tests/test_admin_authz.py enforces this.
 """
+import hmac
+from typing import Optional
+
+from fastapi import HTTPException
 from supabase import Client, create_client
 from supabase.lib.client_options import ClientOptions
 
@@ -53,3 +57,51 @@ supabase_admin: Client = create_client(
     settings.supabase_service_role_key,
     options=ClientOptions(auto_refresh_token=False, persist_session=False),
 )
+
+
+def extract_bearer_token(authorization: Optional[str]) -> str:
+    """
+    Extract and format-validate a Bearer token from the Authorization header.
+    Raises HTTP 401 on a missing/malformed header or a token that isn't a
+    well-formed 3-part JWT, before any signature verification is attempted.
+    """
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    parts = authorization.strip().split(" ", 1)
+    if len(parts) != 2 or not hmac.compare_digest(parts[0].lower(), "bearer"):
+        raise HTTPException(
+            status_code=401,
+            detail="Malformed Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = parts[1].strip()
+    if token.count(".") != 2:
+        raise HTTPException(
+            status_code=401,
+            detail="Malformed bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return token
+
+
+def validate_schema_compatibility() -> None:
+    """
+    Startup gate: verify the tables this app depends on actually exist and are
+    queryable, so a schema drift or un-run migration fails fast at boot instead
+    of surfacing as a confusing 500 on a patient's first request. Queries just
+    one row per table (empty tables pass).
+    """
+    tables_to_check = ["facilities", "profiles", "case_records"]
+    for table in tables_to_check:
+        try:
+            supabase_anon.table(table).select("id").limit(1).execute()
+        except Exception as e:
+            raise RuntimeError(
+                f"Database schema compatibility check failed for table '{table}': {e}"
+            )

@@ -1,13 +1,45 @@
-from fastapi import APIRouter, Depends, Header, Request
-
-from app.core.auth import require_role
-from app.core.database import supabase_admin
-from pydantic import BaseModel, EmailStr, Field
+import logging
+import re
 from typing import Optional, Literal
 
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel, EmailStr, Field
+
+from app.core.auth import require_role
+from app.core.audit import AuditEventType, get_client_ip, log_phi_access
+from app.core.database import supabase_admin
 from app.api.routes.cases import limiter
 
+logger = logging.getLogger("vitalnet")
+
 router = APIRouter(prefix='/api/admin', tags=['admin'])
+
+# Uppercase + lowercase + digit + symbol, 12-128 chars.
+PASSWORD_POLICY_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{12,128}$")
+
+
+def _validate_password(password: str) -> None:
+    if not PASSWORD_POLICY_RE.match(password or ""):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be 12-128 characters and include an uppercase letter, "
+                   "a lowercase letter, a number, and a symbol",
+        )
+
+
+def _mask_csv_value(value: Optional[str]) -> Optional[str]:
+    """
+    Neutralise CSV/spreadsheet formula injection: if this admin data is ever
+    exported and opened in Excel/Sheets, a value starting with =, +, -, @ or a
+    control character can execute as a formula. Prefixing with a quote forces
+    it to be read as literal text.
+    """
+    if value is None:
+        return None
+    text = str(value)
+    if text and text[0] in {"=", "+", "-", "@", "\t", "\r", "\n"}:
+        return "'" + text
+    return text
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -46,40 +78,62 @@ async def list_users(
     request: Request,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
+    page: int = 1,
+    limit: int = 100,
 ):
     """
-    Returns all users joined with their profiles.
+    Returns all users joined with their profiles, paginated so a large
+    deployment can't force one unbounded query across the whole user table.
     Uses admin client for auth.admin.list_users(), then enriches
     with profiles data for role/facility info.
     """
-    # Fetch all profiles (admin SELECT policy covers this)
-    profiles_result = supabase_admin.table('profiles').select(
-        'id, full_name, role, facility_id, asha_id, is_active, created_at, '
-        'facilities(name, district)'
-    ).execute()
+    limit = max(1, min(limit, 200))
+    page = max(1, page)
+    start = (page - 1) * limit
+    end = start + limit - 1
 
-    profiles_by_id = {p['id']: p for p in profiles_result.data}
+    profiles_result = (
+        supabase_admin.table('profiles')
+        .select(
+            'id, full_name, role, facility_id, asha_id, is_active, created_at, '
+            'facilities(name, district)'
+        )
+        .range(start, end)
+        .execute()
+    )
+    profile_rows = profiles_result.data or []
+    profiles_by_id = {p['id']: p for p in profile_rows}
 
-    # Fetch auth users for email + last_sign_in — per_page=1000 avoids pagination gap
-    auth_users = supabase_admin.auth.admin.list_users(page=1, per_page=1000)
+    auth_users = supabase_admin.auth.admin.list_users(page=page, per_page=limit)
+    auth_users = [au for au in auth_users if str(au.id) in profiles_by_id]
 
     result = []
     for au in auth_users:
         profile = profiles_by_id.get(str(au.id), {})
         result.append({
             'id':            str(au.id),
-            'email':         au.email,
+            'email':         _mask_csv_value(au.email),
             'full_name':     profile.get('full_name', ''),
             'role':          profile.get('role', 'asha_worker'),
             'facility_id':   profile.get('facility_id'),
             'facility_name': (profile.get('facilities') or {}).get('name'),
-            'asha_id':       profile.get('asha_id'),
+            'asha_id':       _mask_csv_value(profile.get('asha_id')),
             'is_active':     profile.get('is_active', True),
             'created_at':    str(au.created_at),
             'last_sign_in':  str(au.last_sign_in_at) if au.last_sign_in_at else None,
         })
 
-    return result
+    log_phi_access(
+        event_type=AuditEventType.PHI_READ,
+        user_id=user.get("sub", "unknown"),
+        user_role=user.get("resolved_role"),
+        resource_type="profiles",
+        resource_id=f"page:{page}",
+        ip_address=get_client_ip(request),
+        details={"count": len(result)},
+    )
+
+    return {"data": result, "page": page, "limit": limit}
 
 
 @router.post('/users')
@@ -95,6 +149,11 @@ async def create_user(
     email_confirm=True so new users can log in immediately without
     going through email verification flow.
     """
+    _validate_password(body.password)
+
+    if body.role in {"asha_worker", "doctor"} and not body.facility_id:
+        raise HTTPException(status_code=400, detail="facility_id is required for this role")
+
     response = supabase_admin.auth.admin.create_user({
         'email':         body.email,
         'password':      body.password,
@@ -108,11 +167,40 @@ async def create_user(
 
     new_user_id = str(response.user.id)
 
-    # Patch the profile row created by the DB trigger with extra fields
-    supabase_admin.table('profiles').update({
-        'facility_id': body.facility_id,
-        'asha_id':     body.asha_id,
-    }).eq('id', new_user_id).execute()
+    # Patch the profile row created by the DB trigger with extra fields. If
+    # this fails, roll back the auth user rather than leave an orphaned
+    # account with no usable profile (which would silently fail every
+    # subsequent request via auth.py's "Profile not provisioned" check).
+    try:
+        profile_res = (
+            supabase_admin.table('profiles')
+            .update({'facility_id': body.facility_id, 'asha_id': body.asha_id})
+            .eq('id', new_user_id)
+            .execute()
+        )
+        if not profile_res or not profile_res.data:
+            raise RuntimeError("Profile update returned no data")
+    except Exception as e:
+        logger.error("Failed to provision profile for new user %s: %s", new_user_id, e)
+        try:
+            supabase_admin.auth.admin.delete_user(new_user_id)
+        except Exception as rollback_err:
+            logger.error("Failed to roll back orphaned auth user %s: %s", new_user_id, rollback_err)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize user profile. The created account was rolled back.",
+        )
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_CREATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=user.get("resolved_role"),
+        resource_type="profiles",
+        resource_id=new_user_id,
+        facility_id=body.facility_id,
+        ip_address=get_client_ip(request),
+        details={"created_role": body.role},
+    )
 
     return {'id': new_user_id, 'email': body.email}
 
@@ -131,6 +219,17 @@ async def update_user(
     Also updates user_metadata in auth so the JWT hook re-embeds
     the new role on next login.
     """
+    target_profile_response = (
+        supabase_admin.table("profiles")
+        .select("id, role, facility_id, asha_id, is_active")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    target_profile = (target_profile_response.data if target_profile_response else None) or {}
+    if not target_profile:
+        raise HTTPException(status_code=404, detail="User not found")
+
     profile_update = {}
     meta_update = {}
 
@@ -149,9 +248,28 @@ async def update_user(
         supabase_admin.table('profiles').update(profile_update).eq('id', user_id).execute()
 
     if meta_update:
-        supabase_admin.auth.admin.update_user_by_id(
-            user_id, {'user_metadata': meta_update}
-        )
+        try:
+            supabase_admin.auth.admin.update_user_by_id(user_id, {'user_metadata': meta_update})
+        except Exception as e:
+            logger.error("Auth metadata update failed for user_id=%s: %s", user_id, e)
+            if profile_update:
+                # Keep the profile row and the JWT's cached metadata in sync —
+                # revert the profile fields we just changed rather than leave
+                # them ahead of what the token's claims (and next-login refresh) will show.
+                rollback_values = {k: target_profile.get(k) for k in profile_update}
+                supabase_admin.table('profiles').update(rollback_values).eq('id', user_id).execute()
+            raise HTTPException(status_code=500, detail="Failed to update user metadata. Profile update was rolled back.")
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=user.get("resolved_role"),
+        resource_type="profiles",
+        resource_id=user_id,
+        facility_id=profile_update.get("facility_id") or target_profile.get("facility_id"),
+        ip_address=get_client_ip(request),
+        details={"fields_updated": sorted(profile_update.keys())},
+    )
 
     return {'status': 'updated'}
 
@@ -169,7 +287,19 @@ async def deactivate_user(
     Does NOT delete the auth user or their case records.
     Hard deletion is intentionally not exposed via API.
     """
-    supabase_admin.table('profiles').update({'is_active': False}).eq('id', user_id).execute()
+    result = supabase_admin.table('profiles').update({'is_active': False}).eq('id', user_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=user.get("resolved_role"),
+        resource_type="profiles",
+        resource_id=user_id,
+        ip_address=get_client_ip(request),
+        details={"is_active": False},
+    )
     return {'status': 'deactivated'}
 
 
@@ -181,7 +311,19 @@ async def reactivate_user(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    supabase_admin.table('profiles').update({'is_active': True}).eq('id', user_id).execute()
+    result = supabase_admin.table('profiles').update({'is_active': True}).eq('id', user_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=user.get("resolved_role"),
+        resource_type="profiles",
+        resource_id=user_id,
+        ip_address=get_client_ip(request),
+        details={"is_active": True},
+    )
     return {'status': 'reactivated'}
 
 
@@ -207,6 +349,16 @@ async def create_facility(
     user: dict = Depends(require_role('admin')),
 ):
     result = supabase_admin.table('facilities').insert(body.model_dump()).execute()
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_CREATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=user.get("resolved_role"),
+        resource_type="facilities",
+        resource_id=result.data[0]['id'] if result.data else None,
+        ip_address=get_client_ip(request),
+        details={"name": body.name},
+    )
     return result.data[0]
 
 
@@ -218,9 +370,34 @@ async def toggle_facility(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    current = supabase_admin.table('facilities').select('is_active').eq('id', facility_id).single().execute()
-    new_state = not current.data['is_active']
-    supabase_admin.table('facilities').update({'is_active': new_state}).eq('id', facility_id).execute()
+    current = supabase_admin.table('facilities').select('is_active').eq('id', facility_id).maybe_single().execute()
+    if not current or not current.data:
+        raise HTTPException(status_code=404, detail="Facility not found")
+
+    current_state = current.data['is_active']
+    new_state = not current_state
+
+    # Optimistic concurrency: only flip if the state hasn't changed since we
+    # read it, so two concurrent toggles can't race into an inconsistent result.
+    result = (
+        supabase_admin.table('facilities')
+        .update({'is_active': new_state})
+        .eq('id', facility_id)
+        .eq('is_active', current_state)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=409, detail="Facility was modified concurrently. Please retry.")
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=user.get("resolved_role"),
+        resource_type="facilities",
+        resource_id=facility_id,
+        ip_address=get_client_ip(request),
+        details={"is_active": new_state},
+    )
     return {'is_active': new_state}
 
 
