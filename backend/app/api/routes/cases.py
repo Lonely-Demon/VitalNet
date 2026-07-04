@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 
 from app.core.auth import require_role
 from app.core.database import get_supabase_for_user
@@ -122,7 +121,9 @@ async def submit_case(
 
 
 @router.get("/api/cases")
+@limiter.limit("60/minute")
 async def get_cases(
+    request: Request,
     authorization: str = Header(None),
     user: dict = Depends(require_role("doctor", "admin")),
     before_time: str = None,       # ISO timestamp of the last seen case
@@ -139,9 +140,19 @@ async def get_cases(
     nextCursor / nextTriagePriority to fetch the next page.
     The composite cursor correctly handles cases at tier boundaries
     without silent data loss.
+
+    Scoping: 'admin' sees all facilities (global). 'doctor' accounts with a
+    facility_id are scoped to that facility only — this matches the
+    real-time subscription filter in useRealtimeCases (frontend), which was
+    already facility-scoped, and the analytics scoping model in
+    analytics_routes.py. Doctors without a facility_id assigned see all
+    cases (unscoped), same as before this endpoint had scoping.
     """
     raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
+
+    role = user.get("user_metadata", {}).get("role") or user.get("app_metadata", {}).get("role")
+    facility_id = user.get("user_metadata", {}).get("facility_id")
 
     # Safety cap
     limit = max(1, min(limit, 100))
@@ -158,6 +169,9 @@ async def get_cases(
         .order("created_at", desc=True)          # Newest within each tier
         .limit(limit + 1)                        # Fetch one extra to determine hasMore
     )
+
+    if role != "admin" and facility_id:
+        query = query.eq("facility_id", facility_id)
 
     if before_time is not None and before_priority is not None:
         # Composite keyset cursor — correct two-column keyset pagination.
@@ -184,20 +198,39 @@ async def get_cases(
 
 
 @router.patch("/api/cases/{case_id}/review")
+@limiter.limit("60/minute")
 async def review_case(
+    request: Request,
     case_id: str,
     authorization: str = Header(None),
     user: dict = Depends(require_role("doctor", "admin")),
 ):
+    """
+    Marks a case reviewed. Scoped the same way as GET /api/cases: 'admin'
+    is global, 'doctor' with a facility_id can only review cases in their
+    own facility (matches the visibility scoping — a doctor should not be
+    able to act on a case they cannot see in their normal case list, even
+    if they somehow obtained its id).
+    """
     raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
 
-    db.table("case_records").update(
+    role = user.get("user_metadata", {}).get("role") or user.get("app_metadata", {}).get("role")
+    facility_id = user.get("user_metadata", {}).get("facility_id")
+
+    query = db.table("case_records").update(
         {
             "reviewed_by": user["sub"],
             "reviewed_at": datetime.now(timezone.utc).isoformat(),
         }
-    ).eq("id", case_id).execute()
+    ).eq("id", case_id)
+
+    if role != "admin" and facility_id:
+        query = query.eq("facility_id", facility_id)
+
+    result = query.execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Case not found")
     return {"status": "reviewed"}
 
 
@@ -205,7 +238,9 @@ async def review_case(
 
 
 @router.get("/api/cases/mine")
+@limiter.limit("60/minute")
 async def get_my_cases(
+    request: Request,
     authorization: str = Header(None),
     user: dict = Depends(require_role("asha_worker", "admin")),
     before: str = None,   # created_at ISO cursor
@@ -251,20 +286,33 @@ async def get_my_cases(
 
 
 @router.get("/api/cases/{case_id}")
+@limiter.limit("60/minute")
 async def get_case_detail(
+    request: Request,
     case_id: str,
     authorization: str = Header(None),
     user: dict = Depends(require_role("doctor", "admin")),
 ):
-    """Returns the full record including briefing JSONB for one case."""
+    """
+    Returns the full record including briefing JSONB for one case.
+    Scoped the same way as GET /api/cases — see review_case() docstring.
+    """
     raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
-    result = (
+
+    role = user.get("user_metadata", {}).get("role") or user.get("app_metadata", {}).get("role")
+    facility_id = user.get("user_metadata", {}).get("facility_id")
+
+    query = (
         db.table("case_records")
         .select("*")
         .eq("id", case_id)
         .is_("deleted_at", "null")
-        .single()
-        .execute()
     )
-    return result.data
+    if role != "admin" and facility_id:
+        query = query.eq("facility_id", facility_id)
+
+    result = query.execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return result.data[0]

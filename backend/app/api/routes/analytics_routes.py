@@ -1,20 +1,31 @@
-from fastapi import APIRouter, Header, Depends
+from fastapi import APIRouter, Header, Depends, Request
 
 from app.core.auth import require_role
 from app.core.database import get_supabase_for_user
+from app.api.routes.cases import limiter
 from datetime import datetime, timedelta, timezone
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
+# VitalNet's actual role model is exactly three roles: asha_worker, doctor,
+# admin (see app/api/routes/admin_routes.py and AGENTS.md). 'admin' is the
+# global-scope role — it is never restricted to a single facility, matching
+# the behaviour of GET /api/admin/stats. 'doctor' accounts are scoped to
+# their own facility_id.
+GLOBAL_SCOPE_ROLE = "admin"
+
 
 @router.get("/summary")
+@limiter.limit("60/minute")
 async def get_summary(
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "facility_admin", "admin", "super_admin")),
+    user: dict = Depends(require_role("doctor", "admin")),
 ):
     """
     Returns aggregate stats scoped to the user's facility.
-    super_admin gets system-wide stats.
+    admin accounts get system-wide stats (global scope), matching
+    the admin dashboard's other endpoints.
     """
     raw_token = authorization.split(" ", 1)[1]
     db = get_supabase_for_user(raw_token)
@@ -22,10 +33,10 @@ async def get_summary(
     role = user.get("user_metadata", {}).get("role")
     facility_id = user.get("user_metadata", {}).get("facility_id")
 
-    # Base query — facility-scoped unless super_admin
+    # Base query — facility-scoped unless the caller is a global-scope admin
     def base_query():
         q = db.table("case_records").select("*", count="exact").is_("deleted_at", "null")
-        if role not in ("super_admin",) and facility_id:
+        if role != GLOBAL_SCOPE_ROLE and facility_id:
             q = q.eq("facility_id", facility_id)
         return q
 
@@ -90,9 +101,11 @@ async def get_summary(
 
 
 @router.get("/emergency-rate")
+@limiter.limit("60/minute")
 async def get_emergency_rate(
+    request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "facility_admin", "admin", "super_admin")),
+    user: dict = Depends(require_role("doctor", "admin")),
 ):
     """
     Returns EMERGENCY case rate over the last 30 days, grouped by week.
@@ -112,7 +125,7 @@ async def get_emergency_rate(
         .is_("deleted_at", "null")
         .gte("created_at", since)
     )
-    if role not in ("super_admin",) and facility_id:
+    if role != GLOBAL_SCOPE_ROLE and facility_id:
         q = q.eq("facility_id", facility_id)
 
     res = q.execute()

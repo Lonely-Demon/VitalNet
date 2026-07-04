@@ -23,7 +23,8 @@ function optionalVital(min, max, label) {
 
 export const clinicalSchema = z.object({
   // Patient identifiers
-  patient_name:    z.string().min(2, 'Patient name is required (min 2 characters)'),
+  patient_name:    z.string().min(2, 'Patient name is required (min 2 characters)')
+                    .max(100, 'Patient name is too long (max 100 characters)'),
   patient_age:     z.number({ invalid_type_error: 'Age must be a number' })
                     .min(0, 'Age must be 0 or above')
                     .max(120, 'Age must be realistic (max 120)'),
@@ -38,16 +39,19 @@ export const clinicalSchema = z.object({
   heart_rate:      optionalVital(20,  300, 'Heart rate'),
   temperature:     optionalVital(28,   44, 'Temperature (°C)'),
 
-  // Required clinical context
-  chief_complaint:      z.string().min(3, 'Chief complaint is required'),
-  complaint_duration:   z.string().min(1, 'Complaint duration is required'),
+  // Required clinical context — bounds must match backend/app/models/schemas.py
+  chief_complaint:      z.string().min(3, 'Chief complaint is required')
+                         .max(200, 'Chief complaint is too long (max 200 characters)'),
+  complaint_duration:   z.string().min(1, 'Complaint duration is required')
+                         .max(50, 'Complaint duration is too long'),
 
-  // Optional rich context
-  symptoms:             z.array(z.string()).optional().default([]),
-  observations:         z.string().optional().default(''),
-  known_conditions:     z.string().optional().default(''),
-  current_medications:  z.string().optional().default(''),
-  location:             z.string().optional().default(''),
+  // Optional rich context — bounds must match backend/app/models/schemas.py
+  symptoms:             z.array(z.string()).max(20, 'Too many symptoms selected').optional().default([]),
+  observations:         z.string().max(500, 'Observations are too long (max 500 characters)').optional().default(''),
+  known_conditions:     z.string().max(300, 'Known conditions text is too long (max 300 characters)').optional().default(''),
+  current_medications:  z.string().max(300, 'Medications text is too long (max 300 characters)').optional().default(''),
+  location:             z.string().min(1, 'Location / village is required')
+                         .max(200, 'Location is too long (max 200 characters)'),
 })
 
 /**

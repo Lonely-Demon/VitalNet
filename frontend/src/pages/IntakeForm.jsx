@@ -258,8 +258,8 @@ export default function IntakeForm() {
       {/* Patient Location */}
       <Section title="Location">
         <Field label="Location / Village *" error={fieldErrors.location}>
-          <input name="location" value={form.location} onChange={handleChange}
-            placeholder="e.g. Rampur Village" className={`${inputClass} ${fieldErrors.location ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <input name="location" value={form.location} onChange={handleChange} required
+            placeholder="e.g. Rampur Village" maxLength={200} className={`${inputClass} ${fieldErrors.location ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
       </Section>
 
@@ -376,12 +376,12 @@ export default function IntakeForm() {
         <Field label="Known Conditions">
           <input name="known_conditions" value={form.known_conditions}
             onChange={handleChange} placeholder="e.g. diabetes, hypertension"
-            className={inputClass} />
+            maxLength={300} className={inputClass} />
         </Field>
         <Field label="Current Medications">
           <input name="current_medications" value={form.current_medications}
             onChange={handleChange} placeholder="e.g. metformin, amlodipine"
-            className={inputClass} />
+            maxLength={300} className={inputClass} />
         </Field>
       </Section>
 

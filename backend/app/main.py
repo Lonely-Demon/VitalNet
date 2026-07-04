@@ -10,14 +10,13 @@ This file is responsible ONLY for:
 
 All route logic lives in app/api/routes/.
 """
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
@@ -43,7 +42,7 @@ async def lifespan(app: FastAPI):
 
 # ── 3. FastAPI app init ───────────────────────────────────────────────────────
 
-app = FastAPI(title="VitalNet API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="VitalNet API", version="0.3.0", lifespan=lifespan)
 
 
 # ── 4. Rate limiter ───────────────────────────────────────────────────────────
@@ -103,7 +102,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # ── 8. Health Check ───────────────────────────────────────────────────────────
 
 @app.get("/api/health")
-async def health():
+@cases.limiter.limit("120/minute")
+async def health(request: Request):
     from app.core.database import supabase_anon
     from app.ml.classifier import get_classifier_info
 
@@ -127,5 +127,5 @@ async def health():
         "status": "ok" if db_status == "connected" and classifier_loaded else "degraded",
         "database": db_status,
         "classifier": classifier_status,
-        "version": "0.2.0",
+        "version": "0.3.0",
     }

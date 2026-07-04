@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, Request
 
 from app.core.auth import require_role
 from app.core.database import supabase_admin
-from pydantic import BaseModel, EmailStr
-from typing import Optional
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, Literal
+
+from app.api.routes.cases import limiter
 
 router = APIRouter(prefix='/api/admin', tags=['admin'])
 
@@ -12,34 +14,36 @@ router = APIRouter(prefix='/api/admin', tags=['admin'])
 
 class CreateUserRequest(BaseModel):
     email: EmailStr
-    password: str
-    full_name: str
-    role: str                           # 'asha_worker' | 'doctor' | 'admin'
+    password: str = Field(min_length=12, max_length=128)
+    full_name: str = Field(min_length=1, max_length=100)
+    role: Literal['asha_worker', 'doctor', 'admin']
     facility_id: Optional[str] = None
-    asha_id: Optional[str] = None
+    asha_id: Optional[str] = Field(None, max_length=50)
 
 
 class UpdateUserRequest(BaseModel):
-    role: Optional[str] = None
+    role: Optional[Literal['asha_worker', 'doctor', 'admin']] = None
     facility_id: Optional[str] = None
-    asha_id: Optional[str] = None
+    asha_id: Optional[str] = Field(None, max_length=50)
     is_active: Optional[bool] = None
 
 
 class CreateFacilityRequest(BaseModel):
-    name: str
-    type: str = 'PHC'
-    address: Optional[str] = None
-    district: Optional[str] = None
-    state: str = 'Tamil Nadu'
-    pincode: Optional[str] = None
-    phone: Optional[str] = None
+    name: str = Field(min_length=1, max_length=200)
+    type: str = Field(default='PHC', max_length=50)
+    address: Optional[str] = Field(None, max_length=300)
+    district: Optional[str] = Field(None, max_length=100)
+    state: str = Field(default='Tamil Nadu', max_length=100)
+    pincode: Optional[str] = Field(None, max_length=10)
+    phone: Optional[str] = Field(None, max_length=20)
 
 
 # ── User management ───────────────────────────────────────────────────────────
 
 @router.get('/users')
+@limiter.limit("60/minute")
 async def list_users(
+    request: Request,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
@@ -79,7 +83,9 @@ async def list_users(
 
 
 @router.post('/users')
+@limiter.limit("10/minute")
 async def create_user(
+    request: Request,
     body: CreateUserRequest,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
@@ -112,7 +118,9 @@ async def create_user(
 
 
 @router.patch('/users/{user_id}')
+@limiter.limit("30/minute")
 async def update_user(
+    request: Request,
     user_id: str,
     body: UpdateUserRequest,
     authorization: str = Header(None),
@@ -149,7 +157,9 @@ async def update_user(
 
 
 @router.delete('/users/{user_id}')
+@limiter.limit("30/minute")
 async def deactivate_user(
+    request: Request,
     user_id: str,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
@@ -164,7 +174,9 @@ async def deactivate_user(
 
 
 @router.post('/users/{user_id}/reactivate')
+@limiter.limit("30/minute")
 async def reactivate_user(
+    request: Request,
     user_id: str,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
@@ -176,7 +188,9 @@ async def reactivate_user(
 # ── Facilities management ─────────────────────────────────────────────────────
 
 @router.get('/facilities')
+@limiter.limit("60/minute")
 async def list_facilities(
+    request: Request,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
@@ -185,7 +199,9 @@ async def list_facilities(
 
 
 @router.post('/facilities')
+@limiter.limit("10/minute")
 async def create_facility(
+    request: Request,
     body: CreateFacilityRequest,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
@@ -195,7 +211,9 @@ async def create_facility(
 
 
 @router.patch('/facilities/{facility_id}/toggle')
+@limiter.limit("30/minute")
 async def toggle_facility(
+    request: Request,
     facility_id: str,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
@@ -209,7 +227,9 @@ async def toggle_facility(
 # ── System stats ──────────────────────────────────────────────────────────────
 
 @router.get('/stats')
+@limiter.limit("60/minute")
 async def get_stats(
+    request: Request,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):

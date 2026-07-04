@@ -11,6 +11,7 @@ export default function Dashboard({ filter = 'all' }) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore]     = useState(false)
   const [nextCursor, setNextCursor] = useState(null)
+  const [nextTriagePriority, setNextTriagePriority] = useState(null)
   const [error, setError]         = useState(null)
   const { profile } = useAuth()
   const { showToast } = useToast()
@@ -29,6 +30,7 @@ export default function Dashboard({ filter = 'all' }) {
       setCases(data.cases)
       setHasMore(data.hasMore)
       setNextCursor(data.nextCursor)
+      setNextTriagePriority(data.nextTriagePriority)
     } catch (e) {
       setError(e.message || 'Failed to load cases. Check backend connection.')
     } finally {
@@ -41,7 +43,7 @@ export default function Dashboard({ filter = 'all' }) {
     if (!nextCursor || loadingMore) return
     setLoadingMore(true)
     try {
-      const data = await getCases({ before: nextCursor })
+      const data = await getCases({ before_time: nextCursor, before_priority: nextTriagePriority })
       if (!data || !Array.isArray(data.cases)) return
       // Deduplicate in case realtime already inserted a row
       setCases(prev => {
@@ -51,6 +53,7 @@ export default function Dashboard({ filter = 'all' }) {
       })
       setHasMore(data.hasMore)
       setNextCursor(data.nextCursor)
+      setNextTriagePriority(data.nextTriagePriority)
     } catch (e) {
       showToast('Failed to load more cases', 'error')
     } finally {
