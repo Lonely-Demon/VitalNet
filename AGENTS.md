@@ -14,10 +14,11 @@ This document provides essential instructions, commands, and code style guidelin
 ### Backend (Python/FastAPI)
 Always operate within a virtual environment (`python -m venv venv && source venv/bin/activate`).
 - **Install Dependencies**: `pip install -r backend/requirements.txt`
-- **Run Server**: `cd backend && python -m uvicorn main:app --reload --port 8000`
+- **Run Server**: `cd backend && python -m uvicorn app.main:app --reload --port 8000`
 - **Linting**: `cd backend && ruff check .`
 - **Formatting**: `cd backend && ruff format .`
-- **Regenerate ML Models**: `cd backend && python scripts/retrain_and_export.py`
+- **Regenerate ML Models**: `cd backend && pip install -r requirements-train.txt && python scripts/train_classifier.py`
+  (regenerates `app/ml/models/triage_classifier.pkl`, `frontend/public/models/triage_classifier.onnx`, and `frontend/public/models/features_config.json` from ONE training run — the backend .pkl and the offline .onnx must always come from the same run so online/offline triage never disagree)
 
 ### Frontend (React/Vite)
 - **Install Dependencies**: `cd frontend && npm install`
@@ -29,21 +30,20 @@ Always operate within a virtual environment (`python -m venv venv && source venv
 
 ## 🧪 Testing Guidelines
 
-The backend currently uses standalone Python scripts for testing rather than a complex `pytest` suite. Use these scripts to verify functionality.
+The backend currently uses standalone Python scripts under `backend/tests/` for testing rather than a complex `pytest` suite (though they are pytest-compatible — CI runs them via `pytest tests/ -v`). Use these scripts to verify functionality.
 
-- **Run all E2E Tests**:
+- **Run all E2E Tests** (needs a running server + seeded Supabase test users — see `Context/test_credentials.md`):
   ```bash
-  cd backend && python test_e2e.py
+  cd backend && python tests/test_e2e.py
   ```
-- **Run a Single Test / Direct Test**:
-  To test the enhanced classifier directly without spinning up the server:
+- **Run the classifier directly** (no server or DB needed — fastest feedback loop for ML changes):
   ```bash
-  cd backend && python test_direct.py
+  cd backend && PYTHONPATH=. python tests/test_direct.py
   ```
-- **Adding New Tests**: 
-  Follow the pattern of creating a `test_<feature>.py` file and executing it directly with Python. Include detailed `print()` statements for test steps, as this is the primary debugging method in this repo.
-- **If introducing Pytest**: 
-  Run specific tests using `cd backend && pytest test_<feature>.py -v`. Ensure tests do not mutate production Supabase data.
+- **Adding New Tests**:
+  Follow the pattern of creating a `tests/test_<feature>.py` file and executing it directly with Python. Include detailed `print()` statements for test steps, as this is the primary debugging method in this repo.
+- **Via Pytest**:
+  Run `cd backend && pytest tests/test_<feature>.py -v`. Ensure tests do not mutate production Supabase data.
 
 ---
 
@@ -55,7 +55,7 @@ The backend currently uses standalone Python scripts for testing rather than a c
 - **Imports**: 
   1. Standard library imports
   2. Third-party library imports (`fastapi`, `pydantic`, `supabase`)
-  3. Local application imports (`from database import ...`)
+  3. Local application imports, using the full `app.*` package path (e.g. `from app.core.database import ...`, `from app.ml.classifier import ...`) — the backend is a proper `app/` package (see `ARCHITECTURE_RESTRUCTURE.md`), not flat files
 - **Naming**: 
   - `snake_case` for variables, functions, and file names.
   - `PascalCase` for Pydantic models and classes.
@@ -65,8 +65,9 @@ The backend currently uses standalone Python scripts for testing rather than a c
   - Catch specific exceptions rather than bare `except Exception:`.
   - Log errors clearly to standard output before returning them to the user.
 - **Machine Learning Constraints**:
-  - **CRITICAL**: Do *not* change `shap==0.51.0` or `scikit-learn` versions in `requirements.txt`. They are highly sensitive to Python 3.13 and Windows compatibility.
-  - Avoid modifying `backend/models/*.pkl` directly. Use `backend/scripts/retrain_and_export.py` to regenerate models if features change.
+  - **CRITICAL**: `scikit-learn` is pinned to an *exact* version (`==1.9.0`) in `requirements.txt`, not `>=`. A trained `.pkl` only reliably unpickles with the scikit-learn version that trained it — a prior unpinned `>=` constraint let a newer scikit-learn install that broke loading the committed model with `ModuleNotFoundError: No module named '_loss'`, a live startup-crashing bug. If you bump the scikit-learn version, you MUST re-run `scripts/train_classifier.py` and commit the regenerated `.pkl`/`.onnx`/`features_config.json` in the same change.
+  - `shap==0.51.0` is also pinned — do not downgrade to 0.46.0 (source build fails on Windows+Python 3.13) or upgrade past 0.51.x without re-verifying the SHAP round-trip on `triage_classifier.pkl`.
+  - Never hand-edit `backend/app/ml/models/*.pkl` directly. Use `cd backend && python scripts/train_classifier.py` to regenerate — it is the single source of truth for both the backend `.pkl` and the frontend `.onnx`/`features_config.json`, produced from one training run so online and offline triage can never disagree. See `backend/app/ml/README.md` for the full architecture.
 
 ### 2. JavaScript/React (Frontend)
 - **File Extensions**: Use `.jsx` for React components and `.js` for utility functions/stores.
@@ -94,7 +95,7 @@ The backend currently uses standalone Python scripts for testing rather than a c
 
 ## 🤖 Agentic Behavior Directives (Cursor, Copilot, Custom Agents)
 
-1. **Path Construction**: Always use **absolute paths** when reading, writing, or editing files. Resolve relative paths against the workspace root (`/home/dharshan/VitalNet/`).
+1. **Path Construction**: Always use **absolute paths** when reading, writing, or editing files. Resolve relative paths against the repository root (wherever this `AGENTS.md` file lives) — do not assume a specific machine's home directory path.
 2. **Context Gathering**: Always use your `read` or `glob` tools to verify the existence and contents of a file before attempting to edit it. Never assume a file's structure.
 3. **Environment Variables**: Never commit `.env` or `.env.local` files. If adding new environment variables, update `.env.example` in both backend and frontend directories immediately.
 4. **Proactiveness**: When asked to implement a feature, proactively implement the backend route, the frontend integration, and the UI styling without waiting for step-by-step confirmation. Deliver a complete slice of functionality.
