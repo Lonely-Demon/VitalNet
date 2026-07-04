@@ -6,7 +6,58 @@ For the ML model's own detailed version history, see
 `backend/CLASSIFIER_CHANGELOG.md`. For the *why* behind major entries, see
 `docs/DECISIONS.md`.
 
-## [Unreleased] — Documentation overhaul
+## [Unreleased] — Enterprise-grade hardening round 2
+
+Autonomously-buildable subset of a broader enterprise-readiness roadmap —
+everything that didn't require a human decision, external credential, or
+organizational commitment. See `docs/CLINICAL_GOVERNANCE.md` and
+`docs/COMPLIANCE_DPDP.md` for what's explicitly *not* included and why
+(regulatory classification, DPO/grievance-officer designation, real-data
+validation — all genuinely require a human/organization, not code).
+
+### Added
+- `docs/CLINICAL_GOVERNANCE.md` — regulatory posture against India's CDSCO
+  Draft Guidance on Medical Device Software (Oct 2025), the five-layer
+  guardrail architecture, model lifecycle governance.
+- `docs/COMPLIANCE_DPDP.md` — full DPDP Act 2023 data-principal-rights
+  mapping, with an honest list of what's an organizational/legal gap.
+- DPDP data-subject-request lifecycle: `GET/POST /api/admin/cases/{id}
+  /export|erase` and `POST /api/admin/cases/purge-expired` (retention
+  sweep, external-scheduler-driven, disabled by default).
+- Offline-emergency SMS facility-alert (`EmergencySmsAlert.jsx`) — closes
+  a real gap versus the original design intent: an `sms:` URI intent with
+  a fixed, PHI-free workflow-ping message, shown when an ASHA worker is
+  offline and the on-device triage is EMERGENCY.
+- Server-side Groq Whisper voice transcription (`POST
+  /api/voice/transcribe`) — closes the other real original-intent gap:
+  the browser's SpeechRecognition was always meant to be a UX-layer
+  convenience, not the clinical transcription accuracy layer. Falls back
+  to the browser path only if the server call fails.
+- `backend/scripts/fairness_audit.py` and `drift_monitor.py` — operator-run
+  ML diagnostics (subgroup performance, feature-distribution drift),
+  explicit about being synthetic-data checks, not real-world audits.
+- CI: a push-only `sbom` job generating a CycloneDX SBOM for backend and
+  frontend dependencies.
+- `docs/INCIDENT_RESPONSE.md` — security incident runbook (detection
+  through post-incident review, DPDP breach-notification hook).
+- `backend/scripts/load_test.py` — lightweight asyncio+httpx load
+  generator, refuses to target anything but localhost without an explicit
+  confirmation flag.
+- `docs/ACCESSIBILITY.md` and a WCAG 2.1 AA pass: form-label association
+  (previously visual-only, not programmatic, across the app's most-used
+  screens), fieldset/legend grouping, `role="status" aria-live="polite"`
+  on toasts/offline banner, and corrected color-contrast tokens
+  (`--color-text3`, `--color-urgent`) that were failing AA.
+- `docs/SLO.md` and `GET /api/metrics` (Prometheus text format, admin-only)
+  — HTTP request/latency/error metrics and a triage-classification counter.
+
+### Changed
+- `test_admin_authz.py` generalized to scan every admin-only route module
+  (`admin_routes`, `dsr_routes`, `metrics_routes`), not just one, so the
+  require_role('admin')-only invariant keeps covering new admin surfaces
+  automatically.
+
+## Documentation overhaul
 
 ### Added
 - `docs/API_REFERENCE.md` — complete endpoint-by-endpoint reference.
