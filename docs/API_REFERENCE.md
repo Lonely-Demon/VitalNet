@@ -363,6 +363,12 @@ Soft-delete (`deleted_at`) — reuses `cases.py`'s row-level authorization
   to load (the app boots in degraded/rules-only mode rather than crashing —
   see `docs/DECISIONS.md`).
 
+### `GET /api/metrics` — 60/min — `admin`
+Prometheus text-format metrics (`app/core/metrics.py`): HTTP request
+count/latency/status by route, and a triage-classification counter by
+level. See `docs/SLO.md` for the SLO targets these back and an example
+Prometheus scrape config with a bearer token.
+
 ---
 
 ## Endpoints that are documented specs, not live code

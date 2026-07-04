@@ -27,7 +27,7 @@ from app.core.logging import setup_logging
 from app.core.correlation import set_correlation_id
 from app.core.config import settings
 from app.ml.classifier import load_classifier
-from app.api.routes import cases, admin_routes, analytics_routes, security, push_routes, referral_routes, dsr_routes, voice_routes
+from app.api.routes import cases, admin_routes, analytics_routes, security, push_routes, referral_routes, dsr_routes, voice_routes, metrics_routes
 
 # ── 1. Structured JSON logging — must be first ────────────────────────────────
 logger = setup_logging()
@@ -152,6 +152,35 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 app.add_middleware(CorrelationIdMiddleware)
 
 
+# ── 8b. Metrics middleware (docs/SLO.md) ──────────────────────────────────────
+# Keyed on the matched ROUTE TEMPLATE (e.g. "/api/cases/{case_id}"), read from
+# request.scope AFTER call_next() so routing has already resolved it — never
+# the raw path, which would give every case_id its own metric label
+# (unbounded cardinality, a classic Prometheus footgun).
+
+import time as _time  # noqa: E402
+from app.core.metrics import record_request  # noqa: E402
+
+
+class MetricsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start = _time.monotonic()
+        response = await call_next(request)
+        duration = _time.monotonic() - start
+
+        # "unmatched" (not the raw path) for a 404/unrouted request — an
+        # attacker-controlled raw path would otherwise be an unbounded-
+        # cardinality label, a classic Prometheus footgun.
+        route = request.scope.get("route")
+        route_path = route.path if route else "unmatched"
+        record_request(request.method, route_path, response.status_code, duration)
+
+        return response
+
+
+app.add_middleware(MetricsMiddleware)
+
+
 # ── 9. CORS — restricted to known origins loaded from settings ────────────────
 
 app.add_middleware(
@@ -173,6 +202,7 @@ app.include_router(push_routes.router)
 app.include_router(referral_routes.router)
 app.include_router(dsr_routes.router)
 app.include_router(voice_routes.router)
+app.include_router(metrics_routes.router)
 
 
 # ── 11. Global exception handlers — emit structured JSON, never raw tracebacks ─

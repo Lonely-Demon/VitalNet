@@ -1,13 +1,16 @@
 """
 Authorization regression test for the admin surface.
 
-Every route under /api/admin/* (across admin_routes.py and dsr_routes.py)
-uses the RLS-bypassing service-role client (supabase_admin). Its ONLY
-access-control boundary is require_role('admin') — there is no RLS backstop
-(see the SECURITY NOTE in app/core/database.py). This test asserts that
-boundary is present on every admin route, so a future route (in either
-module, or a new one added to ADMIN_ROUTE_MODULES below) fails CI instead of
-silently exposing cross-tenant data.
+Covers every route in ADMIN_ROUTE_MODULES below — not just routes literally
+prefixed /api/admin/*, but every module meant to be admin-only end to end
+(admin_routes.py and dsr_routes.py use the RLS-bypassing service-role client,
+where require_role('admin') is the ONLY access-control boundary — see the
+SECURITY NOTE in app/core/database.py; metrics_routes.py has no RLS
+involved at all, but is admin-gated on the same least-privilege principle).
+This test asserts that boundary is present on every route in every listed
+module, so a future route (in an existing module, or a new one added to
+ADMIN_ROUTE_MODULES below) fails CI instead of silently exposing something
+it shouldn't.
 
 Sets fake JWT-format Supabase creds in the environment before import so the
 module-level client construction in database.py succeeds without a real project
@@ -29,11 +32,11 @@ os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret-at-least-32-chars-long
 os.environ.setdefault("GROQ_API_KEY", "test-key")
 
 from fastapi.routing import APIRoute  # noqa: E402
-from app.api.routes import admin_routes, dsr_routes  # noqa: E402
+from app.api.routes import admin_routes, dsr_routes, metrics_routes  # noqa: E402
 
-# Every router module that owns /api/admin/* routes. Add new ones here so
-# this test keeps covering the whole admin surface as it grows.
-ADMIN_ROUTE_MODULES = [admin_routes, dsr_routes]
+# Every router module meant to be admin-only end to end. Add new ones here
+# so this test keeps covering the whole admin surface as it grows.
+ADMIN_ROUTE_MODULES = [admin_routes, dsr_routes, metrics_routes]
 
 
 def _enforced_roles(route: APIRoute) -> set:

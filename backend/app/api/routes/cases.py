@@ -15,6 +15,7 @@ from app.core.auth import require_role, verify_sub_for_rate_limit
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
 from app.core.database import get_supabase_for_user
+from app.core.metrics import record_triage_classification
 from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput
 from app.ml.classifier import run_triage
 from app.services.llm import generate_briefing
@@ -211,6 +212,11 @@ async def submit_case(
             ip_address=get_client_ip(request),
             details={"created_offline": bool(form.created_offline), "needs_review": bool(record.get("needs_review"))},
         )
+
+        # Genuinely new submission (not a retried duplicate) — record the
+        # business metric once, not on every retry (docs/SLO.md).
+        if bool(result.data):
+            record_triage_classification(triage_result["triage_level"])
 
         # Genuinely new EMERGENCY case (not a retried duplicate) — notify the
         # facility's subscribed doctors. Background task: never adds latency

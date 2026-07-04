@@ -28,3 +28,4 @@ pywebpush==2.3.0
 # Required by FastAPI/Starlette to parse multipart/form-data — used by
 # POST /api/voice/transcribe's audio file upload (app/services/voice.py).
 python-multipart==0.0.32
+prometheus_client==0.25.0

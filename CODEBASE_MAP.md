@@ -108,6 +108,8 @@ VitalNet/
 │   │                     rights, fiduciary obligations, honest gap list
 │   ├── ACCESSIBILITY.md       WCAG 2.1 AA audit — label association, live
 │   │                     regions, color-contrast fixes, honest known gaps
+│   ├── SLO.md                 Service level objectives, SLIs, GET /api/metrics
+│   │                     (Prometheus), example PromQL/scrape config
 │   ├── security-audits/       Historical red-team audit trail (dated folders).
 │   │                     Read-only historical record — do not treat findings as
 │   │                     current state without cross-checking the code.
@@ -195,8 +197,14 @@ backend/
 │   │   │                            /api/admin/audit-log / AdminAuditLog.jsx.
 │   │   ├── correlation.py            Single contextvar for X-Request-ID, shared by
 │   │   │                            the logging formatter and route handlers.
-│   │   └── logging.py                JSON structured logging setup (setup_logging()),
-│   │                                 includes correlation_id via CorrelationIdFilter.
+│   │   ├── logging.py                JSON structured logging setup (setup_logging()),
+│   │   │                            includes correlation_id via CorrelationIdFilter.
+│   │   └── metrics.py                Prometheus counters/histogram (docs/SLO.md):
+│   │                                 request count/latency by method+route+status,
+│   │                                 triage classifications by level. record_request()
+│   │                                 called from main.py's MetricsMiddleware, keyed on
+│   │                                 the matched ROUTE TEMPLATE (never the raw path —
+│   │                                 unbounded-cardinality footgun).
 │   ├── api/routes/
 │   │   ├── cases.py                  /api/submit, /api/cases, /api/cases/{id}/review,
 │   │   │                             /api/cases/mine, /api/cases/{id}. Owns the shared
@@ -252,10 +260,13 @@ backend/
 │   │   │                             immutable case_outcomes table), POST
 │   │   │                             .../purge-expired (retention sweep, external-
 │   │   │                             scheduler-driven like the re-alert endpoint).
-│   │   └── voice_routes.py           POST /api/voice/transcribe — Groq Whisper voice
-│   │                                 transcription (app/services/voice.py). Online-only,
-│   │                                 no audio persisted; the browser-STT path is the
-│   │                                 fallback, not this (docs/DECISIONS.md §15).
+│   │   ├── voice_routes.py           POST /api/voice/transcribe — Groq Whisper voice
+│   │   │                             transcription (app/services/voice.py). Online-only,
+│   │   │                             no audio persisted; the browser-STT path is the
+│   │   │                             fallback, not this (docs/DECISIONS.md §15).
+│   │   └── metrics_routes.py         GET /api/metrics — Prometheus text format
+│   │                                 (app/core/metrics.py), admin-only. Backs the
+│   │                                 SLIs in docs/SLO.md.
 │   ├── models/schemas.py            Pydantic request/response models. IntakeForm is
 │   │                                 the case-submission contract — every field is
 │   │                                 bounded (min/max length, numeric ranges, enums),
