@@ -632,3 +632,40 @@ skl2onnx/onnxruntime versions passed parity cleanly, and each of Findings
 were combined, which is what surfaced the latent threshold-rounding
 sensitivity. This was a pre-existing bug not previously triggered by any
 prior training run's feature distribution.
+
+### 24. Voice transcription: Groq tried first, Sarvam AI as a credit-conserving fallback
+
+**Context**: `app/services/voice.py` previously had exactly one provider
+(Groq Whisper `whisper-large-v3`). The user asked to (1) bump the Groq
+model to `whisper-large-v3-turbo`, and (2) add Sarvam AI — specialised
+Indian-language speech-to-text — as a second provider, then to bias
+provider selection toward Groq because Sarvam's free tier is a fixed
+signup credit (Groq has no comparable ceiling for this app's volume) that
+would otherwise be spent on requests Groq already handles adequately.
+
+**Decision**: `voice.py` now supports two independent, optional providers.
+Groq Whisper (`whisper-large-v3-turbo`) is tried first for every language.
+Sarvam AI (`saaras:v3`, `POST https://api.sarvam.ai/speech-to-text`,
+`api-subscription-key` header, BCP-47 language codes) is tried only if Groq
+is unconfigured (`GROQ_API_KEY` unset) or a request to it raises — i.e.
+purely as a fallback, never proactively for its Indian-language
+specialisation. Either credential alone is sufficient for every supported
+language (`en`/`hi`/`ta`); if neither is configured, or every configured
+provider's request fails, `POST /api/voice/transcribe` returns `503`
+exactly as before. Both API keys were verified directly against the real
+endpoints (a synthetic test-tone WAV, not real speech) before this shipped,
+confirming the model names and auth scheme are correct — not assumed from
+documentation alone.
+
+**Consequences**: `SARVAM_API_KEY` is a new optional setting
+(`app/core/config.py`, `.env.example`) — empty disables Sarvam outright and
+behavior is identical to before this change. `tests/conftest.py` explicitly
+forces `SARVAM_API_KEY=""` for the test suite (mirroring the existing
+`GROQ_API_KEY` fake-credential fill) so voice-transcription tests have a
+deterministic "Sarvam unconfigured" starting point regardless of what a
+developer's local `.env.local` carries. **Operational note**: the real
+Groq/Sarvam keys used during this change were shared directly in a chat
+message — both were only ever written to a local, gitignored `.env.local`
+in the development sandbox, never committed; rotating both keys after this
+change shipped is recommended good hygiene since they passed through a chat
+transcript.

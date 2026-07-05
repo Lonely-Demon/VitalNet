@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     supabase_service_role_key: str           # Used ONLY for admin/global operations (bypasses RLS)
     groq_api_key: str
     gemini_api_key: str = ""   # Optional — fallback tier 3 and 4; app starts without it
+    # Sarvam AI (app/services/voice.py) — specialised Indian-language speech-
+    # to-text (saaras:v3), preferred for hi/ta voice input. Optional: empty
+    # disables it and voice transcription falls back to Groq Whisper alone.
+    sarvam_api_key: str = ""
     frontend_url: str = ""
     # Comma-separated extra CORS origins (e.g. additional staging domains),
     # combined with frontend_url and — in development — localhost. Lets ops

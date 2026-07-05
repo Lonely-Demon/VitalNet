@@ -277,10 +277,12 @@ backend/
 │   │   │                             immutable case_outcomes table), POST
 │   │   │                             .../purge-expired (retention sweep, external-
 │   │   │                             scheduler-driven like the re-alert endpoint).
-│   │   ├── voice_routes.py           POST /api/voice/transcribe — Groq Whisper voice
-│   │   │                             transcription (app/services/voice.py). Online-only,
-│   │   │                             no audio persisted; the browser-STT path is the
-│   │   │                             fallback, not this (docs/DECISIONS.md §15).
+│   │   ├── voice_routes.py           POST /api/voice/transcribe — server-side voice
+│   │   │                             transcription (app/services/voice.py), Groq
+│   │   │                             Whisper tried first then Sarvam AI as fallback
+│   │   │                             (docs/DECISIONS.md §24). Online-only, no audio
+│   │   │                             persisted; the browser-STT path is the fallback,
+│   │   │                             not this (docs/DECISIONS.md §15).
 │   │   └── metrics_routes.py         GET /api/metrics — Prometheus text format
 │   │                                 (app/core/metrics.py), admin-only. Backs the
 │   │                                 SLIs in docs/SLO.md.
@@ -355,10 +357,19 @@ backend/
 │   │   │                             (logs instead of sending), parse_inbound_sms()
 │   │   │                             strict-format parser. No live webhook endpoint —
 │   │   │                             see docs/DECISIONS.md §11.
-│   │   └── voice.py                  Groq Whisper transcription (transcribe()) behind
-│   │                                 voice_routes.py. i18n language codes map directly
-│   │                                 onto Whisper's ISO-639-1 codes. Audio is transcribed
-│   │                                 and discarded, never persisted (docs/DECISIONS.md §15).
+│   │   └── voice.py                  transcribe() behind voice_routes.py — two
+│   │                                 independent providers, Groq Whisper
+│   │                                 (whisper-large-v3-turbo) tried first for every
+│   │                                 language, Sarvam AI (saaras:v3) as the fallback
+│   │                                 only if Groq is unconfigured or fails (Sarvam's
+│   │                                 free tier is a fixed signup credit — conserved
+│   │                                 rather than spent on requests Groq already
+│   │                                 handles; docs/DECISIONS.md §24). Either
+│   │                                 GROQ_API_KEY or SARVAM_API_KEY alone is enough
+│   │                                 for every supported language. i18n language codes
+│   │                                 map directly onto Whisper's ISO-639-1 codes /
+│   │                                 Sarvam's BCP-47 codes. Audio is transcribed and
+│   │                                 discarded, never persisted (docs/DECISIONS.md §15).
 │   └── __init__.py files (package markers, no logic)
 ├── scripts/
 │   ├── train_classifier.py          THE training entrypoint (single unified model —
@@ -445,8 +456,11 @@ backend/
 │   │                                 written (immutable-by-design invariant).
 │   ├── test_voice_transcription.py   Unit tests for app/services/voice.py — not-
 │   │                                 configured error, language-code pass-through/
-│   │                                 fallback-to-None, Groq-failure wrapping. Uses
-│   │                                 asyncio.run() directly (no pytest-asyncio dep).
+│   │                                 fallback-to-None, Groq-tried-first ordering,
+│   │                                 Sarvam-as-fallback on Groq failure, Sarvam
+│   │                                 never attempted when unconfigured, both-fail
+│   │                                 wrapping. Uses asyncio.run() directly (no
+│   │                                 pytest-asyncio dep).
 │   └── test_e2e.py                   Full integration test against a running server +
 │                                     real Supabase auth (needs seeded test users).
 │                                     NOT run in unit CI (needs a live server).
@@ -577,7 +591,7 @@ frontend/src/
 │   ├── useRealtimeReferrals.js Same pattern, but binds TWO postgres_changes filters
 │   │                          (referring_facility_id / receiving_facility_id) since a
 │   │                          facility can be on either side of a referral.
-│   └── useVoiceInput.js       Voice-to-text — tries server-side Groq Whisper
+│   └── useVoiceInput.js       Voice-to-text — tries server-side transcription
 │                              (MediaRecorder + POST /api/voice/transcribe, the
 │                              accuracy layer for Indic medical speech) first, falls
 │                              back to the browser's own SpeechRecognition only if

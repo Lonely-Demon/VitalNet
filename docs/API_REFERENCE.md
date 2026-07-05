@@ -365,16 +365,22 @@ checked, purged }`.
 ## Voice transcription (`app/api/routes/voice_routes.py`, prefix `/api/voice`)
 
 ### `POST /transcribe` — 20/min — `asha_worker`, `doctor`, `admin`
-Server-side transcription (Groq Whisper `whisper-large-v3`) — the accuracy
-layer behind `useVoiceInput.js`'s primary voice path, with the browser's
-own `SpeechRecognition` as fallback (`docs/DECISIONS.md` §15).
+Server-side transcription — the accuracy layer behind `useVoiceInput.js`'s
+primary voice path, with the browser's own `SpeechRecognition` as fallback
+(`docs/DECISIONS.md` §15). Two providers, Groq tried first: Groq Whisper
+(`whisper-large-v3-turbo`) is tried first for every language (unmetered for
+this app's volume); Sarvam AI (`saaras:v3`, specialised Indian-language STT)
+is used only as the fallback if Groq isn't configured or a request to it
+fails — Sarvam's free tier is a fixed signup credit, reserved rather than
+spent on requests Groq already handles (`docs/DECISIONS.md` §24).
 **Multipart body**: `file` (audio, ≤10 MB, one of
 `audio/webm|wav|wave|x-wav|mp4|mpeg|ogg|m4a|x-m4a` — codec suffixes like
 `;codecs=opus` are stripped before matching). **Query param**: `language`
-(optional, `en`/`hi`/`ta` — anything else is ignored, letting Whisper
+(optional, `en`/`hi`/`ta` — anything else is ignored, letting the provider
 auto-detect). **Response**: `{ transcript }`. `415` on an unsupported
-content type, `413` over the size cap, `503` if `GROQ_API_KEY` isn't
-configured. No audio is persisted — transcribed and discarded within the
+content type, `413` over the size cap, `503` if neither `GROQ_API_KEY` nor
+`SARVAM_API_KEY` is configured, or every configured provider's request
+fails. No audio is persisted — transcribed and discarded within the
 request.
 
 ---
