@@ -6,5 +6,5 @@
 # Kept out of requirements.txt so production deploys (Railway, or any
 # resource-constrained rural-clinic server) don't install ~150MB of ONNX
 # tooling that the running app never imports.
-skl2onnx>=1.18.0
+skl2onnx>=1.20.0
 onnxruntime>=1.20.0
