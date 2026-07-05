@@ -28,7 +28,11 @@ overridden. An LLM (Groq, with Gemini fallback) generates a structured
 clinical briefing for the case. Doctors see a real-time, priority-sorted
 dashboard of incoming cases, see low-confidence/review-requested flags, and
 mark cases reviewed (soft-deletable, audit-logged). Admins manage users and
-facilities. Three roles (asha_worker, doctor, admin), enforced by both
+facilities. A fourth role, supervisor, gets a facility-scoped, aggregate-only,
+non-PHI view of per-ASHA-worker performance for supportive supervision
+(`docs/DECISIONS.md` §25) — modeled on NHM's real ASHA Facilitator role, a
+parallel workforce-quality line distinct from `doctor`'s clinical authority.
+Four roles total (asha_worker, doctor, supervisor, admin), enforced by both
 backend checks (role/facility_id resolved fresh from the `profiles` table
 every request — never trusted from JWT claims) and Supabase Row Level
 Security.
@@ -41,6 +45,7 @@ graph TB
         ASHA["ASHA worker browser<br/>IntakeForm, offline queue,<br/>pure-JS triage"]
         Doctor["Doctor browser<br/>Dashboard, Realtime feed,<br/>Referrals"]
         Admin["Admin browser<br/>Users/Facilities/Analytics"]
+        Supervisor["Supervisor browser<br/>Team Metrics (aggregate-only)"]
     end
 
     subgraph Backend["FastAPI backend (Railway)"]
@@ -283,9 +288,20 @@ backend/
 │   │   │                             (docs/DECISIONS.md §24). Online-only, no audio
 │   │   │                             persisted; the browser-STT path is the fallback,
 │   │   │                             not this (docs/DECISIONS.md §15).
-│   │   └── metrics_routes.py         GET /api/metrics — Prometheus text format
-│   │                                 (app/core/metrics.py), admin-only. Backs the
-│   │                                 SLIs in docs/SLO.md.
+│   │   ├── metrics_routes.py         GET /api/metrics — Prometheus text format
+│   │   │                             (app/core/metrics.py), admin-only. Backs the
+│   │   │                             SLIs in docs/SLO.md.
+│   │   └── supervisor_routes.py      GET /api/supervisor/team-metrics —
+│   │                                 per-ASHA-worker aggregate metrics (submission
+│   │                                 count, needs_review/contraindication/
+│   │                                 deterioration rates, tier distribution) for
+│   │                                 require_role('supervisor', 'admin'). One narrow
+│   │                                 supabase_admin aggregate query, same exception
+│   │                                 class as §20/§22 — no case row or patient field
+│   │                                 crosses the RLS boundary. supervisor is scoped
+│   │                                 to their own facility_id only; admin defaults
+│   │                                 system-wide or narrows via ?facility_id
+│   │                                 (docs/DECISIONS.md §25).
 │   ├── models/schemas.py            Pydantic request/response models. IntakeForm is
 │   │                                 the case-submission contract — every field is
 │   │                                 bounded (min/max length, numeric ranges, enums),
@@ -627,7 +643,8 @@ frontend/src/
 ├── panels/
 │   ├── ASHAPanel.jsx (New Case / My Submissions), DoctorPanel.jsx (Pending Review /
 │   │   All Cases / Referrals tabs), AdminPanel.jsx (Analytics/Users/Facilities/System/
-│   │   Audit Log)
+│   │   Audit Log), SupervisorPanel.jsx (Team Metrics — TeamMetrics.jsx component,
+│   │   GET /api/supervisor/team-metrics, docs/DECISIONS.md §25)
 ├── components/                Shared UI: BriefingCard (triage override + outcome-
 │   │                          recording + referral actions + patient-summary on-demand
 │   │                          request live here), TriageBadge,
@@ -717,7 +734,7 @@ erDiagram
     }
     PROFILES {
         uuid id PK "= auth.users.id"
-        text role "asha_worker/doctor/admin"
+        text role "asha_worker/doctor/supervisor/admin"
         uuid facility_id FK
         boolean is_active
     }
@@ -796,8 +813,10 @@ against the live Supabase project's SQL editor (or via the Supabase CLI)
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`
-  (`asha_worker`/`doctor`/`admin`), `facility_id`, `asha_id`, `is_active`,
-  `created_at`.
+  (`asha_worker`/`doctor`/`supervisor`/`admin` — no DB CHECK constraint on
+  this column; enforcement is `admin_routes.py`'s Pydantic `Literal` type
+  plus `require_role()`, see docs/DECISIONS.md §25), `facility_id`,
+  `asha_id`, `is_active`, `created_at`.
 - `facilities` — `id`, `name`, `type`, `address`, `district`, `state`,
   `pincode`, `phone`, `is_active`.
 - `case_records` — patient/vitals/symptom fields (mirrors `IntakeForm`),

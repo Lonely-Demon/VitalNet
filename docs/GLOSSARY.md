@@ -12,6 +12,14 @@ rural patients. Not a doctor or nurse — trained in basic health screening,
 referral, and community health education. VitalNet's `asha_worker` role
 represents this user.
 
+**ASHA Facilitator** — India's National Health Mission role that provides
+"supportive supervision" to a cluster of ~10-25 ASHA workers: joint home
+visits, monthly cluster meetings, performance support. Reports through a
+parallel, non-clinical line to block-level NHM administration — not through
+a treating doctor. VitalNet's `supervisor` role is modeled directly on this
+real-world role (`docs/DECISIONS.md` §25), which is why it is a distinct
+fourth role rather than a permission bolted onto `doctor` or `admin`.
+
 **PHC (Primary Health Centre)** — the first-tier government healthcare
 facility in rural India, typically staffed by one or a few doctors, serving
 a cluster of villages. A `facilities` row with `type = 'PHC'` represents
@@ -139,10 +147,11 @@ last-seen row's sort-key values (rather than an offset/page number) as the
 (`GET /api/cases`, `/api/cases/mine`) — stable under concurrent
 inserts/deletes, unlike offset pagination.
 
-**Role scoping** — the three-role authorization model: `admin` (global),
-`doctor` (scoped to their own facility), `asha_worker` (scoped to their own
-submissions). See `docs/API_REFERENCE.md`'s conventions section and
-CODEBASE_MAP.md §6.
+**Role scoping** — the four-role authorization model: `admin` (global),
+`doctor` (scoped to their own facility), `supervisor` (scoped to their own
+facility, aggregate-only, non-PHI — see ASHA Facilitator below and
+`docs/DECISIONS.md` §25), `asha_worker` (scoped to their own submissions).
+See `docs/API_REFERENCE.md`'s conventions section and CODEBASE_MAP.md §6.
 
 **Hybrid auth** — VitalNet's JWT verification approach: local signature
 verification on the hot path, with a network fallback only when local

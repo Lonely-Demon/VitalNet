@@ -6,6 +6,7 @@
  *   - @/api/cases.js      → getCases, reviewCase, getMySubmissions, overrideTriage, recordCaseOutcome, getPatientSummary, getCaseHistoryByPatientKey
  *   - @/api/admin.js      → adminList/Create/Update/Deactivate/Reactivate users + facilities + stats
  *   - @/api/analytics.js  → getAnalyticsSummary, getEmergencyRate
+ *   - @/api/supervisor.js → getTeamMetrics
  *   - @/stores/syncStore.js → submitCase, processQueue (stateful offline queue manager)
  *
  * This barrel keeps existing consumers working without requiring immediate refactors.
@@ -30,3 +31,4 @@ export {
 } from '@/api/admin'
 export { getAnalyticsSummary, getEmergencyRate, getResponseTimes, getMlAgreement, exportCases } from '@/api/analytics'
 export { listActiveFacilities, createReferral, listReferrals, updateReferralStatus, updateFacilityCapacity } from '@/api/referrals'
+export { getTeamMetrics } from '@/api/supervisor'

@@ -669,3 +669,136 @@ message — both were only ever written to a local, gitignored `.env.local`
 in the development sandbox, never committed; rotating both keys after this
 change shipped is recommended good hygiene since they passed through a chat
 transcript.
+
+### 25. A fourth role — `supervisor` — grounded in NHM's real ASHA Facilitator structure
+
+**Context**: the user asked for a supervisor dashboard, an outbreak
+dashboard, and a protocol/guideline lookup assistant, and explicitly asked
+for the role/access model ("who manages who") to be researched and decided
+rather than assumed. Before building any of the three, this needed an
+answer: is "supervisor" a new role, or a view bolted onto `doctor` or
+`admin`?
+
+**Research**: India's National Health Mission already has exactly this
+role in the real ASHA program — the **ASHA Facilitator**. Per NHM's own
+guidelines, a Facilitator provides "supportive supervision" to a cluster
+of ASHA workers (roughly 10 in tribal areas, 20–25 elsewhere): joint home
+visits, monthly cluster meetings, performance support. Critically, this is
+a **parallel reporting line to the clinical one** — a Facilitator manages
+ASHA-workforce quality and reports through block-level NHM administration,
+not through a treating doctor. A PHC doctor and an ASHA Facilitator are
+different people with different jobs in the real system this app models.
+
+**Decision**: `supervisor` is a new, fourth role — not a permission bolted
+onto `doctor` (would wrongly conflate clinical case authority with
+workforce-quality oversight — different people, different jobs in reality)
+and not onto `admin` (would wrongly hand a facility-level workforce
+supervisor organisation-wide system authority, which they don't have in
+NHM's real structure either). It is:
+
+- **Facility-scoped**, the same way `doctor` already is (`resolved_facility_id`
+  — no new scoping primitive needed).
+- **Aggregate-only, non-PHI, read-only** by design: per-ASHA-worker
+  submission counts, `needs_review` rate, contraindication-flag rate,
+  deterioration-alert rate, and triage-tier distribution at their own
+  facility. This is exactly the signal real supportive supervision needs
+  (which workers need more training or support) and structurally cannot
+  see an individual patient's case — no new PHI exposure surface at all.
+- **Not** clinical review/override authority (stays `doctor`-only — a
+  supervisor is not a clinician) and **not** user/facility CRUD (stays
+  `admin`-only — a facility-level role has no business managing the whole
+  organisation).
+- Also scoped into the facility-level view of the outbreak dashboard
+  (§26) and the curation queue for the protocol assistant (§27) — both are
+  a natural extension of "workforce quality and support," not scope creep.
+
+**Implementation consequence**: `profiles.role` has no database-level
+CHECK constraint (verified — it's a plain `text` column; the only
+enforcement is `admin_routes.py`'s Pydantic `Literal` type and
+`require_role()` calls), so adding `supervisor` needs no schema migration
+for the role value itself, only: extending the `Literal` type + admin
+user-management UI so `admin` can assign it, and new aggregate-only
+endpoints following the exact same narrow `supabase_admin` pattern already
+established and governed in §20/§22 (an aggregate crosses the RLS
+boundary, never a row) — supervisor is never added to `case_records`'
+underlying (untracked, pre-`phase15`) row-level SELECT policy.
+
+### 26. Outbreak dashboard — a real epidemiological method, honestly scoped
+
+**Context**: an "internal outbreak early-warning dashboard" was one of the
+four features explicitly deferred pending a decision in an earlier round.
+Two questions needed answers: what algorithm, and who sees it.
+
+**Research**: CDC's Early Aberration Reporting System (EARS) is the
+standard reference for lightweight syndromic-surveillance aberration
+detection, and a comparative study of small-population outbreak-detection
+methods found its **C1 variant** — a 7-day trailing baseline mean and
+standard deviation, flagging today's count when it exceeds
+`baseline_mean + 3×baseline_stddev` — had the best validity and timeliness
+specifically in **small-population settings**, which is the right
+comparison class for a rural PHC's case volume (not a large-city hospital
+stream). This is a real, citable, appropriately-scoped method rather than
+an invented threshold.
+
+**Decision**: implemented as a C1-style check over `(facility, symptom-or-
+chief-complaint cluster, day)` aggregate counts — a floor (e.g. at least 3
+cases) is also required before a day is even eligible to be flagged, so a
+jump from 0 to 1 case in a tiny population is never treated as
+"elevated." Output is **aggregate counts only** — no patient names, no
+individual case content, ever. Scope: `admin` sees every facility;
+`doctor` and `supervisor` see their own facility only (the same facility-
+scoping convention used everywhere else). Framed explicitly, in the UI and
+the code, as an informational aid for a human to review — not a validated
+public-health surveillance system — matching the same honesty standard
+already applied to `fairness_audit.py`/`drift_monitor.py`.
+
+### 27. Protocol/guideline lookup assistant — grounded in ASHABot's own published lessons, adapted for VitalNet's constraints
+
+**Context**: the user asked to look specifically at ASHABot (Khushi Baby +
+Microsoft Research India) before designing this. ASHABot is real,
+deployed, and has a published CHI 2025 paper — using its actual documented
+design (not just the earlier competitive-analysis summary) materially
+changed this feature's design versus a naive "let ASHA workers ask an LLM
+questions" build.
+
+**Research findings that shaped the design**:
+- ASHABot uses **retrieval over a curated knowledge base** built from
+  official government ASHA training modules — never raw LLM parametric
+  medical knowledge. When nothing relevant is found, it answers **"I don't
+  know"** rather than generating something plausible-sounding.
+- Unresolved questions are escalated to human experts (Auxiliary
+  Nurse-Midwives) for a crowdsourced, multi-reviewer consensus answer,
+  which then updates the knowledge base for next time.
+- The paper's own honestly-reported limitation: that consensus mechanism
+  averaged **~60 hours** to resolve — too slow for real-time use; ASHAs
+  typically found an answer elsewhere first.
+
+**Decision**: adapt the parts of this design that transfer, and
+deliberately not copy the part ASHABot's own evaluation found doesn't
+work:
+- **Grounding**: a small, VitalNet-authored, curated reference document
+  (`backend/app/services/protocol_knowledge.md` or similar — ANC schedule,
+  immunisation schedule, danger-sign checklists, common referral
+  protocols) is stuffed directly into the system prompt context — a
+  "RAG-lite" via context-stuffing rather than a vector database, since the
+  reference material is small enough to fit directly and this avoids a new
+  piece of infrastructure for a genuinely small corpus. Reuses the
+  existing 4-tier Groq/Gemini fallback client, but with a **distinct
+  system prompt** — never the triage-briefing prompt.
+- **Never patient-specific**: the assistant refuses questions that sound
+  like they're about a specific patient's symptoms ("please submit a case
+  for triage instead") — this is the guardrail that stops this feature
+  from reintroducing the exact expert-novice-gap failure mode VitalNet's
+  own competitive research already identifies as ASHABot's real weak spot
+  relative to VitalNet's triage pipeline (docs/RESEARCH_AND_DEVELOPMENT.md
+  §2.5, §4.6). Answers to genuine protocol questions carry no clinical
+  decision weight and never touch triage.
+- **"I don't know," logged, not blocked on**: when the answer isn't in the
+  reference material, the assistant says so and the question is queued
+  (a new `protocol_questions` table) for asynchronous curation by a
+  supervisor, doctor, or admin at the same facility — **not** a
+  synchronous multi-reviewer consensus gate. ASHABot's own published data
+  shows synchronous consensus is too slow to be useful; VitalNet's
+  adaptation keeps the safety property (never fabricate an answer) without
+  the impractical latency. A curated answer becomes part of a shared,
+  growing facility FAQ inside the assistant UI.

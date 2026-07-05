@@ -5,12 +5,14 @@ const ROLE_LABELS = {
   asha_worker: 'ASHA Worker',
   doctor:      'Doctor',
   admin:       'Admin',
+  supervisor:  'Supervisor',
 }
 
 const ROLE_COLORS = {
   asha_worker: 'bg-leaf text-forest',
   doctor:      'bg-sand text-forest',
   admin:       'bg-surface3 text-text',
+  supervisor:  'bg-urgent/10 text-urgent',
 }
 
 const LANGUAGES = ['en', 'hi', 'ta']

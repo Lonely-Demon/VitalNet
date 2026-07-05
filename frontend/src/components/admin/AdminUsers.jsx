@@ -42,14 +42,14 @@ function parseCsv(text) {
   return rows
 }
 
-const CSV_ROLE_OPTIONS = ['asha_worker', 'doctor', 'admin']
+const CSV_ROLE_OPTIONS = ['asha_worker', 'doctor', 'admin', 'supervisor']
 
 function validateCsvRow(row, facilitiesByName) {
   const errors = []
   if (!row.full_name) errors.push('missing full_name')
   if (!row.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push('invalid email')
   if (!row.password || row.password.length < 12) errors.push('password must be 12+ chars')
-  if (!CSV_ROLE_OPTIONS.includes(row.role)) errors.push('role must be asha_worker/doctor/admin')
+  if (!CSV_ROLE_OPTIONS.includes(row.role)) errors.push('role must be asha_worker/doctor/admin/supervisor')
 
   let facility_id = row.facility_id || ''
   if (row.facility && !facility_id) {
@@ -57,23 +57,25 @@ function validateCsvRow(row, facilitiesByName) {
     if (match) facility_id = match
     else errors.push(`unknown facility "${row.facility}"`)
   }
-  if ((row.role === 'asha_worker' || row.role === 'doctor') && !facility_id) {
+  if ((row.role === 'asha_worker' || row.role === 'doctor' || row.role === 'supervisor') && !facility_id) {
     errors.push('facility is required for this role')
   }
   return { errors, facility_id }
 }
 
-const ROLE_OPTIONS = ['asha_worker', 'doctor', 'admin']
+const ROLE_OPTIONS = ['asha_worker', 'doctor', 'supervisor', 'admin']
 
 const ROLE_LABELS = {
   asha_worker: 'ASHA Worker',
   doctor:      'Doctor',
+  supervisor:  'Supervisor',
   admin:       'Admin',
 }
 
 const ROLE_COLORS = {
   asha_worker: 'bg-leaf text-forest',
   doctor:      'bg-sand text-forest',
+  supervisor:  'bg-urgent/10 text-urgent',
   admin:       'bg-surface3 text-text',
 }
 

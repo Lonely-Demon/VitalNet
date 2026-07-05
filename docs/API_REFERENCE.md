@@ -266,6 +266,35 @@ Streams a CSV of case records for a date range.
 
 ---
 
+## Supervisor (`app/api/routes/supervisor_routes.py`, prefix `/api/supervisor`)
+
+`require_role('supervisor', 'admin')`. Grounded in NHM's real ASHA Facilitator
+role (`docs/DECISIONS.md` §25) — a facility-scoped, aggregate-only,
+non-PHI workforce-oversight view, structurally distinct from `doctor`'s
+clinical authority and `admin`'s organisation-wide access. Uses
+`supabase_admin` for exactly one narrow aggregate query, per the same
+documented exception as §20/§22 (see the SECURITY NOTE in
+`app/core/database.py`) — no individual case row or patient field is ever
+selected.
+
+### `GET /team-metrics` — 60/min
+Per-ASHA-worker aggregate metrics over a trailing window: submission count,
+`needs_review` rate, contraindication-flag rate, deterioration-alert rate,
+and triage-tier distribution.
+- **Query params**: `days` (default 30, 1–366), `facility_id` (optional,
+  **admin only** — a `supervisor`'s own facility always wins; passing a
+  different id as a supervisor is silently ignored, not an error).
+- **Scope**: `supervisor` is always restricted to their own facility;
+  `admin` defaults to system-wide, or narrows via `facility_id`.
+- **Response**: `{ facility_id, window_days, worker_count, workers: [{
+  user_id, full_name, submission_count, needs_review_count,
+  needs_review_rate, contraindication_flag_count,
+  contraindication_flag_rate, deterioration_alert_count,
+  deterioration_alert_rate, tier_distribution: { ROUTINE, URGENT, EMERGENCY }
+  }] }`, sorted by `submission_count` descending.
+
+---
+
 ## Push notifications (`app/api/routes/push_routes.py`, prefix `/api/push`)
 
 Returns `503` on the subscribe endpoint if `VAPID_PUBLIC_KEY`/
