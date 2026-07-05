@@ -16,7 +16,7 @@ from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
 from app.core.database import get_supabase_for_user
 from app.core.metrics import record_triage_classification
-from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput
+from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput, PATIENT_KEY_RE
 from app.ml.classifier import run_triage
 from app.services.llm import generate_briefing, generate_patient_summary
 from app.services.push import push_emergency_alert
@@ -163,6 +163,7 @@ async def submit_case(
             "current_medications": form_data.get("current_medications", form.current_medications),
             "human_review_requested": form.human_review_requested,
             "human_review_reason": form.human_review_reason,
+            "patient_key": form.patient_key,
             "consent_captured": form.consent_captured,
             "consent_captured_at": form.consent_captured_at.isoformat()
             if form.consent_captured_at
@@ -599,6 +600,68 @@ async def get_my_cases(
         "nextCursor": rows[limit - 1]["created_at"] if has_more and rows else None,
         "nextId": rows[limit - 1]["id"] if has_more and rows else None,
     }
+
+
+# ── Get Case History By Patient Key ───────────────────────────────────────────
+
+
+@router.get("/api/cases/by-patient-key/{patient_key}")
+@limiter.limit("60/minute")
+async def get_cases_by_patient_key(
+    request: Request,
+    patient_key: str,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin")),
+):
+    """
+    Returns a summary of prior visits sharing the given patient continuity
+    key, newest first. Purely a lookup for recognizing a returning patient —
+    RLS enforces the same visibility boundary as every other case view here:
+    'admin' sees all matches, 'doctor' with a facility_id is scoped to their
+    facility (via RLS + the explicit filter below, matching GET /api/cases),
+    and 'asha_worker' sees only visits they personally submitted (RLS
+    enforces ownership, same as GET /api/cases/mine). The key itself carries
+    no PII — it is only ever useful joined against case_records.
+    """
+    key = (patient_key or "").strip().upper()
+    if not PATIENT_KEY_RE.match(key):
+        raise HTTPException(status_code=400, detail="Invalid patient_key format")
+
+    raw_token = (authorization or "").split(" ", 1)[-1]
+    db = get_supabase_for_user(raw_token)
+    role = _resolved_role(user)
+    facility_id = _resolved_facility(user)
+
+    query = (
+        db.table("case_records")
+        .select(
+            "id, chief_complaint, triage_level, created_at, reviewed_at, "
+            "patient_age, patient_sex, facility_id"
+        )
+        .eq("patient_key", key)
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True)
+        .limit(50)
+    )
+
+    if role == "doctor" and facility_id:
+        query = query.eq("facility_id", facility_id)
+
+    result = query.execute()
+    rows = result.data or []
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_READ,
+        user_id=user.get("sub", "unknown"),
+        user_role=role,
+        resource_type="case_records",
+        resource_id=None,
+        facility_id=facility_id,
+        ip_address=get_client_ip(request),
+        details={"view": "patient_key_history", "match_count": len(rows)},
+    )
+
+    return {"cases": rows}
 
 
 # ── Get Case Detail ───────────────────────────────────────────────────────────────

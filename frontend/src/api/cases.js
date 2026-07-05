@@ -58,6 +58,13 @@ export async function getPatientSummary(caseId, language) {
   return res.json()   // Returns { summary, generated }
 }
 
+export async function getCaseHistoryByPatientKey(patientKey) {
+  const headers = await authHeaders()
+  const res = await getWithRetry(`${BASE}/api/cases/by-patient-key/${encodeURIComponent(patientKey)}`, headers)
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()   // Returns { cases }
+}
+
 export async function getMySubmissions({ before, before_id } = {}) {
   const headers = await authHeaders()
   const url = new URL(`${BASE}/api/cases/mine`)

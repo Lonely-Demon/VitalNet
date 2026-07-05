@@ -10,6 +10,9 @@ import { validateForm } from '../utils/validation'
 import VoiceInputButton from '../components/VoiceInputButton'
 import { EmergencySmsAlert } from '../components/EmergencySmsAlert'
 import { AmbulanceCallButton } from '../components/AmbulanceCallButton'
+import { PatientKeyCard } from '../components/PatientKeyCard'
+import { generatePatientKey, normalizePatientKey } from '../utils/patientKey'
+import { getCaseHistoryByPatientKey } from '../api/cases'
 
 // Stable English identifiers — these are the actual values submitted to the
 // API (chief_complaint is a free-text-ish field, not a coded enum server-
@@ -113,6 +116,7 @@ const emptyForm = {
   human_review_requested: false,
   human_review_reason: "",
   consent_captured: false,
+  patient_key: "",
 }
 
 export default function IntakeForm() {
@@ -126,6 +130,9 @@ export default function IntakeForm() {
   const [error, setError] = useState(null)
   const [fieldErrors, setFieldErrors] = useState({})
   const [localResult, setLocalResult] = useState(null)
+  const [newPatientKey, setNewPatientKey] = useState(null)
+  const [historyLookup, setHistoryLookup] = useState(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   const { profile } = useAuth()
   const { showToast } = useToast()
@@ -188,11 +195,27 @@ export default function IntakeForm() {
     }))
   }
 
+  const handleCheckPatientHistory = async () => {
+    const key = normalizePatientKey(form.patient_key)
+    if (!key) return
+    setHistoryLoading(true)
+    setHistoryLookup(null)
+    try {
+      const data = await getCaseHistoryByPatientKey(key)
+      setHistoryLookup({ cases: data.cases || [] })
+    } catch {
+      setHistoryLookup({ error: true })
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
   const handleSubmit = async (e) => {
     if (e?.preventDefault) e.preventDefault()
     setError(null)
     setFieldErrors({})
     setLocalResult(null)
+    setNewPatientKey(null)
     setLoading(true)
 
     if (!form.consent_captured) {
@@ -202,8 +225,24 @@ export default function IntakeForm() {
       return
     }
 
+    let patientKey = null
+    let isNewPatientKey = false
+    if (form.patient_key?.trim()) {
+      patientKey = normalizePatientKey(form.patient_key)
+      if (!patientKey) {
+        setError(t('intakeForm.errors.validationFailed'))
+        setFieldErrors({ patient_key: t('intakeForm.errors.patientKeyInvalid') })
+        setLoading(false)
+        return
+      }
+    } else {
+      patientKey = generatePatientKey()
+      isNewPatientKey = true
+    }
+
     const payload = {
       ...form,
+      patient_key: patientKey,
       chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint?.trim() || "" : form.chief_complaint,
       patient_name: form.patient_name?.trim() || "",
       patient_age: form.patient_age ? parseInt(form.patient_age) : undefined,
@@ -237,6 +276,9 @@ export default function IntakeForm() {
 
       // Clear draft since it is successfully saved or queued
       await clearDraft().catch(console.error)
+
+      if (isNewPatientKey) setNewPatientKey(patientKey)
+      setHistoryLookup(null)
 
       if (data.queued) {
         setResult({ ...data, localTriage: local })
@@ -301,6 +343,7 @@ export default function IntakeForm() {
                   ? t('intakeForm.result.savedLocallyWithTriage')
                   : t('intakeForm.result.savedLocallyNoTriage')}
               </p>
+              <PatientKeyCard patientKey={newPatientKey} />
             </>
           ) : (
             <>
@@ -320,10 +363,11 @@ export default function IntakeForm() {
               {result.triage_level === 'EMERGENCY' && <AmbulanceCallButton />}
               <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">{t('intakeForm.result.successTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">{result.risk_driver}</p>
+              <PatientKeyCard patientKey={newPatientKey} />
             </>
           )}
           <button
-            onClick={() => setResult(null)}
+            onClick={() => { setResult(null); setNewPatientKey(null) }}
             className="bg-forest text-white px-8 py-3 rounded-pill font-medium cursor-pointer shadow-btn hover:shadow-card-hover transition-all active:scale-[0.98]"
           >
             {t('intakeForm.actions.submitAnother')}
@@ -379,6 +423,47 @@ export default function IntakeForm() {
             </div>
           </fieldset>
         </Field>
+      </Section>
+
+      {/* Returning Patient */}
+      <Section title={t('intakeForm.sections.returningPatient')}>
+        <Field label={t('intakeForm.fields.patientKey')} error={fieldErrors.patient_key} id="patient_key">
+          <div className="flex items-center gap-2">
+            <input id="patient_key" name="patient_key" value={form.patient_key}
+              onChange={(e) => setForm(prev => ({ ...prev, patient_key: e.target.value.toUpperCase() }))}
+              aria-describedby={fieldErrors.patient_key ? "patient_key-error" : undefined}
+              placeholder={t('intakeForm.placeholders.patientKey')} maxLength={9}
+              className={`${inputClass} flex-1 font-mono tracking-widest ${fieldErrors.patient_key ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+            <button
+              type="button"
+              onClick={handleCheckPatientHistory}
+              disabled={!normalizePatientKey(form.patient_key) || historyLoading}
+              className="px-4 py-3 rounded-md text-sm font-medium bg-surface2 border border-surface3 text-text2 hover:border-sage disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-all"
+            >
+              {historyLoading ? t('intakeForm.actions.checking') : t('intakeForm.actions.checkHistory')}
+            </button>
+          </div>
+          <p className="text-xs text-text3 mt-1.5 ml-1">{t('intakeForm.hints.patientKey')}</p>
+        </Field>
+        {historyLookup && (
+          historyLookup.error ? (
+            <p className="text-xs text-text3 italic">{t('intakeForm.result.historyUnavailable')}</p>
+          ) : historyLookup.cases.length === 0 ? (
+            <p className="text-xs text-text3 italic">{t('intakeForm.result.historyNone')}</p>
+          ) : (
+            <div className="text-xs bg-surface2 border border-surface3 rounded-lg p-3 space-y-1.5">
+              <p className="font-semibold text-text2">{t('intakeForm.result.historyFound', { count: historyLookup.cases.length })}</p>
+              <ul className="space-y-1">
+                {historyLookup.cases.slice(0, 5).map(c => (
+                  <li key={c.id} className="flex items-center justify-between text-text3">
+                    <span>{new Date(c.created_at).toLocaleDateString()} — {c.chief_complaint}</span>
+                    <span className={`ml-2 px-2 py-0.5 rounded-pill text-[10px] font-bold font-mono ${BADGE_COLORS[c.triage_level] || ''}`}>{c.triage_level}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        )}
       </Section>
 
       {/* Complaint */}

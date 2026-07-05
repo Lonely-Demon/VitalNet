@@ -17,7 +17,8 @@
       "symptoms": "Symptoms (select all that apply)",
       "observations": "Observations (optional)",
       "consent": "Patient Consent",
-      "clinicianReview": "Clinician Review"
+      "clinicianReview": "Clinician Review",
+      "returningPatient": "Returning Patient?"
     },
     "fields": {
       "location": "Location / Village *",
@@ -33,7 +34,8 @@
       "heartRate": "Heart Rate (bpm)",
       "temperature": "Temperature (°C)",
       "knownConditions": "Known Conditions",
-      "currentMedications": "Current Medications"
+      "currentMedications": "Current Medications",
+      "patientKey": "Patient Code (if known)"
     },
     "placeholders": {
       "location": "e.g. Rampur Village",
@@ -50,7 +52,8 @@
       "observations": "Any additional observations about the patient's condition...",
       "knownConditions": "e.g. diabetes, hypertension",
       "currentMedications": "e.g. metformin, amlodipine",
-      "reviewReason": "Why does this case need manual review?"
+      "reviewReason": "Why does this case need manual review?",
+      "patientKey": "e.g. AB3C-9XYZ"
     },
     "sexOptions": {
       "male": "male",
@@ -110,7 +113,9 @@
     "actions": {
       "submit": "Submit Case",
       "analyzing": "Analyzing Case...",
-      "submitAnother": "Submit Another Case"
+      "submitAnother": "Submit Another Case",
+      "checkHistory": "Check History",
+      "checking": "Checking..."
     },
     "result": {
       "savedLocallyTitle": "Case Saved Locally",
@@ -127,7 +132,12 @@
       "ambulanceCallTitle": "Need an ambulance?",
       "ambulanceCallDescription": "Call 108, India's national ambulance and emergency helpline. This works over a normal phone call, even without a data connection. Availability depends on your area — it may not be reachable everywhere.",
       "ambulanceCallButton": "Call 108",
-      "contraindicationTitle": "Possible contraindication — verify with a clinician"
+      "contraindicationTitle": "Possible contraindication — verify with a clinician",
+      "patientKeyTitle": "Patient Continuity Code",
+      "patientKeyDescription": "Save or photograph this code — bring it to the next visit so staff can find this patient's history.",
+      "historyUnavailable": "Couldn't check history right now (offline?)",
+      "historyNone": "No prior visits found for this code.",
+      "historyFound": "{{count}} prior visit(s) found:"
     },
     "preliminary": {
       "label": "Preliminary triage",
@@ -140,7 +150,8 @@
       "consentRequiredShort": "Please confirm patient consent",
       "validationFailed": "Please fix the validation errors below before submitting.",
       "queueFull": "Offline queue is full (50 cases). Connect to internet to sync before submitting more cases.",
-      "submissionFailed": "Submission failed. Check connection."
+      "submissionFailed": "Submission failed. Check connection.",
+      "patientKeyInvalid": "Code must be in the format XXXX-XXXX (no 0/O/1/I/L)"
     },
     "voice": {
       "start": "Speak to fill this field",
@@ -149,6 +160,9 @@
       "offline": "Voice input needs an internet connection",
       "permissionDenied": "Microphone permission denied",
       "failed": "Voice input failed — please type instead"
+    },
+    "hints": {
+      "patientKey": "Leave blank for a new patient — a code will be generated after submission so staff can recognize them next visit."
     }
   }
 }

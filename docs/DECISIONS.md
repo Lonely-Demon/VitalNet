@@ -471,3 +471,39 @@ an aggregate count, not PHI; if this pattern needs to be reused elsewhere,
 apply the same test: never return anything from the `supabase_admin` call
 beyond an aggregate a doctor is already trusted to reason about (referral
 target selection).
+
+### 21. Patient continuity uses an opaque, client-generated key — not a patient registry
+
+**Context**: ASHA workers often see the same patient across multiple
+visits, but VitalNet has no centralized patient registry (deliberately —
+building one is exactly the kind of external-infrastructure scope creep
+ruled out for this project), and a brand-new patient's first visit may
+happen with zero connectivity.
+
+**Decision**: `case_records.patient_key` (nullable, format `XXXX-XXXX`,
+`phase23_patient_key.sql`) is generated entirely client-side
+(`frontend/src/utils/patientKey.js::generatePatientKey`, `crypto.getRandomValues`)
+using an alphabet that excludes 0/O/1/I/L so it's never mis-copied by hand.
+It encodes no PII — it is only meaningful joined against `case_records`.
+After a new patient's first submission, `PatientKeyCard.jsx` renders it as
+both a QR code (`qrcode` npm package, rendered client-side via
+`toDataURL`) and plain text for the worker to hand to the patient. A
+returning patient's worker types the existing code back in on the next
+visit (`IntakeForm.jsx`'s "Returning Patient?" field) — v1 deliberately
+has no camera-based QR scanning, to keep the surface area small.
+`GET /api/cases/by-patient-key/{key}` (`cases.py::get_cases_by_patient_key`)
+looks up prior visits sharing a key, using the same RLS-scoped client and
+the same per-role visibility boundary as every other case view in this
+file (`admin` global, `doctor` own-facility, `asha_worker` own
+submissions only — confirmed via `GET /api/cases/mine`'s existing
+RLS-enforces-ownership comment, so an ASHA worker naturally only
+recognizes patients they personally saw before, not a facility-wide
+history).
+
+**Consequences**: continuity is opportunistic, not guaranteed — a worker
+who forgets to ask for the code, or a patient who loses it, starts a
+fresh, unlinked record; this is accepted as a reasonable v1 limitation
+rather than building a registry. The format regex is duplicated in three
+places by necessity (`backend/app/models/schemas.py::PATIENT_KEY_RE`, the
+`phase23` CHECK constraint, `frontend/src/utils/patientKey.js`) — covered
+by `backend/tests/test_patient_key.py`.

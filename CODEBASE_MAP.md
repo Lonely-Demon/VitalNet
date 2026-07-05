@@ -207,15 +207,18 @@ backend/
 │   │                                 unbounded-cardinality footgun).
 │   ├── api/routes/
 │   │   ├── cases.py                  /api/submit, /api/cases, /api/cases/{id}/review,
-│   │   │                             /api/cases/mine, /api/cases/{id}. Owns the shared
-│   │   │                             slowapi `limiter` instance (imported by the other
-│   │   │                             route modules) keyed on the verified JWT sub.
-│   │   │                             Cursor pagination has an id tie-breaker for
-│   │   │                             stability across equal timestamps. Row-level
-│   │   │                             authorization via _authorize_case_row_access()
-│   │   │                             (admin global, doctor facility-scoped, asha_worker
-│   │   │                             own-submissions-only — also used by security.py).
-│   │   │                             Every create/read/update is PHI-audit-logged.
+│   │   │                             /api/cases/mine, /api/cases/by-patient-key/{key},
+│   │   │                             /api/cases/{id}. Owns the shared slowapi `limiter`
+│   │   │                             instance (imported by the other route modules)
+│   │   │                             keyed on the verified JWT sub. Cursor pagination
+│   │   │                             has an id tie-breaker for stability across equal
+│   │   │                             timestamps. Row-level authorization via
+│   │   │                             _authorize_case_row_access() (admin global, doctor
+│   │   │                             facility-scoped, asha_worker own-submissions-only
+│   │   │                             — also used by security.py). The by-patient-key
+│   │   │                             lookup reuses the same RLS-scoped visibility per
+│   │   │                             role (docs/DECISIONS.md §21). Every create/read/
+│   │   │                             update is PHI-audit-logged.
 │   │   ├── admin_routes.py           /api/admin/* — user CRUD (password complexity
 │   │   │                             policy, orphan rollback on profile-provisioning
 │   │   │                             failure, profile/auth-metadata rollback on
@@ -284,7 +287,10 @@ backend/
 │   │                                 must be true (server-enforced, not just UI).
 │   │                                 human_review_requested/reason let an ASHA worker
 │   │                                 flag a case for review independent of ML tier.
-│   │                                 If you add a field here, add a matching bound to
+│   │                                 patient_key (optional, XXXX-XXXX, PATIENT_KEY_RE)
+│   │                                 is the patient continuity key — see
+│   │                                 docs/DECISIONS.md §21. If you add a field here,
+│   │                                 add a matching bound to
 │   │                                 frontend/src/utils/validation.js.
 │   ├── ml/
 │   │   ├── README.md                 ML architecture + clinical grounding — READ
@@ -404,6 +410,10 @@ backend/
 │   │                                 client/call-failure/empty-response fallback paths,
 │   │                                 and that a successful call passes the target
 │   │                                 language through to the prompt.
+│   ├── test_patient_key.py           Schema-level tests for IntakeForm.patient_key —
+│   │                                 format acceptance/rejection, uppercase
+│   │                                 normalization, and that the excluded-ambiguous-
+│   │                                 char alphabet matches the frontend generator.
 │   ├── test_admin_authz.py           Asserts every /api/admin route — across
 │   │                                 admin_routes.py AND dsr_routes.py (see
 │   │                                 ADMIN_ROUTE_MODULES) — is require_role('admin')-
@@ -581,10 +591,14 @@ frontend/src/
 │   │                          of the deterministic rules in classifier.py.
 │   ├── validation.js          Zod schema — MUST mirror the bounds in
 │   │                          backend/app/models/schemas.py::IntakeForm.
-│   └── imageCompression.js    Photo-attachment SCAFFOLDING (FEATURES_ROADMAP §3.2) —
-│                              canvas-based resize-to-1024px + JPEG re-encode. Not wired
-│                              into any upload flow yet (no live endpoint exists — see
-│                              docs/DECISIONS.md §11); vendor-independent and ready.
+│   ├── imageCompression.js    Photo-attachment SCAFFOLDING (FEATURES_ROADMAP §3.2) —
+│   │                          canvas-based resize-to-1024px + JPEG re-encode. Not wired
+│   │                          into any upload flow yet (no live endpoint exists — see
+│   │                          docs/DECISIONS.md §11); vendor-independent and ready.
+│   └── patientKey.js          generatePatientKey() (crypto.getRandomValues, format
+│                              XXXX-XXXX) + normalizePatientKey() — MUST mirror
+│                              backend/app/models/schemas.py::PATIENT_KEY_RE
+│                              (docs/DECISIONS.md §21).
 ├── pages/
 │   ├── LoginPage.jsx, IntakeForm.jsx, Dashboard.jsx
 ├── panels/
@@ -608,7 +622,11 @@ frontend/src/
 │   │                          docs/DECISIONS.md §14), AmbulanceCallButton (tel:108
 │   │                          intent, shown alongside the EMERGENCY result online AND
 │   │                          offline — docs/DECISIONS.md §16 on why this is a phone
-│   │                          call and not a dispatch integration).
+│   │                          call and not a dispatch integration), PatientKeyCard
+│   │                          (renders a new patient continuity key as a QR code —
+│   │                          `qrcode` npm package, client-side `toDataURL` — plus
+│   │                          plain text; shown once after a NEW patient's first
+│   │                          submission — docs/DECISIONS.md §21).
 │   └── admin/                 AdminUsers (includes the CSV bulk-import upload/preview
 │                              flow), AdminFacilities, AdminStats, AdminAuditLog.
 public/
@@ -689,6 +707,7 @@ erDiagram
         int triage_priority "computed: 0/1/2, sort key"
         text overridden_triage "doctor correction"
         text triage_model_version
+        text patient_key "nullable, XXXX-XXXX, continuity key"
         timestamptz reviewed_at
         timestamptz deleted_at "soft delete"
     }
@@ -743,9 +762,11 @@ scaffold, SELECT/INSERT RLS only, no live upload endpoint yet;
 `phase21_contraindication_flags.sql` — `case_records.contraindication_flags`
 jsonb column, default `[]`; `phase22_facility_capacity.sql` —
 `facilities.capacity_status`/`capacity_updated_at` plus facilities' first-
-ever UPDATE RLS policy). Run them in order against the live Supabase
-project's SQL editor (or via the Supabase CLI) — they're written to be
-safe to re-run.
+ever UPDATE RLS policy; `phase23_patient_key.sql` — `case_records.
+patient_key` (nullable text, CHECK-constrained to `XXXX-XXXX`, partial
+index) — the patient continuity key, docs/DECISIONS.md §21). Run them in
+order against the live Supabase project's SQL editor (or via the Supabase
+CLI) — they're written to be safe to re-run.
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`

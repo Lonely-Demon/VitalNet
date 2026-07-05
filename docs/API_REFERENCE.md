@@ -86,6 +86,10 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
     independent of the ML tier.
   - `consent_captured` (bool, **must be true or the request is rejected**),
     `consent_captured_at`.
+  - `patient_key` (optional, format `XXXX-XXXX`, unambiguous alphabet
+    excluding 0/O/1/I/L) — opaque patient continuity key, generated
+    client-side (`frontend/src/utils/patientKey.js`); see `GET
+    /api/cases/by-patient-key/{key}` below.
 - **Response `200`**: the created/existing `case_records` row (includes
   `triage_level`, `triage_confidence`, `risk_driver`, `id`, `created_at`,
   `facility_id`, `created_offline`, `contraindication_flags` — a possibly-
@@ -135,6 +139,16 @@ ASHA worker's own submission history — cursor-paginated, reduced column set
 - **Auth**: `asha_worker` (own submissions only), `admin`. **Rate limit**: 60/min.
 - **Query params**: `before`, `before_id`, `limit` (default 25, capped 100).
 - **Response `200`**: `{ cases: [...], hasMore, nextCursor, nextId }`.
+
+### `GET /api/cases/by-patient-key/{patient_key}`
+Looks up prior visits sharing a patient continuity key, newest first — lets
+a worker recognize a returning patient (`docs/DECISIONS.md` §21).
+- **Auth**: `asha_worker` (own submissions only, via RLS), `doctor` (own
+  facility), `admin` (global). **Rate limit**: 60/min.
+- **Path param**: `patient_key` — must match `XXXX-XXXX`; `400` if not.
+- **Response `200`**: `{ cases: [...] }` — up to 50 rows, reduced column set
+  (`id`, `chief_complaint`, `triage_level`, `created_at`, `reviewed_at`,
+  `patient_age`, `patient_sex`, `facility_id`; no `briefing` JSONB).
 
 ### `GET /api/cases/{case_id}`
 Full case detail (including the `briefing` JSONB) after row-level
