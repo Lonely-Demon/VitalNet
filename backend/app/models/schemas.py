@@ -36,6 +36,14 @@ class IntakeForm(BaseModel):
     heart_rate: Optional[int] = Field(None, ge=10, le=250)
     temperature: Optional[float] = Field(None, ge=25.0, le=45.0)
 
+    # Structured pregnancy flag — feeds a dedicated safety-net rule for
+    # severe hypertension in pregnancy (docs/DECISIONS.md §30). Deliberately
+    # a real field rather than relying on free-text known_conditions/
+    # chief_complaint keyword matching (which already exists as a soft ML
+    # feature signal, clinical_features.py::_pregnancy_adjustment, but is
+    # not reliable enough to gate a deterministic safety guarantee on).
+    is_pregnant: Optional[bool] = None
+
     symptoms: List[str] = Field(default_factory=list, max_length=MAX_SYMPTOMS)
     observations: Optional[str] = Field(None, max_length=500)
     known_conditions: Optional[str] = Field(None, max_length=300)

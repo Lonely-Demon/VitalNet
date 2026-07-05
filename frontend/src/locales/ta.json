@@ -35,7 +35,8 @@
       "temperature": "Temperature (°C)",
       "knownConditions": "Known Conditions",
       "currentMedications": "Current Medications",
-      "patientKey": "Patient Code (if known)"
+      "patientKey": "Patient Code (if known)",
+      "isPregnant": "Currently pregnant"
     },
     "placeholders": {
       "location": "e.g. Rampur Village",

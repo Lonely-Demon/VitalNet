@@ -144,6 +144,16 @@ proportionally more of).
 - Trained for rural Indian primary care; not validated elsewhere.
 - The safety net's paediatric HR floor is intentionally conservative (may
   over-triage some children to URGENT — an accepted safe-side tradeoff).
+- **No age-adjusted or altitude-adjusted "normal" vital ranges in the
+  trained model itself** (distinct from the floor above): a hemodynamically
+  normal infant (e.g. HR 140 bpm, which is unremarkable for a 6-month-old)
+  or an asymptomatic chronic high-altitude resident (baseline SpO2 ~88%) can
+  be over-triaged by the *model's own learned judgment*, not just the
+  deterministic floor — confirmed via an independent validation review
+  (`docs/DECISIONS.md` §30). Over-triage (safer direction), not fixed this
+  pass; the correct fix is enriching `train_classifier.py`'s synthetic
+  generator with age/altitude-aware baselines and retraining, not a
+  safety-net rule.
 - **No monotonic constraints (considered, currently infeasible):** several
   engineered features are constructed as unambiguous "higher = worse" scores
   (`shock_index`, `sepsis_risk_score`, `hemodynamic_instability`,

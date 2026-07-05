@@ -358,7 +358,9 @@ backend/
 │   │   ├── classifier.py             Public ML API: load_classifier(), predict_triage()
 │   │   │                             / run_triage(), get_classifier_info(). Three
 │   │   │                             layers per prediction: (1) _safety_net_check →
-│   │   │                             EMERGENCY for extreme vitals/critical symptoms,
+│   │   │                             EMERGENCY for extreme vitals/critical symptoms
+│   │   │                             (incl. severe hypertension in pregnancy when
+│   │   │                             is_pregnant is set — docs/DECISIONS.md §30),
 │   │   │                             (2) the trained model, (3) _news2_concerning_vital
 │   │   │                             floor → never ROUTINE on a concerning vital. Also
 │   │   │                             attaches contraindication_flags (below) and emits

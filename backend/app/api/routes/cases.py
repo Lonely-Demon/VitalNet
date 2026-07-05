@@ -196,6 +196,7 @@ async def submit_case(
             "temperature": float(form.temperature)
             if form.temperature is not None
             else None,
+            "is_pregnant": form.is_pregnant,
             "chief_complaint": form_data.get("chief_complaint", form.chief_complaint),
             "complaint_duration": form.complaint_duration,
             "symptoms": form.symptoms or [],

@@ -95,6 +95,16 @@ submitted. Enforced server-side (`IntakeForm.consent_captured` must be
 handled with special care (access-logged, access-controlled, never exposed
 in error messages/logs beyond coarse identifiers). See `docs/SECURITY.md`.
 
+**Preeclampsia** — a pregnancy-specific hypertensive disorder that can
+progress to eclampsia (seizures) or organ damage if untreated. ACOG Practice
+Bulletin 222 defines "severe features" — BP ≥160/110 mmHg on its own, or
+≥140/90 mmHg combined with a severe symptom such as severe headache or
+severe abdominal pain — as requiring emergency management. VitalNet's
+`is_pregnant` intake field gates a dedicated safety-net rule using these
+exact thresholds, meaningfully lower than the app's general-population
+hypertensive-crisis threshold (systolic BP ≥180 + a neurological symptom).
+See `docs/DECISIONS.md` §30.
+
 ## VitalNet-specific technical terms
 
 **Safety net** — the deterministic (non-ML) rule layer that force-escalates

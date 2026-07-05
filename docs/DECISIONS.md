@@ -905,3 +905,157 @@ pass** (would need JWKS fetching + ES256 verification support, a real
 scope increase); flagged here so it isn't mistaken for "already handled"
 and re-discovered from scratch later. If this project's actual latency
 becomes a problem, this is the first thing to address.
+
+### 30. Independent Qwen Coder "Clinical AI Validation Laboratory" review — verdict, evidence, and the pregnancy-BP fix
+
+**Context**: the user ran a separate AI system (Qwen Coder) against a
+harshly adversarial red-team prompt ("Clinical AI Validation Laboratory...
+mission is to find bugs, not confirm the system works... assume this system
+is guilty until proven innocent") and got back a report claiming 18
+"critical" safety violations, including undertriaged sepsis, non-functional
+safety-net thresholds, and "temporal blindness," with a "NOT READY FOR
+DEPLOYMENT" regulatory verdict. Qwen could not open a PR, so the user
+handed over its output files (scripts + result JSON/CSV/txt) for
+independent review rather than acting on the report at face value.
+
+**Verdict, up front**: of the 18 reported violations, 16 are artifacts of
+one broken test script (a form-data schema that doesn't match VitalNet's
+real API), reproduced and confirmed below. **One is a genuine gap**,
+now fixed (severe hypertension in pregnancy below the general
+hypertensive-crisis threshold — see the safety-net rule added this pass).
+The remaining findings are legitimate but pre-existing, honestly-scoped
+limitations rather than "bugs": two are the model's own over-triage
+tendency (safer direction, not fixed), and "temporal blindness" is an
+accurate description of a static single-encounter classifier by design
+(partially mitigated at the cross-visit level by §22, not within one
+encounter).
+
+**Root cause of the 16 false "critical" findings — a fabricated schema**:
+`backend/scripts/clinical_validation_phase2.py` builds patient dicts using
+field names that do not exist anywhere in VitalNet — `age`, `sex`,
+`systolic_bp`, `diastolic_bp`, `respiratory_rate`, `gcs`,
+`capillary_refill_time`, `consciousness`, `urine_output`, `comorbidities`
+— instead of the real `IntakeForm` fields (`patient_age`, `patient_sex`,
+`bp_systolic`, `bp_diastolic`, `symptoms` list, `known_conditions` free
+text). VitalNet also has no `respiratory_rate`, `gcs`, `capillary_refill_time`,
+or `urine_output` field at all — an ASHA worker doing basic field triage
+does not compute a Glasgow Coma Scale or measure urine output; the nearest
+real equivalent to "GCS 8 / unresponsive" is the `altered_consciousness`
+symptom flag. The script calls `predict_triage()` directly with these raw
+dicts, bypassing the Pydantic `IntakeForm` validation layer that the real
+API always applies — so `form_data.get("bp_systolic")` silently returns
+`None` for every one of its cases, and every BP-based safety-net rule and
+model feature goes dark. Notably, **two of Qwen's own four validation
+scripts** (`clinical_validation_lab.py` for Phase 1, and
+`stress_test_classifier.py`) used the *correct* field names throughout and
+came back clean — 3,000 cases / 0 violations and 491 cases / 0 violations
+respectively — confirming the schema mismatch was specific to one script,
+not a pervasive issue with Qwen's methodology or a real weakness in the
+classifier.
+
+**Reproduced, side by side** (`python -c` against the real
+`predict_triage()`, both runs against the identical unmodified classifier):
+
+| Case | Qwen's exact dict → | Same clinical intent, real field names → |
+|---|---|---|
+| GCS 8, "unresponsive" | ROUTINE | `symptoms=['altered_consciousness']` → **EMERGENCY** (safety net) |
+| Systolic BP 79 | ROUTINE | `bp_systolic=79` → **EMERGENCY** (model's own read) |
+| masked_sepsis_elderly (82F, confused, SBP 95, no fever) | ROUTINE (98.4% conf.) | `bp_systolic=95, symptoms=['altered_consciousness']` → **EMERGENCY** (safety net) |
+| masked_sepsis_immunocompromised (45M, SBP 88, HR 115) | URGENT (99.4% conf.) | `bp_systolic=88` → **EMERGENCY** (model's own read) |
+| preeclampsia_warning (34F, pregnant, BP 155/105, headache) | ROUTINE | `bp_systolic=155/105, symptoms=['severe_headache']`, **no** `is_pregnant` field yet → URGENT only (model's read — the real gap, see below) |
+
+Every "masked sepsis" and boundary-condition finding flips to the
+clinically-correct tier the moment the same scenario is expressed in
+VitalNet's actual schema — most via the *existing* safety net or the
+model's own learned judgment, needing no code change at all. These were
+never live behavior; they could not occur through the real API, since
+every real request is built from a validated `IntakeForm`, which by
+construction only ever produces VitalNet's real field names.
+
+**The one genuine finding — preeclampsia below the general hypertensive-crisis
+threshold**: even with every field name corrected, `preeclampsia_warning`
+(BP 155/105 in pregnancy, with a severe headache) only reached **URGENT**
+via the model's own judgment — not EMERGENCY — because the existing
+safety net's hypertensive-crisis rule requires systolic BP ≥ 180, and
+155/105 is well below that. ACOG Practice Bulletin 222 puts the severe-
+preeclampsia bar much lower for a pregnant patient: BP ≥ 160/110 alone, or
+≥ 140/90 with a severe feature (severe headache, severe abdominal pain).
+VitalNet had no structured way to know a patient was pregnant — only a
+best-effort free-text keyword match in
+`clinical_features.py::_pregnancy_adjustment`, which feeds the ML model's
+statistical judgment but cannot back a deterministic guarantee.
+
+**Fix applied this pass**:
+1. A new `is_pregnant: Optional[bool]` field on `IntakeForm`
+   (`backend/app/models/schemas.py`), a checkbox in `IntakeForm.jsx` shown
+   only when `patient_sex === "female"`, and the matching Zod validation in
+   `frontend/src/utils/validation.js`. Deliberately a real structured field,
+   not a reuse of the existing free-text pregnancy inference — that
+   inference is left exactly as-is for the ML model's own feature, since
+   this new field needs to be reliable enough to gate a *deterministic*
+   safety-net rule.
+2. A new rule at the end of `_safety_net_check()`
+   (`backend/app/ml/classifier.py`), mirrored exactly in
+   `safetyNetCheck()` (`frontend/src/utils/clinicalRules.js`): when
+   `is_pregnant` is set, BP ≥ 160/110 escalates to EMERGENCY unconditionally;
+   BP ≥ 140/90 escalates to EMERGENCY only alongside `severe_headache` or
+   `severe_abdominal_pain` (the severe features this app can actually
+   observe from its symptom checklist). Verified: with the fix,
+   `preeclampsia_warning`'s exact scenario now reaches **EMERGENCY**
+   through the deterministic safety net, not the model's probabilistic
+   read.
+3. Test coverage added on both sides: three new cases in
+   `backend/tests/test_classifier_safety.py` (severe BP always emergency
+   regardless of symptoms; moderate BP + severe feature is emergency;
+   the same BP values without `is_pregnant` do **not** trigger this rule)
+   and a new `frontend/tests/safetyNet.test.mjs` giving `safetyNetCheck`/
+   `news2ConcerningVital` their first direct test coverage (previously
+   only exercised indirectly via `treeParity`/`featureParity`), wired into
+   both CI jobs in `.github/workflows/ci.yml`.
+
+**Deliberately not done: retraining the model.** `assign_triage_label()`
+in `backend/scripts/train_classifier.py` is a separate synthetic-label
+generator for training data, architecturally distinct from the
+inference-time safety net. Every existing safety-net rule in this codebase
+already provides its guarantee purely at inference time, independent of
+the trained model's own judgment — that is the entire point of the
+two-layer design (§ "safety net" throughout this file). Adding the
+pregnancy rule to `_safety_net_check()`/`safetyNetCheck()` alone fully
+satisfies the same guarantee with no retrain, no new export/parity risk,
+and no chance of a training-data regression. Retraining to *also* teach
+the model this pattern statistically would be a legitimate future
+enhancement, but is a strictly larger, riskier scope than this fix requires.
+
+**Findings deliberately left as documented limitations, not fixed here**:
+- **Pediatric/geographic over-triage** — `infant_normal_vars` (6-month-old,
+  HR 140, otherwise normal) and `high_altitude_resident` (chronic SpO2 88%,
+  asymptomatic) both reach EMERGENCY through the *model's own* learned
+  judgment once field names are corrected — not the safety net, not the
+  NEWS2 floor. The model lacks age-adjusted vital-sign ranges and
+  altitude-adaptation context in its synthetic training data. This is
+  over-triage (the safer failure direction) rather than under-triage, and
+  fixing it properly means enriching `train_classifier.py`'s synthetic
+  generator with age/altitude-aware normal ranges and retraining — out of
+  scope for a safety-net-only pass. Tracked here so it isn't
+  re-discovered as a surprise; a candidate for the next model-retraining
+  round (see `backend/app/ml/MODEL_CARD.md` limitations section).
+- **"Temporal blindness"** — accurate description of the architecture, not
+  a bug: `predict_triage()` classifies one encounter's snapshot vitals; it
+  was never designed to detect a worsening trend within a single visit.
+  The system's actual mitigation for deterioration lives at the cross-visit
+  level (§22's `deterioration_alert`, comparing tier across a patient's
+  visit history via the patient continuity code), which the single-call
+  validation script doesn't exercise since it never supplies visit history.
+  A within-visit serial-vitals trend feature would need repeated
+  measurements the current `IntakeForm` doesn't collect — a real feature
+  gap, but a scope decision, not a defect.
+
+**Lesson for future third-party or AI-generated validation reports**:
+verify a validation harness calls the code under test the way production
+actually calls it (same schema, same entry point) before trusting a
+"critical" verdict — a broken test fixture reads exactly like a real bug
+until reproduced against the real interface, as the 16 false findings here
+demonstrate. Phase 1 and the stress test in this same review are the
+counter-example: same target code, correct field names, legitimately clean
+results across 3,491 cases — proof the classifier itself was never the
+problem for those findings.

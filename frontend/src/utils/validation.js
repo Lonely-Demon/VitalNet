@@ -52,6 +52,7 @@ export const clinicalSchema = z.object({
   current_medications:  z.string().max(300, 'Medications text is too long (max 300 characters)').optional().default(''),
   location:             z.string().min(1, 'Location / village is required')
                          .max(200, 'Location is too long (max 200 characters)'),
+  is_pregnant:          z.boolean().optional().default(false),
 })
 
 /**

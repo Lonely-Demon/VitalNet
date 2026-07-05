@@ -113,6 +113,7 @@ const emptyForm = {
   observations: "",
   known_conditions: "",
   current_medications: "",
+  is_pregnant: false,
   human_review_requested: false,
   human_review_reason: "",
   consent_captured: false,
@@ -251,6 +252,7 @@ export default function IntakeForm() {
       spo2: form.spo2 ? parseInt(form.spo2) : null,
       heart_rate: form.heart_rate ? parseInt(form.heart_rate) : null,
       temperature: form.temperature ? parseFloat(form.temperature) : null,
+      is_pregnant: Boolean(form.is_pregnant),
       human_review_requested: Boolean(form.human_review_requested),
       human_review_reason: form.human_review_reason?.trim() || null,
       consent_captured_at: new Date().toISOString(),
@@ -423,6 +425,14 @@ export default function IntakeForm() {
             </div>
           </fieldset>
         </Field>
+        {form.patient_sex === "female" && (
+          <label htmlFor="is_pregnant" className="flex items-center gap-2 cursor-pointer p-2 min-w-[44px] min-h-[44px]">
+            <input id="is_pregnant" type="checkbox" name="is_pregnant" checked={form.is_pregnant}
+              onChange={(e) => setForm(prev => ({ ...prev, is_pregnant: e.target.checked }))}
+              className="accent-forest w-5 h-5 rounded" />
+            <span className="text-sm text-text2">{t('intakeForm.fields.isPregnant')}</span>
+          </label>
+        )}
       </Section>
 
       {/* Returning Patient */}

@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test:parity": "node tests/treeParity.test.mjs",
     "test:feature-parity": "node tests/featureParity.test.mjs",
-    "test:contraindications": "node tests/contraindications.test.mjs"
+    "test:contraindications": "node tests/contraindications.test.mjs",
+    "test:safety-net": "node tests/safetyNet.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",

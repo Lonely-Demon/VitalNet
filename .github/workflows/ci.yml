@@ -67,6 +67,13 @@ jobs:
         run: npm run test:feature-parity --prefix frontend
       - name: Contraindication-flag parity (JS == Python)
         run: npm run test:contraindications --prefix frontend
+      - name: Safety-net parity (JS == Python)
+        # Guards that clinicalRules.js::safetyNetCheck/news2ConcerningVital
+        # mirror classifier.py exactly, including the pregnancy-hypertension
+        # rule (docs/DECISIONS.md §30) — an offline/online divergence here
+        # would mean a critical presentation triages differently with no
+        # connectivity.
+        run: npm run test:safety-net --prefix frontend
       - name: Build
         run: npm run build --prefix frontend
         env:
@@ -124,6 +131,13 @@ jobs:
         run: npm run test:feature-parity --prefix frontend
       - name: Contraindication-flag parity (JS == Python)
         run: npm run test:contraindications --prefix frontend
+      - name: Safety-net parity (JS == Python)
+        # Guards that clinicalRules.js::safetyNetCheck/news2ConcerningVital
+        # mirror classifier.py exactly, including the pregnancy-hypertension
+        # rule (docs/DECISIONS.md §30) — an offline/online divergence here
+        # would mean a critical presentation triages differently with no
+        # connectivity.
+        run: npm run test:safety-net --prefix frontend
       - name: Build
         run: npm run build --prefix frontend
         env:

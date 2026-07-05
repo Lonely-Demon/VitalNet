@@ -20,6 +20,11 @@ const HYPERTENSIVE_NEURO = new Set([
   'severe_headache', 'weakness_one_side', 'difficulty_speaking', 'altered_consciousness',
 ])
 
+// Severe features of preeclampsia this app can actually observe (ACOG
+// Practice Bulletin 222) — used only alongside is_pregnant + a preeclampsia-
+// range BP reading (docs/DECISIONS.md §30).
+const PREECLAMPSIA_SEVERE_SYMPTOMS = new Set(['severe_headache', 'severe_abdominal_pain'])
+
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v))
 
 /**
@@ -58,6 +63,22 @@ export function safetyNetCheck(formData) {
   }
 
   if (temp !== null && (temp > 41.5 || temp < 33.0)) return `Extreme body temperature (${temp}°C)`
+
+  if (formData.is_pregnant) {
+    const bpDia = num(formData.bp_diastolic)
+    if (bpSys !== null && bpDia !== null) {
+      if (bpSys >= 160 || bpDia >= 110) {
+        return `Severe hypertension in pregnancy (BP ${bpSys}/${bpDia} mmHg) — possible severe preeclampsia`
+      }
+      if (bpSys >= 140 || bpDia >= 90) {
+        const hit = [...symptoms].filter((s) => PREECLAMPSIA_SEVERE_SYMPTOMS.has(s))
+        if (hit.length) {
+          const readable = hit.map((h) => h.replace(/_/g, ' ')).sort().join(', ')
+          return `Hypertension in pregnancy (BP ${bpSys}/${bpDia} mmHg) with severe feature(s): ${readable} — possible preeclampsia with severe features`
+        }
+      }
+    }
+  }
 
   return null
 }

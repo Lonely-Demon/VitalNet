@@ -57,6 +57,11 @@ CRITICAL_SYMPTOMS_OVERRIDE = {
     "altered_consciousness", "seizure", "severe_bleeding", "swelling_face_throat",
 }
 
+# Severe features of preeclampsia this app can actually observe (ACOG
+# Practice Bulletin 222) — used only alongside is_pregnant + a preeclampsia-
+# range BP reading below (docs/DECISIONS.md §30).
+PREECLAMPSIA_SEVERE_SYMPTOMS = {"severe_headache", "severe_abdominal_pain"}
+
 # ── NEWS2 "concerning single vital" floor (C1) ─────────────────────────────
 # The safety net (above) escalates EXTREME single vitals straight to EMERGENCY.
 # There is a milder band where a single vital is concerning (a NEWS2 single-
@@ -215,6 +220,22 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
 
     if temp is not None and (temp > 41.5 or temp < 33.0):
         return f"Extreme body temperature ({temp}°C)"
+
+    if form_data.get("is_pregnant"):
+        bp_dia = form_data.get("bp_diastolic")
+        if bp_sys is not None and bp_dia is not None:
+            if bp_sys >= 160 or bp_dia >= 110:
+                return (
+                    f"Severe hypertension in pregnancy (BP {bp_sys}/{bp_dia} mmHg) "
+                    f"— possible severe preeclampsia"
+                )
+            preeclampsia_hit = symptoms & PREECLAMPSIA_SEVERE_SYMPTOMS
+            if (bp_sys >= 140 or bp_dia >= 90) and preeclampsia_hit:
+                readable = ", ".join(sorted(h.replace("_", " ") for h in preeclampsia_hit))
+                return (
+                    f"Hypertension in pregnancy (BP {bp_sys}/{bp_dia} mmHg) with severe "
+                    f"feature(s): {readable} — possible preeclampsia with severe features"
+                )
 
     return None
 
