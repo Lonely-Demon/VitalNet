@@ -6,7 +6,41 @@ For the ML model's own detailed version history, see
 `backend/CLASSIFIER_CHANGELOG.md`. For the *why* behind major entries, see
 `docs/DECISIONS.md`.
 
-## [Unreleased] — Round 3: supervisor dashboard, outbreak signals, protocol assistant
+## [Unreleased] — Round 4: independent validation review + pregnancy-hypertension safety-net rule
+
+A user-run, independent AI validation report ("Clinical AI Validation
+Laboratory") claimed 18 critical safety violations. Reviewed and
+reproduced each one; 16 were artifacts of a test script using a fabricated
+form-data schema, one was a genuine gap now fixed, and the rest are
+documented, out-of-scope limitations. Full verdict and reproduced evidence
+in `docs/DECISIONS.md` §30.
+
+### Added
+- `is_pregnant` intake field (`IntakeForm` schema, `IntakeForm.jsx`
+  checkbox shown for `patient_sex === "female"`, Zod validation,
+  `phase27_is_pregnant.sql`) gating a new deterministic safety-net rule:
+  severe hypertension in pregnancy (BP ≥160/110, or ≥140/90 with a severe
+  feature — ACOG Practice Bulletin 222) now always escalates to EMERGENCY,
+  mirrored identically in `classifier.py` and `clinicalRules.js`.
+- `frontend/tests/safetyNet.test.mjs` — first direct test coverage for
+  `safetyNetCheck`/`news2ConcerningVital` (previously only exercised
+  indirectly via the tree/feature parity tests), wired into both CI jobs.
+- Three new safety-net property tests in `test_classifier_safety.py` for
+  the pregnancy rule.
+- A "preeclampsia" glossary entry (`docs/GLOSSARY.md`).
+
+### Documented (not fixed — see `docs/DECISIONS.md` §30 for reasoning)
+- The trained model's own age/altitude-unaware over-triage tendency
+  (a normal infant heart rate, chronic high-altitude SpO2) — recorded in
+  `MODEL_CARD.md`'s known limitations; over-triage is the safer direction
+  and the correct fix is a synthetic-data/retraining change, not a
+  safety-net rule.
+- "Temporal blindness" (a single encounter's static snapshot can't see a
+  developing trend) — an accurate description of the architecture, partly
+  mitigated cross-visit by the existing `deterioration_alert` (§22), not a
+  defect to patch.
+
+## Round 3 — supervisor dashboard, outbreak signals, protocol assistant
 
 Built in response to a direct request for a supervisor dashboard, an
 outbreak early-warning dashboard, a protocol/guideline lookup assistant,
