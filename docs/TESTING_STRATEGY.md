@@ -57,6 +57,10 @@ cd backend && pytest tests/ --ignore=tests/test_e2e.py -v
 | `test_feature_parity.py` | Replays `tests/fixtures/golden_feature_vectors.json` through `ClinicalFeatureEngineer` and asserts an exact (1e-6 tolerance) match — half of the online/offline guarantee (see Frontend layer below for the other half). Freezes the clock (`docs/DECISIONS.md` §12). |
 | `test_bulk_user_import.py` | Row-isolation for CSV bulk onboarding — one bad row (weak password, missing facility) must not fail the batch, and a profile-provisioning failure must roll back the orphaned auth user. |
 | `test_sms_parser.py` | Unit tests for the Tier-3 SMS-fallback scaffolding's fixed-format parser — pure logic, no mocking needed. |
+| `test_scoping.py` | `resolve_facility_scope()` — the shared admin-global/role-owns-facility rule (`docs/DECISIONS.md` §25/§26). |
+| `test_supervisor_routes.py` | `_aggregate_team_metrics()` — per-worker grouping, rate computation, sort order. |
+| `test_outbreak_routes.py` | `_compute_ears_signals()` — floor enforcement, stable/noisy-baseline non-flagging, spike/zero-baseline flagging (`docs/DECISIONS.md` §26). |
+| `test_protocol_answer.py` | `generate_protocol_answer()` — grounded/ungrounded contract, Groq→Gemini fallback, canned fallback, input sanitization (`docs/DECISIONS.md` §27). |
 
 `conftest.py` sets fallback fake Supabase credentials (`setdefault` — a
 real CI secret always wins) so the whole suite runs with zero network
@@ -113,6 +117,36 @@ intake form → verify it queues → reconnect → verify it syncs. Needs a
 running dev server (`npm run dev`) and seeded test users. Not part of the
 unit-test CI job for the same reason `test_e2e.py` isn't — it needs a live
 environment.
+
+### Ad hoc live-browser E2E in a sandbox with no direct internet access
+
+Some agent sandboxes route outbound HTTPS through a policy proxy that
+Chromium cannot use (confirmed: even a plain cross-origin navigation times
+out, while server-side `httpx`/`curl` through the same proxy work fine —
+see `docs/DECISIONS.md` §29). If you hit this while driving a real browser
+against a live Supabase project:
+
+1. Do a real login server-side (`POST {SUPABASE_URL}/auth/v1/token
+   ?grant_type=password`) and a real profile fetch, via `httpx`/`curl` —
+   these work because they go through the proxy correctly.
+2. In Playwright, intercept exactly `**/auth/v1/token**` and
+   `**/rest/v1/profiles**` with `page.route()` and fulfill them with that
+   captured JSON. **Include explicit CORS response headers**
+   (`Access-Control-Allow-Origin`/`-Methods`/`-Headers`) and handle the
+   `OPTIONS` preflight — Chromium enforces CORS on `route.fulfill()`
+   responses exactly like real ones; a preflight without them silently
+   blocks the real request with no console error, which looks exactly
+   like a hung backend and is easy to misdiagnose as one.
+3. Leave every other route unmocked. Calls to your own backend (same-origin
+   relative to the dev server's proxy config, or plain `localhost`) go
+   over the real network — that's the part actually under test.
+4. Abort `**/realtime/v1/**` (Supabase Realtime websockets) rather than
+   let it hang; hooks using it are already designed to degrade without a
+   live subscription.
+
+This tests 100% of your own frontend/backend code paths for real; only the
+third-party auth transport is faked, and it's faked with real captured
+data, not fabricated data.
 
 ## What CI actually runs automatically
 

@@ -365,7 +365,7 @@ VitalNet does — the absence is structural, not a gap nobody noticed.
 | Structured patient records | None — every conversation is ephemeral |
 | Triage classification | None — it answers questions, it doesn't assess patient risk |
 | Doctor-facing output | None — the loop never reaches the doctor |
-| VitalNet relationship | Complementary, not competing: ASHABot validates ASHA-worker LLM adoption; VitalNet builds the structured clinical workflow that's missing around it |
+| VitalNet relationship | Complementary, not competing: ASHABot validates ASHA-worker LLM adoption; VitalNet builds the structured clinical workflow that's missing around it. VitalNet's own protocol/guideline assistant (built directly informed by ASHABot's published design and its own honestly-reported limitation — see §3.3) now covers ASHABot's core use case too, persisting every Q&A as a growing, structured, RLS-protected facility FAQ instead of an ephemeral chat, and replacing ASHABot's ~60h-average synchronous multi-reviewer consensus with async curation. |
 
 **ClinicalPath / DIISHA — Elsevier + NITI Aayog**
 
@@ -391,7 +391,7 @@ VitalNet does — the absence is structural, not a gap nobody noticed.
 
 | Failure Pattern | Which Tool | What Goes Wrong | VitalNet's Answer |
 |---|---|---|---|
-| Ephemeral output | ASHABot | Nothing survives the interaction | Every interaction writes a structured, timestamped, RLS-protected case record — the database write is the primary output, not an afterthought |
+| Ephemeral output | ASHABot | Nothing survives the interaction | Every interaction writes a structured, timestamped, RLS-protected case record — the database write is the primary output, not an afterthought. VitalNet's own protocol assistant (§6.1) applies the same principle to ASHABot's own use case: every Q&A persists into a shared, growing facility FAQ rather than disappearing after the chat. |
 | Wrong recipient | ClinicalPath / DIISHA | Output returns to the person least equipped to evaluate it | Output routes to the doctor; the ASHA worker is the data collector, not the evaluator |
 | Hardware lock-in | AiSteth | A resource-constrained setting can't access the tool at all | Runs on hardware already in the field — a standard Android smartphone, no procurement dependency |
 | Domain narrowness | AiSteth, ClinicalPath | Optimised for one condition class, blind to the rest | General-purpose reasoning across all presentations, backed by a deterministic safety net that doesn't care which domain the emergency is in |
@@ -801,8 +801,11 @@ This table reflects the system as of today, not aspirationally.
 | 4-tier LLM briefing with hard-enforced triage/disclaimer | Built |
 | Offline-first PWA: local queue, pure-JS triage, idempotent sync | Built |
 | Supabase persistence with RLS across every table | Built |
-| Supabase Auth, hybrid JWT verification, 3-role model (asha_worker/doctor/admin) | Built |
+| Supabase Auth, hybrid JWT verification, 4-role model (asha_worker/doctor/supervisor/admin) | Built |
 | Doctor dashboard, real-time case feed, review/override/outcome recording | Built |
+| Supervisor dashboard: facility-scoped, aggregate-only, non-PHI team metrics (modeled on NHM's ASHA Facilitator role) | Built |
+| Outbreak early-warning dashboard (CDC EARS C1 aberration detection, informational only) | Built |
+| Protocol/guideline lookup assistant (grounded, refuses patient-specific questions, async human curation) | Built |
 | Referral workflow between facilities, self-reported facility capacity, predictive load-balancing | Built |
 | Web Push notifications for EMERGENCY cases, offline one-tap SMS/`tel:` alert | Built |
 | Drug/condition contraindication flags (advisory, deterministic) | Built |

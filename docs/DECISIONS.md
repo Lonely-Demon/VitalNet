@@ -840,3 +840,68 @@ is solved." Both workflows read their target from repo secrets/variables
 (`SUPABASE_URL`/`SUPABASE_ANON_KEY` secrets, `BACKEND_HEALTH_URL` variable)
 and no-op cleanly (exit 0, not a failed run) if unset — the backend one is
 inert until a host is actually chosen and the variable is set.
+
+### 29. Live E2E verification against the real project — method, two real bugs, and an ES256 finding
+
+**Context**: after building the supervisor/outbreak/protocol-assistant
+round, the user asked for an actual browser-driven E2E test rather than
+relying on the pytest suite + a production build alone. This surfaced real
+problems pytest structurally cannot catch (frontend/backend contract
+mismatches, live schema drift) and one important operational fact about
+this specific Supabase project.
+
+**Method — sandboxed browser, no direct internet access**: this
+environment's Chromium cannot reach the public internet at all (confirmed:
+even a plain `https://example.com` navigation timed out, while
+server-side `httpx`/`curl` through the same proxy worked fine) — a proxy
+limitation specific to this sandbox, unrelated to the app. Rather than
+fake the whole test, only the third-party leg was faked: a real
+server-side login (`POST /auth/v1/token`) and a real profile fetch were
+performed once via `httpx`, and the captured JSON was replayed into the
+browser via Playwright's `page.route()` interception for exactly
+`**/auth/v1/token**` and `**/rest/v1/profiles**` (with explicit CORS
+response headers — Chromium enforces CORS on `route.fulfill()` responses
+same as real ones, a preflight without `Access-Control-Allow-*` headers
+silently blocks the real request). Every other call — all new
+supervisor/outbreak/protocol endpoints, our own backend at
+`localhost:8000` — went over the real network, unmodified. This is the
+reusable pattern for any future live-browser test in this kind of sandbox;
+see `docs/TESTING_STRATEGY.md`'s E2E section.
+
+**Bug 1 — untracked `profiles_role_check` CHECK constraint**: the live
+project rejected `role = 'supervisor'` even though nothing in this repo's
+tracked migrations constrains that column (§25 had asserted, correctly at
+the time for the *tracked* migrations, that no such constraint existed).
+Something added one directly against the project outside version control.
+Caught by querying the live schema table-by-table via REST before trusting
+any migration-list assumption; fixed and made tracked by
+`phase26_role_check_constraint.sql`. **Lesson generalized**: never assume
+a live project's schema matches the migration files without checking —
+this project turned out to be ten migrations behind (stuck since before
+`phase16`) in addition to this one untracked addition.
+
+**Bug 2 — `ASHAPanel.jsx` crashed on `My Submissions` for any real ASHA
+account with history**: `getMySubmissions()` returns the cursor-paginated
+wrapper `{ cases, hasMore, nextCursor, nextId }` (documented in its own
+JSDoc comment), but the panel passed the whole object to `setSubmissions`
+and called `.map()` on it — a `TypeError` on every real render, caught
+only by the top-level `ErrorBoundary`. Pre-existing, unrelated to the
+round-3 features; a pure frontend/backend contract mismatch that no
+backend pytest could ever see, and no existing frontend test exercised
+this panel against a real backend response shape. Fixed: `setSubmissions
+(data.cases)`.
+
+**ES256 finding — the local-JWT-verification fast path (§1) never engages
+on this specific project**: captured tokens showed `"alg":"ES256"`
+(asymmetric — Supabase's newer JWT Signing Keys), not the legacy HS256
+shared-secret scheme `SUPABASE_JWT_SECRET` verifies. Every request on this
+project therefore falls through to `auth.py`'s network fallback
+(confirmed in the request log: a `GET /auth/v1/user` call per request),
+paying the ~1.5-2s round-trip §1 was specifically built to avoid. This is
+not a bug — the fallback is working exactly as designed and the app is
+fully correct — but it means the latency win documented in §1 is
+currently theoretical for this project, not realized. **Not fixed in this
+pass** (would need JWKS fetching + ES256 verification support, a real
+scope increase); flagged here so it isn't mistaken for "already handled"
+and re-discovered from scratch later. If this project's actual latency
+becomes a problem, this is the first thing to address.

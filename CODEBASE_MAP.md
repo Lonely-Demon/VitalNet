@@ -528,6 +528,23 @@ backend/
 │   │                                 never attempted when unconfigured, both-fail
 │   │                                 wrapping. Uses asyncio.run() directly (no
 │   │                                 pytest-asyncio dep).
+│   ├── test_scoping.py                Tests resolve_facility_scope() (app/core/
+│   │                                 scoping.py) — the shared admin-global/role-
+│   │                                 owns-facility rule used by supervisor_routes.py
+│   │                                 and outbreak_routes.py.
+│   ├── test_supervisor_routes.py     Tests _aggregate_team_metrics() — per-worker
+│   │                                 grouping, rate computation, sort order, rows
+│   │                                 with no submitted_by skipped.
+│   ├── test_outbreak_routes.py       Tests _compute_ears_signals() — floor
+│   │                                 enforcement, stable-baseline non-flagging, sharp-
+│   │                                 spike flagging, noisy-baseline false-positive
+│   │                                 avoidance, zero-baseline-with-floor-met flagging,
+│   │                                 per-facility/per-symptom independence.
+│   ├── test_protocol_answer.py       Tests generate_protocol_answer() — grounded vs.
+│   │                                 ungrounded contract, Groq->Gemini fallback, the
+│   │                                 canned fallback when no LLM tier is configured,
+│   │                                 question-text sanitization before it reaches the
+│   │                                 prompt.
 │   └── test_e2e.py                   Full integration test against a running server +
 │                                     real Supabase auth (needs seeded test users).
 │                                     NOT run in unit CI (needs a live server).
@@ -867,9 +884,15 @@ index) — the patient continuity key, docs/DECISIONS.md §21;
 protocol_questions.sql` — the `protocol_questions` table, facility-wide
 SELECT RLS for every role (no PHI), INSERT for the asking user's own
 facility, UPDATE (curation) restricted to doctor/supervisor/admin,
-docs/DECISIONS.md §27). Run them in order against the live Supabase
+docs/DECISIONS.md §27; `phase26_role_check_constraint.sql` — makes the
+`profiles.role` CHECK constraint tracked and widens it to all four roles,
+fixing an untracked constraint discovered live-blocking `supervisor`
+(docs/DECISIONS.md §25, §29). Run them in order against the live Supabase
 project's SQL editor (or via the Supabase CLI) — they're written to be
-safe to re-run.
+safe to re-run. **If you're setting up a project for the first time or
+resuming a long-paused one, don't assume it's current — verify the schema
+actually matches this list** (docs/DECISIONS.md §29 has the exact
+column-existence check that caught this project ten migrations behind).
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`

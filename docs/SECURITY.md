@@ -44,7 +44,11 @@ graph LR
   verified locally on the hot path (no per-request Supabase network call),
   with a network fallback for asymmetric-key projects. See
   `docs/DECISIONS.md` §1 for the full rationale and CODEBASE_MAP.md §6 for
-  the flow diagram.
+  the flow diagram. **Operational note** (`docs/DECISIONS.md` §29): a
+  project using Supabase's newer ES256 JWT Signing Keys (rather than the
+  legacy HS256 shared secret) falls through to the network fallback on
+  *every* request — check which signing scheme your project uses before
+  assuming the local-verification latency win is actually being realized.
 - **Role and facility scope are never trusted from the JWT's own
   `user_metadata`** — they're re-resolved from the `profiles` table on
   every request (cached per-user for a short TTL). A deactivated user or a

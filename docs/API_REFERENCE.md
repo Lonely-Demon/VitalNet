@@ -187,9 +187,9 @@ Paginated (`page`, `limit` ≤200) list of all users joined with profile data.
 Create a user + profile row. **Body** (`CreateUserRequest`): `email`,
 `password` (12-128 chars, must contain upper+lower+digit+symbol —
 `PASSWORD_POLICY_RE`), `full_name` (1-100), `role`
-(`asha_worker`/`doctor`/`admin`), `facility_id` (required for
-`asha_worker`/`doctor`), `asha_id` (optional). Rolls back the auth user if
-profile provisioning fails (no orphaned accounts).
+(`asha_worker`/`doctor`/`supervisor`/`admin`), `facility_id` (required for
+`asha_worker`/`doctor`/`supervisor`), `asha_id` (optional). Rolls back the
+auth user if profile provisioning fails (no orphaned accounts).
 
 ### `POST /users/bulk` — 3/min
 CSV-onboarding endpoint. **Body**: `{ users: CreateUserRequest[] }` (1-100

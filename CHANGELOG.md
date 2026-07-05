@@ -6,7 +6,63 @@ For the ML model's own detailed version history, see
 `backend/CLASSIFIER_CHANGELOG.md`. For the *why* behind major entries, see
 `docs/DECISIONS.md`.
 
-## [Unreleased] — Enterprise-grade hardening round 2
+## [Unreleased] — Round 3: supervisor dashboard, outbreak signals, protocol assistant
+
+Built in response to a direct request for a supervisor dashboard, an
+outbreak early-warning dashboard, a protocol/guideline lookup assistant,
+and a researched (not assumed) decision on the role/access model — plus a
+live E2E verification pass against the real Supabase project once it was
+built. See `docs/DECISIONS.md` §25-29 for the full reasoning behind each
+piece.
+
+### Added
+- Fourth role, `supervisor` — facility-scoped, aggregate-only, non-PHI,
+  modeled on NHM's real ASHA Facilitator role. `GET /api/supervisor/
+  team-metrics` + `SupervisorPanel.jsx`/`TeamMetrics.jsx` (`docs/DECISIONS.md` §25).
+- Outbreak early-warning dashboard using CDC's EARS C1 aberration-detection
+  method over `case_records.symptoms`. `GET /api/outbreak/signals` +
+  `OutbreakSignals.jsx`, shared across Doctor/Supervisor/Admin panels.
+  Framed explicitly as informational, not a validated surveillance system
+  (`docs/DECISIONS.md` §26).
+- Protocol/guideline lookup assistant, informed by ASHABot's own published
+  design (Khushi Baby + Microsoft Research India, CHI 2025) — grounded via
+  context-stuffed `protocol_knowledge.md`, refuses patient-specific
+  questions, and replaces ASHABot's too-slow (~60h average) synchronous
+  consensus with async curation. New `protocol_questions` table (real
+  Postgres RLS, not the `supabase_admin` exception — this table has no
+  PHI). `POST /api/protocol/ask`, `GET .../questions`, `PATCH
+  .../curate` + `ProtocolAssistant.jsx` across all four panels
+  (`docs/DECISIONS.md` §27).
+- `app/core/scoping.py::resolve_facility_scope` — shared facility-scoping
+  helper for the two new aggregate-only routers.
+- Two GitHub Actions keep-alive workflows for the free-tier deployment
+  reality: `supabase-keepalive.yml` (prevents the 7-day pause) and
+  `backend-keepalive.yml` (mitigates free-host cold starts, explicitly
+  documented as best-effort — see `docs/DECISIONS.md` §28).
+- `phase25_protocol_questions.sql`, `phase26_role_check_constraint.sql`.
+
+### Fixed
+- Resolved all 10 open Dependabot PRs — merged what was safe (slowapi,
+  skl2onnx, json-repair, GitHub Actions SHA pins, vite 8/@vitejs/plugin-react 6),
+  explicitly rejected two with documented reasoning (httpx 0.28 conflicts
+  with the pinned `supabase==2.10.0`; numpy 2.5.x requires Python ≥3.12,
+  breaking the documented 3.11+ local-dev floor).
+- `NavBar.jsx` had no label/color entry for the `supervisor` role at all
+  (would have rendered a blank badge) — found while wiring the new role.
+- An untracked `profiles_role_check` CHECK constraint on the live
+  Supabase project silently rejected `'supervisor'` — not present in any
+  tracked migration, added directly against the project at some point
+  outside version control. Found and fixed during live E2E verification
+  (`docs/DECISIONS.md` §29); the live project also turned out to be ten
+  migrations behind (stuck since before `phase16`).
+- `ASHAPanel.jsx`'s "My Submissions" tab crashed (`TypeError:
+  submissions.map is not a function`) for any ASHA worker with real
+  submission history — `getMySubmissions()` returns the cursor-paginated
+  `{ cases, hasMore, ... }` wrapper, not a bare array. Pre-existing,
+  unrelated to the round-3 features; found only by driving a real browser
+  against a real backend response (`docs/DECISIONS.md` §29).
+
+## Round 2 — Enterprise-grade hardening
 
 Autonomously-buildable subset of a broader enterprise-readiness roadmap —
 everything that didn't require a human decision, external credential, or
