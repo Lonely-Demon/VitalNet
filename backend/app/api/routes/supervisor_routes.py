@@ -21,32 +21,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.core.auth import require_role
 from app.core.database import supabase_admin
+from app.core.scoping import resolve_facility_scope
 from app.api.routes.cases import limiter
 
 logger = logging.getLogger("vitalnet")
 
 router = APIRouter(prefix="/api/supervisor", tags=["supervisor"])
 
-# 'admin' is the only global-scope role here, matching the convention used
-# throughout analytics_routes.py / referral_routes.py.
-GLOBAL_SCOPE_ROLE = "admin"
 DEFAULT_WINDOW_DAYS = 30
 MAX_WINDOW_DAYS = 366
-
-
-def _resolve_scope(role: str, own_facility_id: str | None, requested_facility_id: str | None) -> str | None:
-    """
-    Returns the facility_id to filter on, or None for system-wide (admin only).
-    Raises HTTPException if a non-admin role has no facility assigned.
-    A non-admin role's own facility always wins — `requested_facility_id` is
-    only honoured for GLOBAL_SCOPE_ROLE, so a supervisor cannot widen their
-    own scope by passing a different id.
-    """
-    if role == GLOBAL_SCOPE_ROLE:
-        return requested_facility_id
-    if not own_facility_id:
-        raise HTTPException(status_code=400, detail="Account has no facility assigned")
-    return own_facility_id
 
 
 def _aggregate_team_metrics(rows: list[dict]) -> list[dict]:
@@ -126,7 +109,7 @@ async def get_team_metrics(
         raise HTTPException(status_code=400, detail=f"days must be between 1 and {MAX_WINDOW_DAYS}")
 
     role = user.get("resolved_role") or ""
-    scoped_facility_id = _resolve_scope(role, user.get("resolved_facility_id"), facility_id)
+    scoped_facility_id = resolve_facility_scope(role, user.get("resolved_facility_id"), facility_id)
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 

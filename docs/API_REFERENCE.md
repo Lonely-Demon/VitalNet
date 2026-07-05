@@ -295,6 +295,31 @@ and triage-tier distribution.
 
 ---
 
+## Outbreak signals (`app/api/routes/outbreak_routes.py`, prefix `/api/outbreak`)
+
+`require_role('doctor', 'supervisor', 'admin')`. Implements the CDC Early
+Aberration Reporting System (EARS) C1 method (`docs/DECISIONS.md` §26) over
+`case_records.symptoms` (the allow-listed symptom IDs, not free-text
+`chief_complaint`). Informational only — surfaced for a human to review, not
+an automated alert or a validated public-health surveillance system. Uses
+`supabase_admin` for exactly one aggregate query, the same narrow exception
+as §20/§22/§25.
+
+### `GET /signals` — 60/min
+Today's aberration signals: `(facility, symptom)` pairs whose case count
+today exceeds the 7-day trailing baseline mean + 3 standard deviations, with
+a minimum floor of 3 cases before a day is even eligible to be flagged.
+- **Query params**: `facility_id` (optional, **admin only** — `doctor`/
+  `supervisor` are always scoped to their own facility; a different id
+  passed as either of those roles is silently ignored, not an error).
+- **Scope**: `doctor`/`supervisor` restricted to their own facility;
+  `admin` defaults to system-wide, or narrows via `facility_id`.
+- **Response**: `{ facility_id, date, baseline_days, signal_count, signals:
+  [{ facility_id, symptom, today_count, baseline_mean, baseline_stddev,
+  threshold }] }`, sorted by `today_count` descending.
+
+---
+
 ## Push notifications (`app/api/routes/push_routes.py`, prefix `/api/push`)
 
 Returns `503` on the subscribe endpoint if `VAPID_PUBLIC_KEY`/

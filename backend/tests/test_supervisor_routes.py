@@ -1,41 +1,12 @@
 """
 Tests for app/api/routes/supervisor_routes.py — the per-ASHA-worker aggregate
 metrics used for supportive supervision (docs/DECISIONS.md §25). Covers the
-pure aggregation logic and the facility-scope resolution rule (a supervisor
-can never widen their own scope; admin can query system-wide or narrow to
-one facility).
+pure aggregation logic. Facility-scope resolution is shared with
+outbreak_routes.py and tested once in tests/test_scoping.py.
 
 Run: cd backend && pytest tests/test_supervisor_routes.py -v
 """
-import pytest
-from fastapi import HTTPException
-
-from app.api.routes.supervisor_routes import _aggregate_team_metrics, _resolve_scope
-
-
-# ── _resolve_scope ────────────────────────────────────────────────────────────
-
-def test_supervisor_is_scoped_to_own_facility():
-    assert _resolve_scope("supervisor", "fac-1", None) == "fac-1"
-
-
-def test_supervisor_cannot_widen_scope_via_query_param():
-    # Even if a supervisor passes a different facility_id, their own wins.
-    assert _resolve_scope("supervisor", "fac-1", "fac-2") == "fac-1"
-
-
-def test_supervisor_without_facility_is_rejected():
-    with pytest.raises(HTTPException) as exc:
-        _resolve_scope("supervisor", None, None)
-    assert exc.value.status_code == 400
-
-
-def test_admin_defaults_to_system_wide():
-    assert _resolve_scope("admin", None, None) is None
-
-
-def test_admin_can_narrow_to_one_facility():
-    assert _resolve_scope("admin", None, "fac-9") == "fac-9"
+from app.api.routes.supervisor_routes import _aggregate_team_metrics
 
 
 # ── _aggregate_team_metrics ───────────────────────────────────────────────────

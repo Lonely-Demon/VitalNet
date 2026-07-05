@@ -189,10 +189,20 @@ backend/
 │   │   │                            one user's data to another), supabase_admin
 │   │   │                            (service_role, auth.admin.* AND admin-only
 │   │   │                            cross-tenant ops — require_role('admin') is the
-│   │   │                            only access boundary, no RLS backstop).
+│   │   │                            only access boundary for admin_routes.py/
+│   │   │                            dsr_routes.py/metrics_routes.py, no RLS
+│   │   │                            backstop; a small, DECISIONS.md-documented set
+│   │   │                            of non-admin routes also use it for exactly one
+│   │   │                            aggregate query each — §20, §22, §25, §26).
 │   │   │                            extract_bearer_token() validates header format
 │   │   │                            before any signature check. validate_schema_
 │   │   │                            compatibility() is the startup gate.
+│   │   ├── scoping.py                resolve_facility_scope(role, own_facility_id,
+│   │   │                            requested_facility_id) — shared by
+│   │   │                            supervisor_routes.py and outbreak_routes.py:
+│   │   │                            'admin' is global (system-wide, or narrows via
+│   │   │                            a query param), every other role is pinned to
+│   │   │                            their own facility_id and cannot widen it.
 │   │   ├── audit.py                  PHI access audit logging (log_phi_access,
 │   │   │                            AuditEventType, get_client_ip) — writes to
 │   │   │                            BOTH the dedicated 'vitalnet.audit' logger
@@ -291,17 +301,27 @@ backend/
 │   │   ├── metrics_routes.py         GET /api/metrics — Prometheus text format
 │   │   │                             (app/core/metrics.py), admin-only. Backs the
 │   │   │                             SLIs in docs/SLO.md.
-│   │   └── supervisor_routes.py      GET /api/supervisor/team-metrics —
-│   │                                 per-ASHA-worker aggregate metrics (submission
-│   │                                 count, needs_review/contraindication/
-│   │                                 deterioration rates, tier distribution) for
-│   │                                 require_role('supervisor', 'admin'). One narrow
-│   │                                 supabase_admin aggregate query, same exception
-│   │                                 class as §20/§22 — no case row or patient field
-│   │                                 crosses the RLS boundary. supervisor is scoped
-│   │                                 to their own facility_id only; admin defaults
-│   │                                 system-wide or narrows via ?facility_id
-│   │                                 (docs/DECISIONS.md §25).
+│   │   ├── supervisor_routes.py      GET /api/supervisor/team-metrics —
+│   │   │                             per-ASHA-worker aggregate metrics (submission
+│   │   │                             count, needs_review/contraindication/
+│   │   │                             deterioration rates, tier distribution) for
+│   │   │                             require_role('supervisor', 'admin'). One narrow
+│   │   │                             supabase_admin aggregate query, same exception
+│   │   │                             class as §20/§22 — no case row or patient field
+│   │   │                             crosses the RLS boundary. supervisor is scoped
+│   │   │                             to their own facility_id only; admin defaults
+│   │   │                             system-wide or narrows via ?facility_id
+│   │   │                             (docs/DECISIONS.md §25).
+│   │   └── outbreak_routes.py        GET /api/outbreak/signals — EARS C1
+│   │                                 aberration detection (7-day trailing baseline
+│   │                                 mean + 3*stddev, floor of 3 cases) over
+│   │                                 (facility, symptom, day) aggregate counts, for
+│   │                                 require_role('doctor', 'supervisor', 'admin').
+│   │                                 Informational only, not a validated
+│   │                                 surveillance system (docs/DECISIONS.md §26).
+│   │                                 Same supabase_admin aggregate-only exception
+│   │                                 as supervisor_routes.py; facility scoping
+│   │                                 shared via app/core/scoping.py.
 │   ├── models/schemas.py            Pydantic request/response models. IntakeForm is
 │   │                                 the case-submission contract — every field is
 │   │                                 bounded (min/max length, numeric ranges, enums),
@@ -642,9 +662,10 @@ frontend/src/
 │   ├── LoginPage.jsx, IntakeForm.jsx, Dashboard.jsx
 ├── panels/
 │   ├── ASHAPanel.jsx (New Case / My Submissions), DoctorPanel.jsx (Pending Review /
-│   │   All Cases / Referrals tabs), AdminPanel.jsx (Analytics/Users/Facilities/System/
-│   │   Audit Log), SupervisorPanel.jsx (Team Metrics — TeamMetrics.jsx component,
-│   │   GET /api/supervisor/team-metrics, docs/DECISIONS.md §25)
+│   │   All Cases / Referrals / Outbreak Signals tabs), AdminPanel.jsx (Analytics/
+│   │   Outbreak Signals/Users/Facilities/System/Audit Log), SupervisorPanel.jsx
+│   │   (Team Metrics / Outbreak Signals — TeamMetrics.jsx and shared
+│   │   OutbreakSignals.jsx components, docs/DECISIONS.md §25/§26)
 ├── components/                Shared UI: BriefingCard (triage override + outcome-
 │   │                          recording + referral actions + patient-summary on-demand
 │   │                          request live here), TriageBadge,

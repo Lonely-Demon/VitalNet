@@ -27,7 +27,7 @@ from app.core.logging import setup_logging
 from app.core.correlation import set_correlation_id
 from app.core.config import settings
 from app.ml.classifier import load_classifier
-from app.api.routes import cases, admin_routes, analytics_routes, security, push_routes, referral_routes, dsr_routes, voice_routes, metrics_routes, supervisor_routes
+from app.api.routes import cases, admin_routes, analytics_routes, security, push_routes, referral_routes, dsr_routes, voice_routes, metrics_routes, supervisor_routes, outbreak_routes
 
 # ── 1. Structured JSON logging — must be first ────────────────────────────────
 logger = setup_logging()
@@ -204,6 +204,7 @@ app.include_router(dsr_routes.router)
 app.include_router(voice_routes.router)
 app.include_router(metrics_routes.router)
 app.include_router(supervisor_routes.router)
+app.include_router(outbreak_routes.router)
 
 
 # ── 11. Global exception handlers — emit structured JSON, never raw tracebacks ─
