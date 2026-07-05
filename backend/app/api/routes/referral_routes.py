@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import require_role
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
-from app.core.database import get_supabase_for_user
+from app.core.database import get_supabase_for_user, supabase_admin
 from app.api.routes.cases import limiter
 
 logger = logging.getLogger("vitalnet")
@@ -80,6 +80,10 @@ async def list_active_facilities(
     `facilities.type` is free text with no defined ordering yet — enforcing
     one now could incorrectly hide a legitimate destination (e.g. a lateral
     PHC-to-PHC referral for capacity reasons).
+
+    Each facility also carries `open_case_count` (unreviewed cases right
+    now) and is sorted least-loaded first — a suggestion, not an
+    enforcement; the doctor can still choose any facility in the list.
     """
     raw_token = (authorization or "").split(" ", 1)[-1]
     db = get_supabase_for_user(raw_token)
@@ -94,8 +98,36 @@ async def list_active_facilities(
     if facility_id:
         query = query.neq("id", facility_id)
 
-    result = query.execute()
-    return result.data or []
+    facilities = query.execute().data or []
+
+    # Open (unreviewed) case load per facility — a decision-support ranking
+    # signal, not authoritative bed availability (docs/DECISIONS.md §20).
+    # A doctor's own RLS-scoped token can only see their OWN facility's
+    # case_records (by design — the whole point of RLS here), so this ONE
+    # narrow aggregate uses supabase_admin instead. It is deliberately
+    # limited to a facility_id count — no patient data, no free text, no
+    # individual case rows ever leave this function.
+    open_cases = (
+        supabase_admin.table("case_records")
+        .select("facility_id")
+        .is_("reviewed_at", "null")
+        .is_("deleted_at", "null")
+        .execute()
+    )
+    load_by_facility: dict[str, int] = {}
+    for row in open_cases.data or []:
+        fid = row.get("facility_id")
+        if fid:
+            load_by_facility[fid] = load_by_facility.get(fid, 0) + 1
+
+    for f in facilities:
+        f["open_case_count"] = load_by_facility.get(f["id"], 0)
+
+    # Sort least-loaded first as a suggestion — the doctor can still pick
+    # any facility in the list, this only orders the options.
+    facilities.sort(key=lambda f: f["open_case_count"])
+
+    return facilities
 
 
 # ── Facility self-reported capacity ────────────────────────────────────────────

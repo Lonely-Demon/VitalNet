@@ -278,7 +278,10 @@ case is escalated at most once per threshold window.
 Active facilities for the referral-target picker (doctor-accessible,
 unlike `/api/admin/facilities`). Excludes the caller's own facility. No
 tier-based filtering — `facilities.type` is free text with no defined
-ordering yet. Includes each facility's self-reported `capacity_status`.
+ordering yet. Includes each facility's self-reported `capacity_status`
+and `open_case_count` (current unreviewed-case load — an aggregate-only
+signal, `docs/DECISIONS.md` §20); the list is sorted least-loaded first as
+a suggestion, not an enforcement.
 
 ### `PATCH /api/facilities/{facility_id}/capacity` — 30/min — `doctor` (own facility only), `admin`
 **Body**: `{ capacity_status }` — one of `available`/`limited`/`full`.

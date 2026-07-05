@@ -442,3 +442,32 @@ fields on their own facility's row via a direct API call, not just
 everywhere else in this schema (no column-level restriction attempted
 anywhere), and bounded to their own facility's already-public directory
 information, not another tenant's data or any PHI.
+
+### 20. Referral load-balancing needed one narrow, deliberate RLS bypass
+
+**Context**: ranking referral candidates by current load (so a referral
+doesn't land on the already-most-overloaded facility) needs each
+candidate facility's open (unreviewed) case *count*. But `case_records`'
+RLS restricts a doctor's own token to their OWN facility's rows by
+design — the entire point of that policy — so a doctor's RLS-scoped
+client structurally cannot see another facility's case count, empty or
+otherwise.
+
+**Decision**: `list_active_facilities` (`referral_routes.py`) uses
+`supabase_admin` for exactly one query — `select("facility_id")` on
+unreviewed, non-deleted cases — to build a `{facility_id: count}` map,
+then attaches only the integer `open_case_count` to each facility in the
+response. No other column is read from that query, and no individual
+case row, patient data, or free text is ever returned to the caller. The
+returned facility list is sorted least-loaded first as a suggestion; the
+doctor can still choose any facility.
+
+**Consequences**: this is a deliberate, narrow exception to "supabase_admin
+is only used behind require_role('admin')" (`docs/DECISIONS.md` §7,
+enforced by `test_admin_authz.py` for the admin-only surfaces) — a
+doctor-accessible endpoint now makes one RLS-bypassing call. The
+exception is safe specifically because what crosses the RLS boundary is
+an aggregate count, not PHI; if this pattern needs to be reused elsewhere,
+apply the same test: never return anything from the `supabase_admin` call
+beyond an aggregate a doctor is already trusted to reason about (referral
+target selection).

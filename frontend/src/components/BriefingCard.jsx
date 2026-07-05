@@ -449,6 +449,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                       <option key={f.id} value={f.id}>
                         {f.name}{f.district ? ` — ${f.district}` : ''}
                         {f.capacity_status && f.capacity_status !== 'available' ? ` (${f.capacity_status})` : ''}
+                        {typeof f.open_case_count === 'number' ? ` · ${f.open_case_count} open` : ''}
                       </option>
                     ))}
                   </select>

@@ -256,7 +256,11 @@ backend/
 │   │   │                             reported available/limited/full, own-facility-
 │   │   │                             or-admin, via the RLS-scoped client (needed
 │   │   │                             facilities' first-ever UPDATE policy — see
-│   │   │                             docs/DECISIONS.md §19).
+│   │   │                             docs/DECISIONS.md §19). GET /api/facilities
+│   │   │                             attaches open_case_count per facility (one
+│   │   │                             deliberate, narrow supabase_admin aggregate-
+│   │   │                             only query — docs/DECISIONS.md §20) and sorts
+│   │   │                             least-loaded first as a referral suggestion.
 │   │   ├── dsr_routes.py             DPDP data-subject-request lifecycle
 │   │   │                             (docs/COMPLIANCE_DPDP.md), admin-only, scoped
 │   │   │                             to a single case_id: GET .../export (right to
