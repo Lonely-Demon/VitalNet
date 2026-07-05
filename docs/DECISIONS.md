@@ -507,3 +507,35 @@ rather than building a registry. The format regex is duplicated in three
 places by necessity (`backend/app/models/schemas.py::PATIENT_KEY_RE`, the
 `phase23` CHECK constraint, `frontend/src/utils/patientKey.js`) — covered
 by `backend/tests/test_patient_key.py`.
+
+### 22. Cross-visit deterioration alert needed the same narrow RLS bypass as §20
+
+**Context**: once a `patient_key` links visits together (§21), a genuinely
+useful signal falls out of it for free: a patient with repeated
+URGENT/EMERGENCY presentations in a short window is worth a clinician's
+attention even if today's individual reading looks unremarkable. But
+computing "how many qualifying visits has this patient_key had recently"
+hits the exact same wall as §20 — `case_records`' RLS restricts an
+`asha_worker`'s own token to only cases *they personally* submitted, so if
+a different worker saw this same patient last week, the submitting
+worker's RLS-scoped query would silently undercount and miss the pattern.
+
+**Decision**: `cases.py::_check_deterioration_pattern`, called once per
+`POST /api/submit`, uses `supabase_admin` for exactly one count-only query
+— `select("id", count="exact")` filtered to `patient_key`, a trailing
+7-day window, and `triage_level IN (URGENT, EMERGENCY)`, via
+`is_("deleted_at", "null")`. If the prior qualifying count plus today's
+own tier reaches 2, `case_records.deterioration_alert` is set (with
+`deterioration_visit_count` for context) and folded into `needs_review`
+alongside the existing contraindication/low-confidence/human-requested
+triggers (`phase24_deterioration_alert.sql`). Surfaced in
+`BriefingCard.jsx` next to the contraindication flags.
+
+**Consequences**: same governing test as §20 applies and is satisfied —
+only an integer count crosses the RLS boundary, never a row, and the
+worker submitting the case is already trusted to reason about this same
+patient's recent severity (they hold the key). Deliberately backend-only:
+this needs authoritative visibility across all prior visits regardless of
+device, so it cannot be computed in the offline JS path — a case
+submitted offline gets this check only once it syncs and calls
+`/api/submit` for real.

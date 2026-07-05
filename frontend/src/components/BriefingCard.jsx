@@ -190,12 +190,14 @@ export default function BriefingCard({ caseData, onReviewed }) {
             {timeStr}
             {caseData.triage_model_version && <> · model v{caseData.triage_model_version}</>}
           </p>
-          {(caseData.needs_review || caseData.low_confidence || caseData.human_review_requested) && (
+          {(caseData.needs_review || caseData.low_confidence || caseData.human_review_requested || caseData.deterioration_alert) && (
             <p className="text-xs text-urgent font-bold mt-1">
               {caseData.human_review_requested
                 ? '⚑ Review requested by submitter'
                 : caseData.contraindication_flags?.length > 0
                 ? '⚑ Possible contraindication flagged — see below'
+                : caseData.deterioration_alert
+                ? '⚑ Repeated severe visits — see below'
                 : '⚠ Model uncertain — clinician review recommended'}
             </p>
           )}
@@ -212,6 +214,16 @@ export default function BriefingCard({ caseData, onReviewed }) {
               <ul className="text-sm text-emergency space-y-1.5">
                 {caseData.contraindication_flags.map((flag, i) => <li key={i}>· {flag}</li>)}
               </ul>
+            </BriefingSection>
+          )}
+
+          {caseData.deterioration_alert && (
+            <BriefingSection title="Deterioration Alert">
+              <p className="text-sm text-emergency">
+                {caseData.deterioration_visit_count ?? 2}+ URGENT/EMERGENCY visits from this patient
+                within the last 7 days, including this one — consider whether this presentation
+                needs closer follow-up than a single visit would suggest.
+              </p>
             </BriefingSection>
           )}
 

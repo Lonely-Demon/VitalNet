@@ -5,7 +5,7 @@ Extracted from main.py as part of Phase 12 architectural modularisation.
 import logging
 import re
 import uuid as uuid_lib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
@@ -14,7 +14,7 @@ from slowapi import Limiter
 from app.core.auth import require_role, verify_sub_for_rate_limit
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
-from app.core.database import get_supabase_for_user
+from app.core.database import get_supabase_for_user, supabase_admin
 from app.core.metrics import record_triage_classification
 from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput, PATIENT_KEY_RE
 from app.ml.classifier import run_triage
@@ -88,6 +88,43 @@ def _resolved_facility(user: dict) -> str | None:
     return user.get("resolved_facility_id")
 
 
+# Cross-visit deterioration pattern: a repeated URGENT/EMERGENCY presentation
+# from the same patient within this trailing window is a signal worth a
+# clinician's eyes even if today's reading alone wouldn't trigger review.
+_DETERIORATION_WINDOW_DAYS = 7
+_DETERIORATION_QUALIFYING_TIERS = ("URGENT", "EMERGENCY")
+
+
+def _check_deterioration_pattern(patient_key: str | None, current_triage_level: str) -> tuple[bool, int | None]:
+    """
+    Counts prior URGENT/EMERGENCY visits sharing patient_key within the
+    trailing window, using supabase_admin for exactly one count-only
+    query — the same narrow, documented exception as the referral
+    load-balancing aggregate (docs/DECISIONS.md §20, §22): a patient_key
+    carries no PII, and an ASHA worker submitting THIS case is already
+    trusted to reason about whether this same patient has recently had
+    repeated severe visits, regardless of which worker saw them each time
+    (RLS would otherwise silently restrict an asha_worker's own query to
+    only their own past submissions, undercounting cross-worker visits).
+    """
+    if not patient_key:
+        return False, None
+
+    window_start = (datetime.now(timezone.utc) - timedelta(days=_DETERIORATION_WINDOW_DAYS)).isoformat()
+    result = (
+        supabase_admin.table("case_records")
+        .select("id", count="exact")
+        .eq("patient_key", patient_key)
+        .gte("created_at", window_start)
+        .in_("triage_level", _DETERIORATION_QUALIFYING_TIERS)
+        .is_("deleted_at", "null")
+        .execute()
+    )
+    prior_count = result.count if result.count is not None else len(result.data or [])
+    total = prior_count + (1 if current_triage_level in _DETERIORATION_QUALIFYING_TIERS else 0)
+    return total >= 2, (total if total >= 2 else None)
+
+
 def _authorize_case_row_access(user: dict, row: dict) -> None:
     """
     Fine-grained, row-level authorization for a single case, on top of the
@@ -140,6 +177,10 @@ async def submit_case(
         raw_token = (authorization or "").split(" ", 1)[-1]
         db = get_supabase_for_user(raw_token)
 
+        deterioration_alert, deterioration_visit_count = _check_deterioration_pattern(
+            form.patient_key, triage_result["triage_level"]
+        )
+
         record = {
             "client_id": str(form.client_id or uuid_lib.uuid4()),
             "submitted_by": user["sub"],
@@ -174,11 +215,14 @@ async def submit_case(
             "triage_model_version": triage_result.get("model_version"),
             "low_confidence": bool(triage_result.get("low_confidence")),
             "contraindication_flags": triage_result.get("contraindication_flags") or [],
+            "deterioration_alert": deterioration_alert,
+            "deterioration_visit_count": deterioration_visit_count,
             "llm_status": briefing.get("llm_status", "generated"),
             "needs_review": bool(
                 briefing.get("needs_review")
                 or form.human_review_requested
                 or triage_result.get("contraindication_flags")
+                or deterioration_alert
             ),
             "briefing": briefing,
             "llm_model_used": briefing.get("_model_used", "unknown"),
@@ -299,7 +343,7 @@ async def get_cases(
             "id, patient_name, patient_age, patient_sex, patient_location, chief_complaint, "
             "triage_level, triage_priority, triage_confidence, risk_driver, briefing, "
             "low_confidence, needs_review, human_review_requested, human_review_reason, "
-            "contraindication_flags, "
+            "contraindication_flags, deterioration_alert, deterioration_visit_count, "
             "triage_model_version, overridden_triage, override_reason, overridden_by, overridden_at, "
             "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
         )

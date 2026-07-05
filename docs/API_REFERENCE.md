@@ -94,7 +94,11 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   `triage_level`, `triage_confidence`, `risk_driver`, `id`, `created_at`,
   `facility_id`, `created_offline`, `contraindication_flags` — a possibly-
   empty array of deterministic keyword-matched flags, see
-  `app/ml/contraindications.py`; any flag forces `needs_review`).
+  `app/ml/contraindications.py`; any flag forces `needs_review`;
+  `deterioration_alert` + `deterioration_visit_count` — set when this
+  `patient_key` has had 2+ URGENT/EMERGENCY visits, this one included,
+  within a trailing 7-day window, also forcing `needs_review` — see
+  `docs/DECISIONS.md` §22).
 - **Side effect**: if the result is EMERGENCY, fires a Web Push notification
   to the facility's subscribed doctors as a background task (never adds
   latency to this response).

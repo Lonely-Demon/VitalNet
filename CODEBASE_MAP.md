@@ -217,8 +217,13 @@ backend/
 │   │   │                             facility-scoped, asha_worker own-submissions-only
 │   │   │                             — also used by security.py). The by-patient-key
 │   │   │                             lookup reuses the same RLS-scoped visibility per
-│   │   │                             role (docs/DECISIONS.md §21). Every create/read/
-│   │   │                             update is PHI-audit-logged.
+│   │   │                             role (docs/DECISIONS.md §21). submit_case() also
+│   │   │                             runs _check_deterioration_pattern() — one narrow
+│   │   │                             supabase_admin count-only query (same exception
+│   │   │                             class as §20) forcing needs_review when a
+│   │   │                             patient_key has 2+ URGENT/EMERGENCY visits in the
+│   │   │                             trailing 7 days (docs/DECISIONS.md §22). Every
+│   │   │                             create/read/update is PHI-audit-logged.
 │   │   ├── admin_routes.py           /api/admin/* — user CRUD (password complexity
 │   │   │                             policy, orphan rollback on profile-provisioning
 │   │   │                             failure, profile/auth-metadata rollback on
@@ -414,6 +419,10 @@ backend/
 │   │                                 format acceptance/rejection, uppercase
 │   │                                 normalization, and that the excluded-ambiguous-
 │   │                                 char alphabet matches the frontend generator.
+│   ├── test_deterioration_alert.py   Unit tests for _check_deterioration_pattern() —
+│   │                                 no-key skip, count thresholds (0/1/2 prior
+│   │                                 qualifying visits combined with today's tier),
+│   │                                 and the supabase_admin query filters, mocked.
 │   ├── test_admin_authz.py           Asserts every /api/admin route — across
 │   │                                 admin_routes.py AND dsr_routes.py (see
 │   │                                 ADMIN_ROUTE_MODULES) — is require_role('admin')-
@@ -708,6 +717,7 @@ erDiagram
         text overridden_triage "doctor correction"
         text triage_model_version
         text patient_key "nullable, XXXX-XXXX, continuity key"
+        boolean deterioration_alert "2+ URGENT/EMERGENCY visits in 7d"
         timestamptz reviewed_at
         timestamptz deleted_at "soft delete"
     }
@@ -764,9 +774,11 @@ jsonb column, default `[]`; `phase22_facility_capacity.sql` —
 `facilities.capacity_status`/`capacity_updated_at` plus facilities' first-
 ever UPDATE RLS policy; `phase23_patient_key.sql` — `case_records.
 patient_key` (nullable text, CHECK-constrained to `XXXX-XXXX`, partial
-index) — the patient continuity key, docs/DECISIONS.md §21). Run them in
-order against the live Supabase project's SQL editor (or via the Supabase
-CLI) — they're written to be safe to re-run.
+index) — the patient continuity key, docs/DECISIONS.md §21;
+`phase24_deterioration_alert.sql` — `case_records.deterioration_alert`/
+`deterioration_visit_count`, docs/DECISIONS.md §22). Run them in order
+against the live Supabase project's SQL editor (or via the Supabase CLI)
+— they're written to be safe to re-run.
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`
