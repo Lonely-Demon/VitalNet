@@ -17,6 +17,7 @@ docs — start with whichever matches what you're trying to do:
 | **[CODEBASE_MAP.md](./CODEBASE_MAP.md)** | Every directory, what it does, architecture/sequence/ER diagrams — the primary orientation doc |
 | **[docs/API_REFERENCE.md](./docs/API_REFERENCE.md)** | Every HTTP endpoint: auth, rate limits, request/response shapes |
 | **[docs/DECISIONS.md](./docs/DECISIONS.md)** | *Why* the system is built this way — rejected alternatives, tradeoffs |
+| **[docs/RESEARCH_AND_DEVELOPMENT.md](./docs/RESEARCH_AND_DEVELOPMENT.md)** | The full R&D record — problem research, competitive landscape, AI-layer design rationale, feasibility, impact |
 | **[FEATURES_ROADMAP.md](./FEATURES_ROADMAP.md)** | Proposed features with implementation-ready specs |
 | **[CONTRIBUTING.md](./CONTRIBUTING.md)** | Branch strategy, PR process, commit conventions |
 | **[docs/TESTING_STRATEGY.md](./docs/TESTING_STRATEGY.md)** | What's tested, how, and how to add a test |
