@@ -328,3 +328,86 @@ def _fallback_briefing(triage_result: dict) -> dict:
         "needs_review":                 bool(triage_result.get("low_confidence")) or level in {"URGENT", "EMERGENCY"},
         "_model_used":                  "fallback",
     }
+
+
+# ─── Patient-facing plain-language summary ────────────────────────────────────
+# On-demand only (not generated automatically on every submission — cost/
+# latency, docs/SLO.md). Closes the gap between "consent was captured"
+# (a checkbox) and "consent was informed" (the patient understood what's
+# happening) — an ASHA worker reads this aloud in the patient's own language.
+# Deliberately NOT a fresh clinical-reasoning call: it only restates the
+# ALREADY-FIXED triage_level/briefing content in plain words, so it cannot
+# structurally arrive at a different clinical read than what's already been
+# decided (same LLM-independent-triage guardrail as generate_briefing).
+
+PATIENT_SUMMARY_LANGUAGE_NAMES = {"en": "English", "hi": "Hindi", "ta": "Tamil"}
+
+_PATIENT_SUMMARY_SYSTEM_PROMPT = (
+    "You restate an already-decided clinical triage result in short, warm, "
+    "plain language for a patient or their family, to be read aloud by a "
+    "community health worker. Use everyday words, no medical jargon, no "
+    "new medical claims — only restate what you are given. Never change "
+    "the urgency level. Keep it under 120 words. End with one short "
+    "sentence noting this is not a final diagnosis and a doctor should "
+    "confirm. Respond in plain text only, no markdown, no JSON."
+)
+
+
+def _fallback_patient_summary(triage_result: dict) -> str:
+    level = triage_result["triage_level"]
+    if level == "EMERGENCY":
+        return (
+            "This looks serious and needs urgent medical attention right away. "
+            "Please go to the nearest health facility or call for help now. "
+            "A doctor still needs to confirm this."
+        )
+    if level == "URGENT":
+        return (
+            "This needs a doctor to check soon, within the next day. "
+            "Please keep an eye on how the patient is feeling and get them "
+            "seen as soon as possible. A doctor still needs to confirm this."
+        )
+    return (
+        "This does not look like an emergency right now, but a doctor should "
+        "still check when convenient. A doctor still needs to confirm this."
+    )
+
+
+async def generate_patient_summary(briefing: dict, triage_result: dict, language: str = "en") -> dict:
+    """
+    Best-effort. Returns {"summary": str, "generated": bool} — never raises.
+    generated=False means the safe canned fallback was used (no LLM
+    configured, or the call failed); this is a UX nicety on top of an
+    already-complete case, not a step in the core submission flow.
+    """
+    language_name = PATIENT_SUMMARY_LANGUAGE_NAMES.get(language, "English")
+
+    if not _groq_client:
+        return {"summary": _fallback_patient_summary(triage_result), "generated": False}
+
+    actions = "; ".join(briefing.get("recommended_immediate_actions") or []) or "See a doctor for further guidance."
+    prompt = (
+        f"Write the explanation in {language_name}.\n\n"
+        f"Triage level: {triage_result['triage_level']}\n"
+        f"What this means: {briefing.get('primary_risk_driver', '')}\n"
+        f"What should happen next: {actions}"
+    )
+
+    try:
+        response = await _groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": _PATIENT_SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=300,
+            timeout=10,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        if not text:
+            raise ValueError("empty LLM response")
+        return {"summary": text, "generated": True}
+    except Exception as e:
+        logger.warning("Patient-summary generation failed: %s — using fallback text", e)
+        return {"summary": _fallback_patient_summary(triage_result), "generated": False}

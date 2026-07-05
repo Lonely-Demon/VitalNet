@@ -143,6 +143,17 @@ authorization.
   **Rate limit**: 60/min.
 - **Response `200`**: the full `case_records` row. `404` if not found/deleted.
 
+### `POST /api/cases/{case_id}/patient-summary` — 20/min
+On-demand, patient-facing plain-language restatement of an already-decided
+triage/briefing — never re-derives the triage itself
+(`app/services/llm.py::generate_patient_summary`). Not persisted; computed
+fresh on each call.
+- **Auth**: `asha_worker` (own case), `doctor` (own facility), `admin`.
+- **Query param**: `language` (`en`/`hi`/`ta`, default `en`).
+- **Response `200`**: `{ summary: str, generated: bool }`. `generated: false`
+  means a safe canned fallback was used (no LLM configured, or the call
+  failed) — the endpoint never errors out over this, it degrades instead.
+
 ---
 
 ## Admin (`app/api/routes/admin_routes.py`, prefix `/api/admin`)

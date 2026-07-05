@@ -18,7 +18,7 @@ from app.core.database import get_supabase_for_user
 from app.core.metrics import record_triage_classification
 from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput
 from app.ml.classifier import run_triage
-from app.services.llm import generate_briefing
+from app.services.llm import generate_briefing, generate_patient_summary
 from app.services.push import push_emergency_alert
 
 logger = logging.getLogger("vitalnet")
@@ -643,3 +643,44 @@ async def get_case_detail(
     )
 
     return row
+
+
+@router.post("/api/cases/{case_id}/patient-summary")
+@limiter.limit("20/minute")
+async def case_patient_summary(
+    request: Request,
+    case_id: str,
+    language: str = "en",
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin")),
+):
+    """
+    On-demand, patient-facing plain-language restatement of an already-
+    complete case's briefing — for the ASHA worker to read aloud in the
+    patient's own language. Never regenerates or re-derives the triage
+    itself; purely a restatement (app/services/llm.py::generate_patient_summary).
+    Not persisted — computed fresh on each call, since it's a UX nicety
+    layered on the case, not part of the clinical record.
+    """
+    case_uuid = _parse_uuid(case_id, "case_id")
+    raw_token = (authorization or "").split(" ", 1)[-1]
+    db = get_supabase_for_user(raw_token)
+
+    result = (
+        db.table("case_records")
+        .select("id, facility_id, submitted_by, triage_level, risk_driver, briefing, deleted_at")
+        .eq("id", case_uuid)
+        .maybe_single()
+        .execute()
+    )
+    row = (result.data if result else None) or {}
+    if not row or row.get("deleted_at") is not None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    _authorize_case_row_access(user, row)
+
+    triage_result = {"triage_level": row["triage_level"], "risk_driver": row.get("risk_driver") or ""}
+    briefing = row.get("briefing") or {}
+    summary = await generate_patient_summary(briefing, triage_result, language=language)
+
+    return summary

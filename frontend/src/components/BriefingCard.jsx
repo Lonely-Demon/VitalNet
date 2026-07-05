@@ -1,8 +1,13 @@
 import { useState } from 'react'
-import { reviewCase, overrideTriage, recordCaseOutcome, listActiveFacilities, createReferral } from '../lib/api'
+import { reviewCase, overrideTriage, recordCaseOutcome, listActiveFacilities, createReferral, getPatientSummary } from '../lib/api'
 import TriageBadge from './TriageBadge'
 
 const TIERS = ['ROUTINE', 'URGENT', 'EMERGENCY']
+const SUMMARY_LANGUAGES = [
+  { value: 'en', label: 'English' },
+  { value: 'hi', label: 'Hindi' },
+  { value: 'ta', label: 'Tamil' },
+]
 const DISPOSITIONS = [
   { value: 'treated_discharged', label: 'Treated & discharged' },
   { value: 'admitted', label: 'Admitted' },
@@ -32,6 +37,11 @@ export default function BriefingCard({ caseData, onReviewed }) {
   const [recordingOutcome, setRecordingOutcome] = useState(false)
   const [outcomeRecorded, setOutcomeRecorded] = useState(false)
 
+  const [summaryLanguage, setSummaryLanguage] = useState('en')
+  const [patientSummary, setPatientSummary] = useState(null)   // { summary, generated } once fetched
+  const [loadingSummary, setLoadingSummary] = useState(false)
+  const [summaryError, setSummaryError] = useState(null)
+
   const [showReferral, setShowReferral] = useState(false)
   const [facilities, setFacilities] = useState(null)   // null = not yet loaded
   const [facilitiesError, setFacilitiesError] = useState(null)
@@ -54,6 +64,19 @@ export default function BriefingCard({ caseData, onReviewed }) {
       console.error("Review update failed", e)
     } finally {
       setMarking(false)
+    }
+  }
+
+  const handleGetPatientSummary = async () => {
+    setLoadingSummary(true)
+    setSummaryError(null)
+    try {
+      const result = await getPatientSummary(caseData.id, summaryLanguage)
+      setPatientSummary(result)
+    } catch (e) {
+      setSummaryError(e.message || 'Could not generate a summary right now.')
+    } finally {
+      setLoadingSummary(false)
     }
   }
 
@@ -258,6 +281,39 @@ export default function BriefingCard({ caseData, onReviewed }) {
           <div className="bg-surface2 border border-leaf/40 rounded-lg p-3 mt-2 shadow-card">
             <p className="text-xs text-text3 font-medium tracking-tight font-mono">{b.disclaimer}</p>
           </div>
+
+          {/* Patient-facing plain-language summary — restates the briefing
+              above, never re-derives it. For the ASHA worker to read aloud
+              so consent is informed, not just captured. */}
+          <BriefingSection title="Explain to Patient">
+            {patientSummary ? (
+              <div>
+                <p className="text-sm text-text leading-relaxed">{patientSummary.summary}</p>
+                {!patientSummary.generated && (
+                  <p className="text-xs text-text3 mt-2 italic">Standard wording — a tailored summary wasn't available right now.</p>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={summaryLanguage}
+                  onChange={(e) => setSummaryLanguage(e.target.value)}
+                  aria-label="Summary language"
+                  className="border border-surface3 rounded-md px-2 py-1.5 text-sm bg-surface"
+                >
+                  {SUMMARY_LANGUAGES.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
+                </select>
+                <button
+                  onClick={handleGetPatientSummary}
+                  disabled={loadingSummary}
+                  className="bg-sage text-white px-4 py-1.5 rounded-pill text-sm font-medium disabled:opacity-50 cursor-pointer"
+                >
+                  {loadingSummary ? 'Generating…' : 'Show patient-friendly summary'}
+                </button>
+                {summaryError && <span className="text-xs text-emergency">{summaryError}</span>}
+              </div>
+            )}
+          </BriefingSection>
 
           {/* Triage override */}
           {!overrideState.triage && (

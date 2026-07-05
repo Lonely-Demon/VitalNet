@@ -318,6 +318,12 @@ backend/
 │   │   │                             triage decision. Free-text patient fields are
 │   │   │                             sanitised before entering the prompt
 │   │   │                             (_sanitize_field()) to resist prompt injection.
+│   │   │                             Also owns generate_patient_summary() — a separate,
+│   │   │                             on-demand, single-tier call that only restates the
+│   │   │                             already-fixed triage/briefing in plain language for
+│   │   │                             the patient (docs/DECISIONS.md §18), never a fresh
+│   │   │                             clinical read; falls back to a canned per-tier
+│   │   │                             sentence on any failure.
 │   │   ├── push.py                   Web Push send logic (push_emergency_alert,
 │   │   │                             _send_one) — separate module from push_routes.py
 │   │   │                             specifically to avoid a circular import with
@@ -385,6 +391,10 @@ backend/
 │   │                                 positive/negative case per rule, plus predict_
 │   │                                 triage() integration (flags present on both the
 │   │                                 safety-net and model-decision exit paths).
+│   ├── test_patient_summary.py       Unit tests for generate_patient_summary() — no-
+│   │                                 client/call-failure/empty-response fallback paths,
+│   │                                 and that a successful call passes the target
+│   │                                 language through to the prompt.
 │   ├── test_admin_authz.py           Asserts every /api/admin route — across
 │   │                                 admin_routes.py AND dsr_routes.py (see
 │   │                                 ADMIN_ROUTE_MODULES) — is require_role('admin')-
@@ -573,7 +583,8 @@ frontend/src/
 │   │   All Cases / Referrals tabs), AdminPanel.jsx (Analytics/Users/Facilities/System/
 │   │   Audit Log)
 ├── components/                Shared UI: BriefingCard (triage override + outcome-
-│   │                          recording + referral actions live here), TriageBadge,
+│   │                          recording + referral actions + patient-summary on-demand
+│   │                          request live here), TriageBadge,
 │   │                          NavBar (includes the language switcher), OfflineBanner,
 │   │                          ToastProvider, RouteGuard, ErrorBoundary, SkeletonCard,
 │   │                          UpdatePrompt (PWA update-available prompt), PushPrompt

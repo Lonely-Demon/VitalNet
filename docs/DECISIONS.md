@@ -387,3 +387,29 @@ parity test (`test:contraindications`) alongside the tree/feature ones.
 the six-rule list is not checked, and the module's own docstring says so.
 Extending coverage means adding another `ContraindicationRule` entry in
 both languages, not building toward a general interaction engine.
+
+### 18. Patient-facing summary restates the briefing, it never re-derives it
+
+**Context**: `consent_captured` proves a checkbox was ticked, not that the
+patient understood what's happening — a real gap between captured consent
+and informed consent, especially across a language barrier.
+
+**Decision**: `POST /api/cases/{id}/patient-summary`
+(`generate_patient_summary` in `app/services/llm.py`) is a separate,
+on-demand LLM call — not generated automatically on every submission
+(cost/latency, `docs/SLO.md`) — that is given the ALREADY-FIXED
+`triage_level` and `briefing.primary_risk_driver`/
+`recommended_immediate_actions`, and asked only to restate them in short,
+plain language in the requested language. It is structurally unable to
+arrive at a different clinical read than what's already decided, the same
+LLM-independent-triage guardrail `generate_briefing` already follows. On
+any failure (no API key, timeout, empty response) it falls back to a
+canned per-tier sentence rather than erroring — this is a UX nicety layered
+on an already-complete case, not a step the submission flow depends on.
+
+**Consequences**: translation quality for Hindi/Tamil depends on the LLM's
+own fluency, not a maintained translation file (unlike the app's own i18n
+strings, which are still English placeholders per §10) — so this can
+produce real Hindi/Tamil text today even though the UI chrome around it
+cannot yet. Not persisted to the database; regenerated fresh on each
+request, so it never goes stale relative to a later triage override.
