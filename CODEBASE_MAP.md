@@ -873,10 +873,11 @@ safe to re-run.
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`
-  (`asha_worker`/`doctor`/`supervisor`/`admin` — no DB CHECK constraint on
-  this column; enforcement is `admin_routes.py`'s Pydantic `Literal` type
-  plus `require_role()`, see docs/DECISIONS.md §25), `facility_id`,
-  `asha_id`, `is_active`, `created_at`.
+  (`asha_worker`/`doctor`/`supervisor`/`admin`, enforced by a
+  `profiles_role_check` CHECK constraint — tracked as of
+  `phase26_role_check_constraint.sql` — plus `admin_routes.py`'s Pydantic
+  `Literal` type and `require_role()`; see docs/DECISIONS.md §25),
+  `facility_id`, `asha_id`, `is_active`, `created_at`.
 - `facilities` — `id`, `name`, `type`, `address`, `district`, `state`,
   `pincode`, `phone`, `is_active`.
 - `case_records` — patient/vitals/symptom fields (mirrors `IntakeForm`),

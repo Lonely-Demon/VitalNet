@@ -712,16 +712,21 @@ NHM's real structure either). It is:
   (§26) and the curation queue for the protocol assistant (§27) — both are
   a natural extension of "workforce quality and support," not scope creep.
 
-**Implementation consequence**: `profiles.role` has no database-level
-CHECK constraint (verified — it's a plain `text` column; the only
-enforcement is `admin_routes.py`'s Pydantic `Literal` type and
-`require_role()` calls), so adding `supervisor` needs no schema migration
-for the role value itself, only: extending the `Literal` type + admin
-user-management UI so `admin` can assign it, and new aggregate-only
-endpoints following the exact same narrow `supabase_admin` pattern already
-established and governed in §20/§22 (an aggregate crosses the RLS
-boundary, never a row) — supervisor is never added to `case_records`'
-underlying (untracked, pre-`phase15`) row-level SELECT policy.
+**Implementation consequence**: none of this repo's tracked migrations put
+a CHECK constraint on `profiles.role`, so the original assumption here was
+that adding `supervisor` needed no schema migration for the role value
+itself — only extending `admin_routes.py`'s Pydantic `Literal` type +
+`require_role()` calls, and the admin user-management UI. **Correction,
+found during E2E verification against the live project**: the live
+database in fact had a `profiles_role_check` CHECK constraint rejecting
+`'supervisor'` — added directly against the project at some point, outside
+version control entirely (the exact untracked-drift risk this section
+originally assumed didn't apply here). Fixed and made tracked by
+`phase26_role_check_constraint.sql`. New aggregate-only endpoints follow
+the exact same narrow `supabase_admin` pattern already established and
+governed in §20/§22 (an aggregate crosses the RLS boundary, never a row) —
+supervisor is never added to `case_records`' underlying (untracked,
+pre-`phase15`) row-level SELECT policy.
 
 ### 26. Outbreak dashboard — a real epidemiological method, honestly scoped
 
