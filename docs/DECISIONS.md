@@ -539,3 +539,96 @@ this needs authoritative visibility across all prior visits regardless of
 device, so it cannot be computed in the offline JS path — a case
 submitted offline gets this check only once it syncs and calls
 `/api/submit` for real.
+
+### 23. ML classifier audit: dead contextual features, monotonic constraints (infeasible), a real parity bug
+
+**Context**: a direct audit of the trained classifier + SHAP explainer,
+requested specifically to find genuine improvement opportunities rather
+than re-describe what Round 2 already built. Four findings, each verified
+against the actual code/behavior rather than assumed.
+
+**Finding 1 — two features were provably dead, two more were placeholders.**
+`clinical_features.py::_engineer_contextual_features` called
+`_time_based_risk()`/`_seasonal_disease_risk()` (both reading
+`datetime.now()`) and hardcoded `epidemic_alert_level: 0.0`.
+`scripts/train_classifier.py` generates its entire 36,000-patient training
+set within one script invocation, so every training example received the
+*same* value for these — `HistGradientBoostingClassifier` cannot mathematically
+learn a split on a constant feature, so `time_of_day_risk` and
+`epidemic_alert_level` had **zero influence on any prediction**, ever,
+despite being computed on every request and listed in `FEATURE_LABELS` as
+if they mattered. `_geographic_disease_risk` was a literal `return 1.0`
+placeholder — also constant, also inert.
+
+**Decision**: removed `time_of_day_risk` and `epidemic_alert_level`
+outright (45 → 43 engineered features). Rebuilt `seasonal_risk` and
+`geographic_risk` as real signals: `_seasonal_disease_risk` now accepts an
+optional `reference_month` (monsoon June–September → 1.3, shoulder
+months → 1.1, else 1.0 — India's dengue/malaria/leptospirosis season);
+`_geographic_disease_risk` returns 1.2 for rural/tribal locations, 1.0
+otherwise. Real submissions never set `reference_month`, so live inference
+always falls back to the actual current month — the change is invisible to
+production behavior except that the feature now varies. To make these
+features *earn* real predictive importance (not just real variance),
+`scripts/train_classifier.py::generate_patient` now samples a
+`_reference_month` per synthetic patient and `_sample_symptoms` applies a
+genuine probability bump (high fever, severe headache, persistent
+vomiting × 1.6, capped at 0.65) when `_reference_month` is a monsoon month
+**and** the patient's location is rural/tribal — mirroring the real-world
+dengue/malaria surge pattern. Labels are still computed purely from the
+resulting vitals/symptoms via the existing decoupled `assign_triage_label`
+scorer, never directly from month/location, preserving the "label reflects
+physiology, not the generation bucket" principle. Mirrored in
+`frontend/src/utils/triageClassifier.js` — `buildFeatureMap` reads
+`formData._reference_month` when present (fixture/test parity only, real
+submissions never set it) and otherwise uses the real current month.
+
+**Finding 2 — calibration was validated on a class-balanced set only.**
+The training/test split is deliberately 33/33/33 by class (needed to learn
+the rare EMERGENCY class well), but that is not VitalNet's real deployment
+distribution. `train_classifier.py` now additionally subsamples the
+held-out test set to a realistic ~85% ROUTINE / 12% URGENT / 3% EMERGENCY
+prevalence (`_realistic_prevalence_sample`, keeping all available ROUTINE
+rows and subsampling URGENT/EMERGENCY down proportionally — no new
+generated data, no training-set changes) and reports ECE and the
+`low_confidence` abstention rate against it, validating the *same fixed*
+0.55-probability / 0.15-margin thresholds under the shape VitalNet actually
+sees in the field. Both numbers are in `MODEL_CARD.md`.
+
+**Finding 3 — monotonic constraints: investigated, verified infeasible,
+not forced.** Several engineered features are constructed as unambiguous
+"higher = worse" scores (`shock_index`, `sepsis_risk_score`,
+`hemodynamic_instability`, `respiratory_distress_score`,
+`cardiac_risk_score`) — constraining `HistGradientBoostingClassifier` to
+respect that monotonically would make the model's behavior in sparse/
+out-of-distribution feature space provably safe rather than merely
+probable, at effectively zero training-time cost. Verified directly rather
+than assumed: `HistGradientBoostingClassifier(monotonic_cst=...)` in the
+pinned scikit-learn 1.9.0 raises `ValueError: monotonic constraints are not
+supported for multiclass classification` for this 3-class problem. Not
+applied — upgrading scikit-learn is a separate, bigger decision (this
+project pins it exactly; see `app/ml/README.md`'s "why scikit-learn is
+pinned exactly" section) not taken unilaterally as part of a feature-engineering
+pass. Documented as a known limitation in `MODEL_CARD.md`, worth revisiting
+if the pin ever moves.
+
+**Finding 4 — a real, rare parity bug, found and fixed during retraining.**
+Retraining with the Finding-1 changes intermittently (roughly 1-in-2000
+held-out samples) produced a `pkl==onnx: True, pkl==treeJSON: False`
+parity failure — traced to `scripts/tree_export.py` rounding ONNX split
+thresholds to 6 decimal places. The new `seasonal_risk`/`geographic_risk`
+features are low-cardinality and discrete (values like exactly `1.0`,
+`1.1`, `1.2`, `1.3`), so a learned split threshold can land exactly on or
+adjacent to one of these repeated values far more often than on the
+previously near-continuous vital-sign-derived features — and rounding that
+threshold to 6 decimal places occasionally flipped which side of `<=` a
+real feature value fell on, diverging from onnxruntime's full-precision
+comparison and flipping the argmax on a near-tied prediction. Fixed by
+rounding to 9 decimal places instead (lossless versus the underlying
+float32 threshold for values of this magnitude). Confirmed via a bisection
+test: the original (pre-audit) code with the newly-installed
+skl2onnx/onnxruntime versions passed parity cleanly, and each of Findings
+1's two changes passed independently — the failure only appeared when both
+were combined, which is what surfaced the latent threshold-rounding
+sensitivity. This was a pre-existing bug not previously triggered by any
+prior training run's feature distribution.

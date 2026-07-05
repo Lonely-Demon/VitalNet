@@ -25,7 +25,7 @@ Why a single HistGradientBoostingClassifier instead of an ensemble:
     compute (the old ensemble ran three separate models twice per
     prediction — once inside CalibratedClassifierCV's internal folds and
     again explicitly for "uncertainty" — for no measurable accuracy gain
-    over a single well-tuned model in a 45-feature clinical space).
+    over a single well-tuned model in a 43-feature clinical space).
   - It loads and predicts fast enough for a decade-old laptop or a
     Raspberry-Pi-class rural clinic server, and the .onnx export is small
     enough (<1 MB) for slow/metered rural connections.
@@ -49,7 +49,7 @@ The scorer is loosely modelled on:
 This is a heuristic label generator for a synthetic training set, not a
 validated clinical scoring instrument — see backend/app/ml/README.md for
 the full explanation and limitations. The output labels are then learned
-by the classifier from the full 45-feature representation (not just the
+by the classifier from the full 43-feature representation (not just the
 handful of features the scorer directly reads), so the trained model can
 generalise beyond the scorer's exact rule boundaries.
 
@@ -394,8 +394,28 @@ SEVERITY_SYMPTOM_PROBS = {
 }
 
 
-def _sample_symptoms(severity):
-    probs = SEVERITY_SYMPTOM_PROBS[severity]
+# Monsoon months (India's dengue/malaria/leptospirosis/cholera season) and
+# the rural/tribal location terms that carry the higher exposure — mirrors
+# ClinicalFeatureEngineer._seasonal_disease_risk / _geographic_disease_risk
+# (docs/DECISIONS.md §23). Used here to give those two features a REAL,
+# learnable correlation with the resulting label, via the symptom mix a
+# patient presents with — not by referencing month/location directly in
+# assign_triage_label(), which stays decoupled from generation context.
+MONSOON_MONTHS = (6, 7, 8, 9)
+RURAL_LOCATION_TERMS = ("village", "rural", "remote", "tribal")
+
+
+def _is_rural(location: str) -> bool:
+    loc = location.lower()
+    return any(term in loc for term in RURAL_LOCATION_TERMS)
+
+
+def _sample_symptoms(severity, reference_month=None, location=""):
+    probs = dict(SEVERITY_SYMPTOM_PROBS[severity])
+    if reference_month in MONSOON_MONTHS and _is_rural(location):
+        for key in ("high_fever", "severe_headache", "persistent_vomiting"):
+            if key in probs:
+                probs[key] = min(probs[key] * 1.6, 0.65)
     return [s for s, p in probs.items() if np.random.random() < p]
 
 
@@ -457,6 +477,8 @@ def generate_patient(severity, allow_missing=True):
     age = int(clip(np.random.exponential(32) + (5 if severity in ("severe", "critical") else 0), 0, 95))
     sex = np.random.choice(["male", "female"], p=[0.49, 0.51])
     vitals = _correlated_vitals(age, severity)
+    reference_month = int(np.random.randint(1, 13))
+    location = np.random.choice(LOCATIONS)
 
     # Edge syndromes the base severity bands under-represent — added as targeted
     # perturbations so the model sees them during training:
@@ -474,16 +496,15 @@ def generate_patient(severity, allow_missing=True):
         vitals["bp_sys"] = int(clip(np.random.normal(92, 8), 78, 104))
         vitals["hr"] = int(clip(np.random.normal(116, 10), 100, 140))
         vitals["temp"] = round(float(clip(np.random.normal(36.6, 0.5), 35.5, 37.6)), 1)
-        symptoms = _sample_symptoms(severity)
+        symptoms = _sample_symptoms(severity, reference_month, location)
     else:
-        symptoms = _sample_symptoms(severity)
+        symptoms = _sample_symptoms(severity, reference_month, location)
 
     if allow_missing:
         vitals = _apply_missing_vitals(vitals)
 
     complaint = _pick_complaint(symptoms, severity)
     duration = _pick_duration(severity)
-    location = np.random.choice(LOCATIONS)
 
     return {
         "patient_age": age,
@@ -500,6 +521,11 @@ def generate_patient(severity, allow_missing=True):
         "known_conditions": conditions,
         "observations": "",
         "current_medications": "",
+        # Training-only context (never present on a real IntakeForm submission
+        # — engineer_features()/_engineer_contextual_features() falls back to
+        # the real current month when absent). Lets seasonal_risk vary across
+        # the synthetic training set instead of being constant (docs/DECISIONS.md §23).
+        "_reference_month": reference_month,
     }
 
 
@@ -612,6 +638,28 @@ def main():
     print("       preserve online/offline parity; the abstention flag (low_confidence)")
     print("       is the shipped mechanism for surfacing uncertainty. See MODEL_CARD.md.")
 
+    print("[4d/9] Realistic-prevalence calibration check (~85% ROUTINE / 12% URGENT / "
+          "3% EMERGENCY, subsampled from the held-out test set — not the balanced "
+          "training/test split) ...")
+    from app.ml.classifier import LOW_CONFIDENCE_PROBA, LOW_CONFIDENCE_MARGIN
+    rng = np.random.default_rng(RANDOM_SEED)
+    X_real, y_real = _realistic_prevalence_sample(X_test, y_test, rng)
+    proba_real = clf.predict_proba(X_real)
+    ece_real = _expected_calibration_error(proba_real, y_real)
+    sorted_proba_real = np.sort(proba_real, axis=1)
+    conf_real = sorted_proba_real[:, -1]
+    margin_real = sorted_proba_real[:, -1] - sorted_proba_real[:, -2]
+    low_conf_rate_real = float(np.mean((conf_real < LOW_CONFIDENCE_PROBA) | (margin_real < LOW_CONFIDENCE_MARGIN)))
+    acc_real = accuracy_score(y_real, proba_real.argmax(axis=1))
+    n_by_class_real = {LABEL_MAP[c]: int((y_real == c).sum()) for c in (0, 1, 2)}
+    print(f"       n={len(y_real)} {n_by_class_real}")
+    print(f"       Accuracy under realistic prevalence: {acc_real:.4f}")
+    print(f"       ECE under realistic prevalence: {ece_real:.4f} (balanced-set ECE was {ece:.4f})")
+    print(f"       low_confidence abstention rate under realistic prevalence: {low_conf_rate_real:.4f}")
+    print("       This validates the SAME fixed abstention thresholds (0.55 proba / 0.15")
+    print("       margin) against the class distribution VitalNet actually sees in the")
+    print("       field, not just the class-balanced training/test split above.")
+
     print("[5/9] Building SHAP TreeExplainer ...")
     import shap
     explainer = shap.TreeExplainer(clf)
@@ -633,6 +681,10 @@ def main():
             "cv_accuracy": float(cv_acc),
             "cv_emergency_recall": float(cv_emerg_recall),
             "expected_calibration_error": float(ece),
+            "realistic_prevalence_accuracy": float(acc_real),
+            "realistic_prevalence_ece": float(ece_real),
+            "realistic_prevalence_low_confidence_rate": float(low_conf_rate_real),
+            "realistic_prevalence_n_by_class": n_by_class_real,
             "n_train": len(X_train),
             "n_test": len(X_test),
         },
@@ -730,6 +782,32 @@ def main():
 
     print("\nDone. Backend loads the .pkl; the browser loads triage_trees.json + "
           "features_config.json and evaluates in pure JS (no onnxruntime).")
+
+
+def _realistic_prevalence_sample(X: np.ndarray, y: np.ndarray, rng: np.random.Generator,
+                                  routine_frac: float = 0.85, urgent_frac: float = 0.12,
+                                  emergency_frac: float = 0.03):
+    """
+    Subsamples the (class-balanced) held-out test set down to a realistic
+    rural-PHC class prevalence — mostly ROUTINE, a minority URGENT, a small
+    EMERGENCY tail — WITHOUT touching training data or introducing any new
+    generated patients. All available ROUTINE rows are kept (they're the
+    scarce resource once inverted); URGENT/EMERGENCY are subsampled down to
+    match the target proportions relative to that ROUTINE count. Used to
+    validate calibration/abstention thresholds against the distribution
+    VitalNet actually sees in the field, not just the balanced test split
+    used for the primary accuracy/recall numbers (docs/DECISIONS.md §23).
+    """
+    idx_by_class = {c: np.where(y == c)[0] for c in (0, 1, 2)}
+    n_routine = len(idx_by_class[0])
+    total = int(n_routine / routine_frac)
+    n_urgent = min(len(idx_by_class[1]), int(total * urgent_frac))
+    n_emergency = min(len(idx_by_class[2]), int(total * emergency_frac))
+    sel_urgent = rng.choice(idx_by_class[1], size=n_urgent, replace=False)
+    sel_emergency = rng.choice(idx_by_class[2], size=n_emergency, replace=False)
+    idx = np.concatenate([idx_by_class[0], sel_urgent, sel_emergency])
+    rng.shuffle(idx)
+    return X[idx], y[idx]
 
 
 def _expected_calibration_error(proba: np.ndarray, y_true: np.ndarray, n_bins: int = 10) -> float:

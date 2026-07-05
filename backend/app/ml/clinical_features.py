@@ -4,13 +4,13 @@ Transforms raw patient data into clinically meaningful features for ML classific
 """
 
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 
 class ClinicalFeatureEngineer:
     """
     Advanced feature engineering for clinical triage data
-    Transforms 14 basic features into 45+ clinical features
+    Transforms 14 basic features into 43+ clinical features
     """
 
     def __init__(self):
@@ -56,7 +56,7 @@ class ClinicalFeatureEngineer:
         # Age-specific clinical rules (6 features)
         features.update(self._engineer_age_specific_features(safe_data))
 
-        # Contextual features (5 features)
+        # Contextual features (3 features)
         features.update(self._engineer_contextual_features(safe_data))
 
         return features
@@ -149,12 +149,25 @@ class ClinicalFeatureEngineer:
         }
 
     def _engineer_contextual_features(self, raw_data: Dict[str, Any]) -> Dict[str, float]:
-        """Engineer contextual features"""
+        """
+        Engineer contextual features.
+
+        time_of_day_risk and epidemic_alert_level were removed
+        (docs/DECISIONS.md §23): both were constant across the entire
+        synthetic training set (datetime.now() is called once per training
+        run; epidemic_alert_level was hardcoded to 0.0), so
+        HistGradientBoostingClassifier could never learn a split on either
+        — they contributed zero signal to every prediction despite being
+        computed on every request. seasonal_risk and geographic_risk are
+        real signals now: the training generator samples a reference_month
+        per synthetic patient and correlates monsoon-season + rural
+        location with a genuine symptom-probability bump (dengue/malaria
+        surge), so these features carry actual predictive information
+        instead of the previous 1.0 placeholder.
+        """
         return {
-            'time_of_day_risk': self._time_based_risk(),
-            'seasonal_risk': self._seasonal_disease_risk(),
+            'seasonal_risk': self._seasonal_disease_risk(raw_data.get('_reference_month')),
             'geographic_risk': self._geographic_disease_risk(raw_data.get('location', '')),
-            'epidemic_alert_level': 0.0,  # Placeholder for epidemic monitoring
             'healthcare_accessibility': self._healthcare_access_score(raw_data.get('location', ''))
         }
 
@@ -520,35 +533,32 @@ class ClinicalFeatureEngineer:
 
         return score
 
-    def _time_based_risk(self) -> float:
-        """Calculate time-of-day risk factor"""
-        hour = datetime.now().hour
-
-        # Higher risk during off-hours when staffing is reduced
-        if 22 <= hour or hour <= 6:
-            return 1.5
-        elif 18 <= hour <= 22:
-            return 1.2
-        else:
-            return 1.0
-
-    def _seasonal_disease_risk(self) -> float:
-        """Calculate seasonal disease risk"""
-        month = datetime.now().month
-
-        # Winter months - respiratory infections
-        if month in [12, 1, 2]:
+    def _seasonal_disease_risk(self, reference_month: Optional[int] = None) -> float:
+        """
+        Monsoon-season (June-September) vector-borne/waterborne disease risk
+        bump — India's dengue/malaria/leptospirosis/cholera season.
+        reference_month lets the synthetic training generator simulate
+        patients across the full year (see train_classifier.py); real
+        submissions never set it, so live inference always uses the actual
+        current month.
+        """
+        month = reference_month if reference_month is not None else datetime.now().month
+        if month in (6, 7, 8, 9):
             return 1.3
-        # Summer months - heat-related illness, vector-borne diseases
-        elif month in [6, 7, 8]:
-            return 1.2
-        else:
-            return 1.0
+        elif month in (5, 10):  # pre-/post-monsoon shoulder months
+            return 1.1
+        return 1.0
 
     def _geographic_disease_risk(self, location: str) -> float:
-        """Calculate geographic disease risk (placeholder)"""
-        # This would integrate with epidemiological data
-        # For now, return baseline risk
+        """
+        Rural/tribal areas carry a higher baseline risk of vector-borne and
+        infectious disease exposure and delayed care escalation than urban
+        areas (weaker vector control, greater distance to the nearest PHC).
+        """
+        location_lower = location.lower()
+        rural_terms = ['village', 'rural', 'remote', 'tribal']
+        if any(term in location_lower for term in rural_terms):
+            return 1.2
         return 1.0
 
     def _healthcare_access_score(self, location: str) -> float:

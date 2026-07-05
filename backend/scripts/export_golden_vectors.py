@@ -9,17 +9,14 @@ Python side, frontend/tests/featureParity.test.mjs replays the JS side
 exactly. If you change clinical_features.py, regenerate this fixture AND
 port the equivalent change to triageClassifier.js in the same commit.
 
-Two engineered features (time_of_day_risk, seasonal_risk) are computed from
-datetime.now() at inference time — a real, intentional signal (off-hours
-short-staffing, seasonal disease patterns), not a bug in the live model. But
-it makes a frozen fixture inherently unstable unless generation and both
-parity tests all pin the SAME reference instant — see FROZEN_REFERENCE_TIME
-below and its twin in test_feature_parity.py / featureParity.test.mjs.
-Without this, the fixture silently goes stale as real wall-clock time
-crosses an hour/month bucket boundary, and both parity tests start failing
-even though Python and JS still agree with each other (verified: this
-happened mid-session — both sides drifted from the frozen fixture
-identically, confirming it was a test artifact, not a real divergence).
+generate_patient() sets an explicit _reference_month on every synthetic
+patient (docs/DECISIONS.md §23), so seasonal_risk no longer depends on real
+wall-clock time for these vectors — the JS mirror (triageClassifier.js)
+reads the same _reference_month when present, falling back to the real
+current month only for genuine (non-fixture) submissions. FROZEN_REFERENCE_TIME
+below is kept as a defensive fallback for any other contextual feature that
+might read datetime.now() directly, matching test_feature_parity.py /
+featureParity.test.mjs.
 
 Run: cd backend && python scripts/export_golden_vectors.py
 """
@@ -40,9 +37,10 @@ N_PER_SEVERITY = 60
 SEVERITIES = ["mild", "moderate", "severe", "critical"]
 OUTPUT_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "golden_feature_vectors.json"
 
-# Noon, July 4 — daytime hour bucket (time_of_day_risk == 1.0) and summer
-# month bucket (seasonal_risk == 1.2). Must match FROZEN_REFERENCE_TIME in
-# test_feature_parity.py and the frozen reference in featureParity.test.mjs.
+# Arbitrary fixed instant — kept only as the defensive datetime.now() fallback
+# described above; every generated patient's _reference_month takes priority
+# over it. Must match FROZEN_REFERENCE_TIME in test_feature_parity.py and the
+# frozen reference in featureParity.test.mjs.
 FROZEN_REFERENCE_TIME = _real_datetime(2026, 7, 4, 12, 0, 0)
 
 

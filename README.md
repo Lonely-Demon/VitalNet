@@ -38,7 +38,7 @@ docs — start with whichever matches what you're trying to do:
 ## 🚀 Features
 
 - **Local + Offline ML Triage**: A single `HistGradientBoostingClassifier`
-  (trained on 45 engineered clinical features) predicts urgency
+  (trained on 43 engineered clinical features) predicts urgency
   (EMERGENCY/URGENT/ROUTINE). It runs server-side (Python) for online
   submissions and client-side for offline submissions — as a compact tree
   JSON walked by a **dependency-free pure-JS evaluator** (no onnxruntime/WASM),

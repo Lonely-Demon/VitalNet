@@ -319,7 +319,7 @@ backend/
 │   │   │                             cases.py folds any flag into needs_review. Mirrored
 │   │   │                             in JS clinicalRules.js::checkContraindications.
 │   │   ├── clinical_features.py     ClinicalFeatureEngineer — expands ~14 raw intake
-│   │   │                             fields into 45 engineered features. MIRRORED in
+│   │   │                             fields into 43 engineered features. MIRRORED in
 │   │   │                             JS (frontend triageClassifier.js). The safety
 │   │   │                             net + floor + contraindication flags are mirrored
 │   │   │                             in JS clinicalRules.js. Change one side → change

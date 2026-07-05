@@ -109,8 +109,18 @@ def onnx_to_tree_json(onnx_model, n_features: int) -> Dict[str, Any]:
                         "only implements BRANCH_LEQ. Update both if this changes."
                     )
                 feat[nid] = rec["feat"]
-                # round to keep the JSON small; float32 precision is plenty
-                thr[nid] = round(rec["thr"], 6)
+                # Round to keep the JSON compact, but at enough precision that
+                # it's lossless versus the underlying float32 threshold (float32
+                # has ~7 significant decimal digits total, so 9 decimal PLACES
+                # after typical single/double/triple-digit clinical feature
+                # magnitudes exceeds that entirely). 6 decimal places was found
+                # to occasionally round a threshold across a real feature value
+                # for LOW-CARDINALITY discrete features (e.g. seasonal_risk in
+                # {1.0, 1.1, 1.3}) whose split thresholds can land exactly on
+                # boundary values shared by many samples — flipping the
+                # occasional near-tied prediction between the JS/tree-JSON path
+                # and the server. See docs/DECISIONS.md §23.
+                thr[nid] = round(rec["thr"], 9)
                 left[nid] = rec["left"]
                 right[nid] = rec["right"]
         trees.append({"feat": feat, "thr": thr, "left": left, "right": right, "leaf": leaf})

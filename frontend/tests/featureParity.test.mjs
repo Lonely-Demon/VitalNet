@@ -8,15 +8,14 @@
 // backend/scripts/export_golden_vectors.py and re-runs buildFeatureMap() on
 // every recorded input, asserting an exact (tolerance-bounded) match.
 //
-// time_of_day_risk/seasonal_risk are computed from `new Date()` — the global
-// Date constructor is frozen to FROZEN_REFERENCE_TIME below (must match
-// export_golden_vectors.py's FROZEN_REFERENCE_TIME and
-// test_feature_parity.py's twin) so this test's outcome is independent of
-// what real wall-clock time it happens to run at. Without this, the fixture
-// silently goes stale as real time crosses an hour/month bucket boundary —
-// confirmed mid-development: this test and its Python counterpart started
-// failing identically (not diverging from each other, just from the frozen
-// fixture) purely because enough wall-clock time had passed.
+// Every fixture input carries an explicit _reference_month (set by
+// scripts/train_classifier.py::generate_patient), which buildFeatureMap()
+// prefers over `new Date()` for seasonal_risk — so this test's outcome no
+// longer depends on real wall-clock time for that feature. The global Date
+// constructor is still frozen to FROZEN_REFERENCE_TIME below (must match
+// export_golden_vectors.py's FROZEN_REFERENCE_TIME and test_feature_parity.py's
+// twin) as a defensive fallback for any other contextual feature that reads
+// it directly.
 //
 // Run: node frontend/tests/featureParity.test.mjs
 

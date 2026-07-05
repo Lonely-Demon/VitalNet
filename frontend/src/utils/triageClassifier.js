@@ -1,6 +1,6 @@
 // frontend/src/utils/triageClassifier.js
 //
-// Client-side (offline) triage using the ClinicalFeatureEngineer's 45-feature
+// Client-side (offline) triage using the ClinicalFeatureEngineer's 43-feature
 // pipeline (ported from backend/app/ml/clinical_features.py) plus a pure-JS
 // evaluation of the trained tree ensemble — NO onnxruntime-web WASM.
 //
@@ -359,24 +359,29 @@ export function buildFeatureMap(formData) {
   }
   if (alteredConsciousness) mentalHealthCrisis += 1
 
-  // --- Contextual features (5) ---
-  const hour = new Date().getHours()
-  let timeOfDayRisk = 1.0
-  if (hour >= 22 || hour <= 6) timeOfDayRisk = 1.5
-  else if (hour >= 18 && hour <= 22) timeOfDayRisk = 1.2
-
-  const month = new Date().getMonth() + 1 // 1-indexed
+  // --- Contextual features (3) ---
+  // time_of_day_risk and epidemic_alert_level were removed (docs/DECISIONS.md
+  // §23): both were constant across the entire Python synthetic training set
+  // (datetime.now() runs once per training run; epidemic_alert_level was a
+  // hardcoded 0.0), so the tree ensemble could never learn a split on either
+  // — dropping them here keeps this file's feature map in sync with
+  // ClinicalFeatureEngineer's real (now 43-feature) output.
+  // _reference_month is a training/test-fixture-only field (mirrors
+  // ClinicalFeatureEngineer._seasonal_disease_risk's reference_month param) —
+  // a real ASHA worker submission never sets it, so live offline triage
+  // always falls back to the real current month.
+  const month = formData._reference_month ?? (new Date().getMonth() + 1) // 1-indexed
   let seasonalRisk = 1.0
-  if ([12, 1, 2].includes(month)) seasonalRisk = 1.3
-  else if ([6, 7, 8].includes(month)) seasonalRisk = 1.2
+  if ([6, 7, 8, 9].includes(month)) seasonalRisk = 1.3 // India's monsoon — dengue/malaria/leptospirosis surge
+  else if ([5, 10].includes(month)) seasonalRisk = 1.1 // pre-/post-monsoon shoulder months
 
-  const geographicRisk = 1.0 // placeholder
-  const epidemicAlertLevel = 0.0 // placeholder
-
-  let healthcareAccessibility = 0.7 // default
   const ruralTerms = ['village', 'rural', 'remote', 'tribal']
   const urbanTerms = ['city', 'town', 'urban', 'metro']
-  if (ruralTerms.some(t => location.includes(t))) healthcareAccessibility = 0.5
+  const ruralOrTribal = ruralTerms.some(t => location.includes(t))
+  const geographicRisk = ruralOrTribal ? 1.2 : 1.0
+
+  let healthcareAccessibility = 0.7 // default
+  if (ruralOrTribal) healthcareAccessibility = 0.5
   else if (urbanTerms.some(t => location.includes(t))) healthcareAccessibility = 1.0
 
   // --- Feature map, keyed by the same names ClinicalFeatureEngineer uses ---
@@ -401,8 +406,7 @@ export function buildFeatureMap(formData) {
     pediatric_fever_risk: pediatricFeverRisk, elderly_fall_risk: elderlyFallRisk,
     adult_cardiac_risk: adultCardiacRisk, obstetric_emergency_risk: obstetricRisk,
     trauma_severity_score: traumaSeverity, mental_health_crisis: mentalHealthCrisis,
-    time_of_day_risk: timeOfDayRisk, seasonal_risk: seasonalRisk,
-    geographic_risk: geographicRisk, epidemic_alert_level: epidemicAlertLevel,
+    seasonal_risk: seasonalRisk, geographic_risk: geographicRisk,
     healthcare_accessibility: healthcareAccessibility,
   }
 }

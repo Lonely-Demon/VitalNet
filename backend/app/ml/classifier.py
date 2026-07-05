@@ -121,8 +121,8 @@ FEATURE_LABELS = {
     "pediatric_fever_risk": "pediatric fever risk", "elderly_fall_risk": "elderly fall risk",
     "adult_cardiac_risk": "adult cardiac risk", "obstetric_emergency_risk": "obstetric emergency risk",
     "trauma_severity_score": "trauma severity", "mental_health_crisis": "mental health crisis indicators",
-    "time_of_day_risk": "time-of-day risk factor", "seasonal_risk": "seasonal disease risk",
-    "geographic_risk": "geographic disease risk", "epidemic_alert_level": "epidemic alert level",
+    "seasonal_risk": "seasonal disease risk",
+    "geographic_risk": "geographic disease risk",
     "healthcare_accessibility": "healthcare accessibility",
 }
 

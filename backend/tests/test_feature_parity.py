@@ -5,14 +5,13 @@ lives in frontend/tests/featureParity.test.mjs, replaying the same fixture
 against triageClassifier.js::buildFeatureMap(). Both must match the fixture
 exactly or offline (browser) triage can silently diverge from online triage.
 
-time_of_day_risk/seasonal_risk are computed from datetime.now() — freezing it
-to the same FROZEN_REFERENCE_TIME used by scripts/export_golden_vectors.py
-(and featureParity.test.mjs's JS-side reference) keeps this test's outcome
-independent of what real wall-clock time it happens to run at. Without this,
-the fixture silently goes stale as real time crosses an hour/month bucket
-boundary — confirmed mid-development: both this test and its JS counterpart
-started failing identically (not diverging from each other, just from the
-frozen fixture) purely because enough wall-clock time had passed.
+Every fixture input carries an explicit _reference_month (set by
+scripts/train_classifier.py::generate_patient), so seasonal_risk no longer
+depends on real wall-clock time for these vectors — but this test still
+freezes datetime.now() (matching scripts/export_golden_vectors.py and
+featureParity.test.mjs's JS-side reference) as a defensive fallback for any
+future contextual feature that reads it directly, and to guard against a
+regression that silently drops _reference_month from the fixture.
 """
 import json
 from datetime import datetime as _real_datetime

@@ -23,7 +23,7 @@ clearance (CDSCO/CE/FDA) and has not undergone clinical trial validation.
 ## Model
 
 - **Type:** a single `sklearn.ensemble.HistGradientBoostingClassifier`
-  (gradient-boosted decision trees), 3 classes, on **45 engineered clinical
+  (gradient-boosted decision trees), 3 classes, on **43 engineered clinical
   features** (`app/ml/clinical_features.py`).
 - **One model, two runtimes:** the same trained model runs server-side (Python,
   from `triage_classifier.pkl`, with a bundled SHAP `TreeExplainer` for
@@ -41,6 +41,21 @@ clearance (CDSCO/CE/FDA) and has not undergone clinical trial validation.
 - **Abstention:** a `low_confidence` flag is raised when the top-class
   probability < 0.55 or the top-two margin < 0.15, and surfaced in the UI as
   "model uncertain — clinician review recommended."
+- **Contextual features are now all real signals.** A prior round's audit
+  found that `time_of_day_risk`, `epidemic_alert_level`, and the old
+  `geographic_risk`/`seasonal_risk` placeholders were constant (or
+  effectively constant) across the entire training set — `datetime.now()`
+  runs once per training script invocation, so every one of the 36,000
+  training patients got the same value, and a gradient-boosted tree can
+  never learn a split on a constant feature. These contributed **zero**
+  influence on any prediction despite being computed on every request.
+  `time_of_day_risk`/`epidemic_alert_level` were removed outright (43
+  features, down from 45); `seasonal_risk`/`geographic_risk` were rebuilt as
+  real signals — `scripts/train_classifier.py` now samples a
+  `_reference_month` per synthetic patient and correlates monsoon-season
+  (June–September) + rural/tribal location with a real dengue/malaria-like
+  symptom-probability bump, so the model has genuine training-time variance
+  and a real label correlation to learn from. See `docs/DECISIONS.md` §23.
 
 ## Training data — synthetic, evidence-informed (important caveat)
 
@@ -70,22 +85,22 @@ Held-out test set: 5,400 samples (15% split). 5-fold stratified CV on all 36,000
 
 | Metric | Value |
 |---|---|
-| Accuracy (held-out) | 98.9% |
-| Accuracy (5-fold CV) | 99.2% |
-| EMERGENCY recall — model alone (held-out) | 98.3% |
-| EMERGENCY recall — model alone (CV) | 98.6% |
-| Expected Calibration Error (ECE, 10-bin) | 0.0016 |
+| Accuracy (held-out) | 99.0% |
+| Accuracy (5-fold CV) | 99.1% |
+| EMERGENCY recall — model alone (held-out) | 98.8% |
+| EMERGENCY recall — model alone (CV) | 98.5% |
+| Expected Calibration Error (ECE, 10-bin, class-balanced set) | 0.0020 |
 
 Held-out confusion matrix (rows = true ROUTINE/URGENT/EMERGENCY):
 
 ```
         pred:  ROUTINE  URGENT  EMERGENCY
-ROUTINE         1799       1        0
-URGENT             9    1773       18
-EMERGENCY          1      29     1770
+ROUTINE         1800       0        0
+URGENT             9    1769       22
+EMERGENCY          3      18     1779
 ```
 
-**On the 30 model-alone EMERGENCY false negatives:** these are borderline cases
+**On the 21 model-alone EMERGENCY false negatives:** these are borderline cases
 the model placed in URGENT/ROUTINE. The deterministic safety net + NEWS2 floor
 run *on top of* the model at inference time and guarantee EMERGENCY for the
 **unambiguous** critical subset (extreme vitals, critical symptoms) and at least
@@ -96,10 +111,28 @@ are the safeguard. **We do not claim zero missed emergencies on real patients** 
 we claim a layered design where the unambiguous cases are caught deterministically
 and the ambiguous ones are flagged for a clinician.
 
-**Calibration:** ECE of 0.0016 indicates the raw boosted-tree probabilities are
-already well-calibrated on this data, so no post-hoc calibration transform is
-applied (it would also have to be mirrored exactly in the JS offline evaluator to
-preserve parity). The abstention flag is the shipped uncertainty mechanism.
+**Calibration:** ECE of 0.0020 on the class-balanced test set indicates the raw
+boosted-tree probabilities are already well-calibrated on *that* distribution, so
+no post-hoc calibration transform is applied (it would also have to be mirrored
+exactly in the JS offline evaluator to preserve parity). The abstention flag is
+the shipped uncertainty mechanism.
+
+**Realistic-prevalence validation (new):** the class-balanced ECE above measures
+calibration against an even 33/33/33 class split, which is *not* the distribution
+VitalNet sees in the field (mostly ROUTINE). `scripts/train_classifier.py`
+separately subsamples the same held-out test set down to a **~85% ROUTINE / 12%
+URGENT / 3% EMERGENCY** realistic prevalence (n=2,117: 1,800 ROUTINE / 254 URGENT
+/ 63 EMERGENCY) and re-measures ECE and the `low_confidence` abstention rate
+against it — validating the *same fixed* 0.55-probability / 0.15-margin
+thresholds under the deployment-shape distribution, not just the training
+distribution. Result: accuracy 99.8%, ECE 0.0050 (still low, though roughly 2.5x
+the balanced-set figure — expected, since a model this confident on the dominant
+ROUTINE class naturally shows a slightly larger absolute calibration gap when
+that class dominates the sample), abstention rate 0.0% (the model was never
+uncertain on this particular realistic-prevalence sample — a genuinely easy
+regime for a model this accurate, not evidence the abstention mechanism is
+broken; it fires on the harder borderline cases the balanced test set surfaces
+proportionally more of).
 
 ## Known limitations
 
@@ -111,6 +144,17 @@ preserve parity). The abstention flag is the shipped uncertainty mechanism.
 - Trained for rural Indian primary care; not validated elsewhere.
 - The safety net's paediatric HR floor is intentionally conservative (may
   over-triage some children to URGENT — an accepted safe-side tradeoff).
+- **No monotonic constraints (considered, currently infeasible):** several
+  engineered features are constructed as unambiguous "higher = worse" scores
+  (`shock_index`, `sepsis_risk_score`, `hemodynamic_instability`,
+  `respiratory_distress_score`, `cardiac_risk_score`), and constraining the
+  model to respect that monotonically would make behavior in sparse/
+  out-of-distribution feature-space provably safe rather than merely
+  probable. Verified directly: `HistGradientBoostingClassifier` in the pinned
+  scikit-learn 1.9.0 raises `ValueError: monotonic constraints are not
+  supported for multiclass classification` for this 3-class problem — not
+  implemented here to avoid an unplanned scikit-learn upgrade. Worth
+  revisiting if/when the pin moves.
 
 ## Ethical & safety considerations
 
