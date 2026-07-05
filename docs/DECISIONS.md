@@ -802,3 +802,36 @@ work:
   adaptation keeps the safety property (never fabricate an answer) without
   the impractical latency. A curated answer becomes part of a shared,
   growing facility FAQ inside the assistant UI.
+
+### 28. Two free-tier keep-alive jobs — one solid, one honestly best-effort
+
+**Context**: the project runs on free tiers end to end — Supabase (pauses a
+project after 7 days with no database activity) and, for the backend, a
+host like Render (spins the instance down after ~10-15 minutes idle,
+causing a slow cold-start on the next real request). Both needed a
+keep-alive mechanism; researched rather than assumed.
+
+**Supabase**: `.github/workflows/supabase-keepalive.yml`, cron `17 4 */3 * *`
+(roughly every 3 days — 2x safety margin under the 7-day pause threshold,
+including month-boundary drift in the day-of-month step). Confirmed via
+research that Supabase's inactivity timer tracks **database** activity
+specifically, not dashboard visits or auth-only requests — so the job
+issues a real anon-key `SELECT` against `facilities` via PostgREST (a
+200/401/403 all prove the query reached the database; only a network-level
+failure fails the job). This is a solid, durable fix: GitHub's documented
+worst-case scheduling delay (tens of minutes) is negligible against a
+multi-day threshold.
+
+**Backend**: `.github/workflows/backend-keepalive.yml`, cron `*/10 * * * *`
+hitting `GET /api/health`, per the user's explicit request. **Honestly
+flagged as best-effort, not a real fix**: GitHub's own schedule trigger is
+non-guaranteed — documented delays of 5-30+ minutes (sometimes worse) under
+platform load are common, which can exceed a 10-15 minute host idle
+timeout outright. The correct fix for this specific problem is a dedicated
+uptime monitor (UptimeRobot, cron-job.org, Better Uptime, etc.) with a real
+5-minute-interval SLA — noted in the workflow's own comments and here so a
+future reader doesn't mistake "the job exists" for "the cold-start problem
+is solved." Both workflows read their target from repo secrets/variables
+(`SUPABASE_URL`/`SUPABASE_ANON_KEY` secrets, `BACKEND_HEALTH_URL` variable)
+and no-op cleanly (exit 0, not a failed run) if unset — the backend one is
+inert until a host is actually chosen and the variable is set.

@@ -275,6 +275,23 @@ Three long-lived branches: `main`, `dev` (active development — see
 **[CONTRIBUTING.md](./CONTRIBUTING.md)**), `test` (pre-production staging).
 Don't develop directly on `main` — see `docs/DECISIONS.md` §9.
 
+### Free-tier keep-alive jobs
+Running on free tiers end to end has two failure modes this repo works
+around (`docs/DECISIONS.md` §28):
+- **Supabase pauses a project after 7 days of no database activity.**
+  `.github/workflows/supabase-keepalive.yml` pings it every ~3 days. Set
+  repo secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY` (Settings > Secrets
+  and variables > Actions > Secrets) to enable it.
+- **Free backend hosts (Render, etc.) spin down after ~10-15 min idle**,
+  causing a cold-start on the next request. `.github/workflows/
+  backend-keepalive.yml` pings `GET /api/health` every 10 minutes. Set repo
+  variable `BACKEND_HEALTH_URL` (same Settings page, Variables tab) to your
+  deployed backend's base URL once you have one. Read the workflow's own
+  comments before relying on it — GitHub's schedule trigger has documented,
+  sometimes-large delays, so a dedicated uptime monitor (UptimeRobot,
+  cron-job.org, etc.) is the more reliable fix if cold-starts are a real
+  problem in practice.
+
 ---
 
 ## 🔒 Security
