@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { adminListFacilities, adminCreateFacility, adminToggleFacility } from '../../lib/api'
+import { adminListFacilities, adminCreateFacility, adminToggleFacility, updateFacilityCapacity } from '../../lib/api'
 
 const TYPE_OPTIONS = ['PHC', 'CHC', 'District Hospital']
+const CAPACITY_OPTIONS = ['available', 'limited', 'full']
 
 const EMPTY_FORM = {
   name: '', type: 'PHC', address: '', district: '',
@@ -52,6 +53,16 @@ export default function AdminFacilities() {
       await adminToggleFacility(id)
       await loadFacilities()
     } catch (e) { alert(e.message) }
+  }
+
+  async function handleCapacityChange(id, capacityStatus) {
+    setFacilities(fs => fs.map(f => f.id === id ? { ...f, capacity_status: capacityStatus } : f))   // optimistic
+    try {
+      await updateFacilityCapacity(id, capacityStatus)
+    } catch (e) {
+      alert(e.message)
+      await loadFacilities()   // revert to server state on failure
+    }
   }
 
   if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading facilities...</div>
@@ -122,7 +133,7 @@ export default function AdminFacilities() {
         <table className="w-full text-sm">
           <thead className="bg-surface2 border-b border-leaf/40">
             <tr>
-              {['Name', 'Type', 'District', 'Phone', 'Status', 'Actions'].map(h => (
+              {['Name', 'Type', 'District', 'Phone', 'Capacity', 'Status', 'Actions'].map(h => (
                 <th key={h} className="px-4 py-2.5 text-left text-xs font-mono font-semibold text-text3 uppercase tracking-wider">{h}</th>
               ))}
             </tr>
@@ -134,6 +145,16 @@ export default function AdminFacilities() {
                 <td className="px-4 py-3 text-text2 font-mono">{f.type}</td>
                 <td className="px-4 py-3 text-text2">{f.district || '—'}</td>
                 <td className="px-4 py-3 text-text3 font-mono">{f.phone || '—'}</td>
+                <td className="px-4 py-3">
+                  <select
+                    value={f.capacity_status || 'available'}
+                    onChange={(e) => handleCapacityChange(f.id, e.target.value)}
+                    aria-label={`${f.name} capacity`}
+                    className="text-xs border border-surface3 rounded-md px-2 py-1 bg-surface capitalize"
+                  >
+                    {CAPACITY_OPTIONS.map(c => <option key={c} value={c} className="capitalize">{c}</option>)}
+                  </select>
+                </td>
                 <td className="px-4 py-3">
                   <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${
                     f.is_active ? 'bg-routine/10 text-routine' : 'bg-surface3 text-text3'

@@ -446,7 +446,10 @@ export default function BriefingCard({ caseData, onReviewed }) {
                     className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
                   >
                     {facilities.map((f) => (
-                      <option key={f.id} value={f.id}>{f.name}{f.district ? ` — ${f.district}` : ''}</option>
+                      <option key={f.id} value={f.id}>
+                        {f.name}{f.district ? ` — ${f.district}` : ''}
+                        {f.capacity_status && f.capacity_status !== 'available' ? ` (${f.capacity_status})` : ''}
+                      </option>
                     ))}
                   </select>
                 )}

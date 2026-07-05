@@ -251,7 +251,12 @@ backend/
 │   │   ├── referral_routes.py        Inter-facility referral workflow — POST
 │   │   │                             /api/cases/{id}/refer, GET /api/referrals,
 │   │   │                             PATCH /api/referrals/{id}/status (forward-only
-│   │   │                             state machine, receiving-facility-only).
+│   │   │                             state machine, receiving-facility-only). Also
+│   │   │                             PATCH /api/facilities/{id}/capacity — self-
+│   │   │                             reported available/limited/full, own-facility-
+│   │   │                             or-admin, via the RLS-scoped client (needed
+│   │   │                             facilities' first-ever UPDATE policy — see
+│   │   │                             docs/DECISIONS.md §19).
 │   │   ├── dsr_routes.py             DPDP data-subject-request lifecycle
 │   │   │                             (docs/COMPLIANCE_DPDP.md), admin-only, scoped
 │   │   │                             to a single case_id: GET .../export (right to
@@ -732,7 +737,9 @@ last_escalated_at`; `phase19_referrals.sql` — the `referrals` table + RLS +
 Realtime; `phase20_case_attachments.sql` — the `case_attachments` schema
 scaffold, SELECT/INSERT RLS only, no live upload endpoint yet;
 `phase21_contraindication_flags.sql` — `case_records.contraindication_flags`
-jsonb column, default `[]`). Run them in order against the live Supabase
+jsonb column, default `[]`; `phase22_facility_capacity.sql` —
+`facilities.capacity_status`/`capacity_updated_at` plus facilities' first-
+ever UPDATE RLS policy). Run them in order against the live Supabase
 project's SQL editor (or via the Supabase CLI) — they're written to be
 safe to re-run.
 

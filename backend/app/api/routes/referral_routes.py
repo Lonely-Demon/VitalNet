@@ -50,6 +50,10 @@ class UpdateReferralStatusRequest(BaseModel):
     status: Literal["acknowledged", "patient_arrived", "completed", "cancelled"]
 
 
+class UpdateFacilityCapacityRequest(BaseModel):
+    capacity_status: Literal["available", "limited", "full"]
+
+
 def _parse_uuid(value: str, field: str = "id") -> str:
     try:
         return str(UUID(value))
@@ -83,7 +87,7 @@ async def list_active_facilities(
 
     query = (
         db.table("facilities")
-        .select("id, name, type, district")
+        .select("id, name, type, district, capacity_status")
         .eq("is_active", True)
         .order("name")
     )
@@ -92,6 +96,60 @@ async def list_active_facilities(
 
     result = query.execute()
     return result.data or []
+
+
+# ── Facility self-reported capacity ────────────────────────────────────────────
+
+
+@router.patch("/api/facilities/{facility_id}/capacity")
+@limiter.limit("30/minute")
+async def update_facility_capacity(
+    request: Request,
+    facility_id: str,
+    body: UpdateFacilityCapacityRequest,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("doctor", "admin")),
+):
+    """
+    Self-reported capacity status (docs/DECISIONS.md §19) — a doctor can
+    only update their OWN facility; admin can update any. Not derived from
+    a real bed-management system this project doesn't have; a referring
+    doctor sees it as one more signal in the facility picker, not an
+    automated capacity check.
+    """
+    facility_uuid = _parse_uuid(facility_id, "facility_id")
+    raw_token = (authorization or "").split(" ", 1)[-1]
+    db = get_supabase_for_user(raw_token)
+    role = user.get("resolved_role") or ""
+    own_facility_id = user.get("resolved_facility_id")
+
+    if role != "admin" and (not own_facility_id or own_facility_id != facility_uuid):
+        raise HTTPException(status_code=403, detail="Can only update your own facility's capacity")
+
+    update_result = (
+        db.table("facilities")
+        .update({
+            "capacity_status": body.capacity_status,
+            "capacity_updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        .eq("id", facility_uuid)
+        .execute()
+    )
+    if not update_result.data:
+        raise HTTPException(status_code=404, detail="Facility not found")
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=role,
+        resource_type="facilities",
+        resource_id=facility_uuid,
+        facility_id=facility_uuid,
+        ip_address=get_client_ip(request),
+        details={"capacity_status": body.capacity_status},
+    )
+
+    return update_result.data[0]
 
 
 # ── Create referral ────────────────────────────────────────────────────────────

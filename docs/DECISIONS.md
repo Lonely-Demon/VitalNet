@@ -413,3 +413,32 @@ strings, which are still English placeholders per §10) — so this can
 produce real Hindi/Tamil text today even though the UI chrome around it
 cannot yet. Not persisted to the database; regenerated fresh on each
 request, so it never goes stale relative to a later triage override.
+
+### 19. Facility capacity is self-reported, and needed a new RLS UPDATE policy
+
+**Context**: the referral workflow (Tier 2) lists candidate facilities but
+has no signal for whether a facility can actually take a referral right
+now — VitalNet has no real bed-management system to derive that from.
+
+**Decision**: `facilities.capacity_status` (`available`/`limited`/`full`)
+is self-reported by that facility's own doctor (or any admin), via
+`PATCH /api/facilities/{id}/capacity`
+(`referral_routes.py::update_facility_capacity`). Because this is a mixed
+doctor/admin write scoped to a single row — unlike `admin_routes.py`'s
+facility CRUD, which is `require_role('admin')`-only and always uses the
+RLS-bypassing `supabase_admin` — this endpoint uses the RLS-scoped
+`get_supabase_for_user` client instead, which meant `facilities` needed
+its first-ever UPDATE policy (only a SELECT policy existed before,
+`phase15_data_security_hardening.sql`); added in
+`phase22_facility_capacity.sql`, mirroring the SELECT policy's own-
+facility-or-admin shape.
+
+**Consequences**: this is advisory, like the contraindication flags — a
+referring doctor sees one more signal in the facility picker
+(`BriefingCard.jsx`), not a guarantee. RLS is row-scoped, not column-
+scoped, so in principle a doctor with a valid token could update other
+fields on their own facility's row via a direct API call, not just
+`capacity_status` — accepted as consistent with how RLS is used
+everywhere else in this schema (no column-level restriction attempted
+anywhere), and bounded to their own facility's already-public directory
+information, not another tenant's data or any PHI.

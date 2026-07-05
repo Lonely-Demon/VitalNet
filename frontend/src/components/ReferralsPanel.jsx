@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../store/authStore'
 import { useRealtimeReferrals } from '../hooks/useRealtimeReferrals'
-import { listReferrals, updateReferralStatus } from '../lib/api'
+import { listReferrals, updateReferralStatus, updateFacilityCapacity } from '../lib/api'
 
 const STATUS_COLORS = {
   pending: 'bg-urgent/10 text-urgent',
@@ -13,6 +13,12 @@ const STATUS_COLORS = {
   completed: 'bg-routine/10 text-routine',
   cancelled: 'bg-surface3 text-text3',
 }
+
+const CAPACITY_OPTIONS = [
+  { value: 'available', label: 'Available' },
+  { value: 'limited', label: 'Limited' },
+  { value: 'full', label: 'Full' },
+]
 
 const NEXT_ACTIONS = {
   pending: [{ status: 'acknowledged', label: 'Acknowledge' }],
@@ -34,6 +40,23 @@ export default function ReferralsPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [actioningId, setActioningId] = useState(null)
+
+  const [capacityStatus, setCapacityStatus] = useState(profile?.facilities?.capacity_status || 'available')
+  const [savingCapacity, setSavingCapacity] = useState(false)
+
+  async function handleCapacityChange(newStatus) {
+    const previous = capacityStatus
+    setCapacityStatus(newStatus)   // optimistic
+    setSavingCapacity(true)
+    try {
+      await updateFacilityCapacity(facilityId, newStatus)
+    } catch (e) {
+      setCapacityStatus(previous)   // revert on failure
+      alert(e.message)
+    } finally {
+      setSavingCapacity(false)
+    }
+  }
 
   const fetchReferrals = useCallback(async () => {
     try {
@@ -79,6 +102,21 @@ export default function ReferralsPanel() {
 
   return (
     <div>
+      {profile?.role === 'doctor' && facilityId && (
+        <div className="flex items-center gap-2 mb-4 p-3 rounded-lg border border-leaf/40 bg-surface2">
+          <span className="text-xs font-mono text-text3 uppercase tracking-wide">Your facility's capacity</span>
+          <select
+            value={capacityStatus}
+            onChange={(e) => handleCapacityChange(e.target.value)}
+            disabled={savingCapacity}
+            aria-label="Your facility's capacity"
+            className="text-sm border border-surface3 rounded-md px-2 py-1 bg-surface disabled:opacity-50"
+          >
+            {CAPACITY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+          </select>
+          <span className="text-xs text-text3">Self-reported — shown to doctors referring a patient to you.</span>
+        </div>
+      )}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-base font-semibold text-text font-display italic">
           Referrals <span className="text-text3 font-normal font-body">({referrals.length})</span>

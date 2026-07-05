@@ -278,7 +278,13 @@ case is escalated at most once per threshold window.
 Active facilities for the referral-target picker (doctor-accessible,
 unlike `/api/admin/facilities`). Excludes the caller's own facility. No
 tier-based filtering — `facilities.type` is free text with no defined
-ordering yet.
+ordering yet. Includes each facility's self-reported `capacity_status`.
+
+### `PATCH /api/facilities/{facility_id}/capacity` — 30/min — `doctor` (own facility only), `admin`
+**Body**: `{ capacity_status }` — one of `available`/`limited`/`full`.
+Self-reported, not derived from a real bed-management system
+(`docs/DECISIONS.md` §19). A doctor may only update their own facility;
+admin may update any. `403` otherwise.
 
 ### `POST /api/cases/{case_id}/refer` — 20/min — `doctor` (own facility), `admin`
 **Body** (`CreateReferralRequest`): `receiving_facility_id`, `reason`

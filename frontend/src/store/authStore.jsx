@@ -29,7 +29,7 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await supabase
         .from('profiles')
-        .select('*, facilities(phone)')
+        .select('*, facilities(phone, capacity_status)')
         .eq('id', userId)
         .single()
       if (data) {
