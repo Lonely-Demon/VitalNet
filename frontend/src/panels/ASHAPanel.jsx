@@ -2,14 +2,16 @@ import { useState, useEffect } from 'react'
 import NavBar from '../components/NavBar'
 import IntakeForm from '../pages/IntakeForm'
 import OfflineBanner from '../components/OfflineBanner'
+import ProtocolAssistant from '../components/ProtocolAssistant'
 import { getMySubmissions, processQueue } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
 import { useAuth } from '../store/authStore'
 import { useRealtimeCases } from '../hooks/useRealtimeCases'
 
 const TABS = [
-  { id: 'new',     label: 'New Case' },
-  { id: 'history', label: 'My Submissions' },
+  { id: 'new',      label: 'New Case' },
+  { id: 'history',  label: 'My Submissions' },
+  { id: 'protocol', label: 'Ask a Question' },
 ]
 
 const TRIAGE_STYLES = {
@@ -149,6 +151,8 @@ export default function ASHAPanel() {
             ))}
           </div>
         )}
+
+        {activeTab === 'protocol' && <ProtocolAssistant canCurate={false} />}
       </main>
     </div>
   )

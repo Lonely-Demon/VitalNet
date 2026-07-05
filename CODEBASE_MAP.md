@@ -312,16 +312,31 @@ backend/
 │   │   │                             to their own facility_id only; admin defaults
 │   │   │                             system-wide or narrows via ?facility_id
 │   │   │                             (docs/DECISIONS.md §25).
-│   │   └── outbreak_routes.py        GET /api/outbreak/signals — EARS C1
-│   │                                 aberration detection (7-day trailing baseline
-│   │                                 mean + 3*stddev, floor of 3 cases) over
-│   │                                 (facility, symptom, day) aggregate counts, for
-│   │                                 require_role('doctor', 'supervisor', 'admin').
-│   │                                 Informational only, not a validated
-│   │                                 surveillance system (docs/DECISIONS.md §26).
-│   │                                 Same supabase_admin aggregate-only exception
-│   │                                 as supervisor_routes.py; facility scoping
-│   │                                 shared via app/core/scoping.py.
+│   │   ├── outbreak_routes.py        GET /api/outbreak/signals — EARS C1
+│   │   │                             aberration detection (7-day trailing baseline
+│   │   │                             mean + 3*stddev, floor of 3 cases) over
+│   │   │                             (facility, symptom, day) aggregate counts, for
+│   │   │                             require_role('doctor', 'supervisor', 'admin').
+│   │   │                             Informational only, not a validated
+│   │   │                             surveillance system (docs/DECISIONS.md §26).
+│   │   │                             Same supabase_admin aggregate-only exception
+│   │   │                             as supervisor_routes.py; facility scoping
+│   │   │                             shared via app/core/scoping.py.
+│   │   └── protocol_routes.py        POST /api/protocol/ask, GET .../questions,
+│   │                                 PATCH .../questions/{id}/curate — grounded
+│   │                                 guideline lookup assistant informed by
+│   │                                 ASHABot's published design (docs/DECISIONS.md
+│   │                                 §27). Carries NO PHI (unlike case_records), so
+│   │                                 this uses REAL Postgres RLS via
+│   │                                 get_supabase_for_user, not the supabase_admin
+│   │                                 exception — SELECT is facility-wide for every
+│   │                                 role by design (shared FAQ), UPDATE
+│   │                                 (curation) is doctor/supervisor/admin only.
+│   │                                 The LLM call (generate_protocol_answer in
+│   │                                 app/services/llm.py) is a fully separate call
+│   │                                 path from generate_briefing — never shares
+│   │                                 the triage system prompt or takes patient
+│   │                                 vitals as input.
 │   ├── models/schemas.py            Pydantic request/response models. IntakeForm is
 │   │                                 the case-submission contract — every field is
 │   │                                 bounded (min/max length, numeric ranges, enums),
@@ -381,7 +396,23 @@ backend/
 │   │   │                             already-fixed triage/briefing in plain language for
 │   │   │                             the patient (docs/DECISIONS.md §18), never a fresh
 │   │   │                             clinical read; falls back to a canned per-tier
-│   │   │                             sentence on any failure.
+│   │   │                             sentence on any failure. Also owns
+│   │   │                             generate_protocol_answer() — a fully separate
+│   │   │                             call path for protocol_routes.py (docs/DECISIONS.md
+│   │   │                             §27): its own Groq→Gemini tiered fallback, its own
+│   │   │                             system prompt built from protocol_knowledge.md
+│   │   │                             (context-stuffed reference material, no vector DB),
+│   │   │                             shares NO code with generate_briefing by design —
+│   │   │                             never takes patient vitals as input. Returns
+│   │   │                             {answer, grounded, generated}; grounded=false means
+│   │   │                             the question needs human curation.
+│   │   ├── protocol_knowledge.md     Curated reference doc stuffed into
+│   │   │                             generate_protocol_answer()'s system prompt: ANC
+│   │   │                             visit schedule, UIP immunisation schedule, IMNCI
+│   │   │                             newborn/pregnancy danger signs, referral criteria.
+│   │   │                             The ONLY source of truth for the protocol
+│   │   │                             assistant — it refuses/escalates rather than using
+│   │   │                             outside model knowledge.
 │   │   ├── push.py                   Web Push send logic (push_emergency_alert,
 │   │   │                             _send_one) — separate module from push_routes.py
 │   │   │                             specifically to avoid a circular import with
@@ -661,11 +692,15 @@ frontend/src/
 ├── pages/
 │   ├── LoginPage.jsx, IntakeForm.jsx, Dashboard.jsx
 ├── panels/
-│   ├── ASHAPanel.jsx (New Case / My Submissions), DoctorPanel.jsx (Pending Review /
-│   │   All Cases / Referrals / Outbreak Signals tabs), AdminPanel.jsx (Analytics/
-│   │   Outbreak Signals/Users/Facilities/System/Audit Log), SupervisorPanel.jsx
-│   │   (Team Metrics / Outbreak Signals — TeamMetrics.jsx and shared
-│   │   OutbreakSignals.jsx components, docs/DECISIONS.md §25/§26)
+│   ├── ASHAPanel.jsx (New Case / My Submissions / Ask a Question tabs),
+│   │   DoctorPanel.jsx (Pending Review / All Cases / Referrals / Outbreak Signals /
+│   │   Protocol Assistant), AdminPanel.jsx (Analytics/Outbreak Signals/Protocol
+│   │   Assistant/Users/Facilities/System/Audit Log), SupervisorPanel.jsx (Team
+│   │   Metrics / Outbreak Signals / Protocol Assistant) — TeamMetrics.jsx,
+│   │   OutbreakSignals.jsx, and ProtocolAssistant.jsx are shared components used
+│   │   across these panels (docs/DECISIONS.md §25/§26/§27). ProtocolAssistant's
+│   │   `canCurate` prop gates the curation UI — false for ASHAPanel (ask + view
+│   │   FAQ only), true for Doctor/Supervisor/Admin.
 ├── components/                Shared UI: BriefingCard (triage override + outcome-
 │   │                          recording + referral actions + patient-summary on-demand
 │   │                          request live here), TriageBadge,
@@ -828,9 +863,13 @@ ever UPDATE RLS policy; `phase23_patient_key.sql` — `case_records.
 patient_key` (nullable text, CHECK-constrained to `XXXX-XXXX`, partial
 index) — the patient continuity key, docs/DECISIONS.md §21;
 `phase24_deterioration_alert.sql` — `case_records.deterioration_alert`/
-`deterioration_visit_count`, docs/DECISIONS.md §22). Run them in order
-against the live Supabase project's SQL editor (or via the Supabase CLI)
-— they're written to be safe to re-run.
+`deterioration_visit_count`, docs/DECISIONS.md §22; `phase25_
+protocol_questions.sql` — the `protocol_questions` table, facility-wide
+SELECT RLS for every role (no PHI), INSERT for the asking user's own
+facility, UPDATE (curation) restricted to doctor/supervisor/admin,
+docs/DECISIONS.md §27). Run them in order against the live Supabase
+project's SQL editor (or via the Supabase CLI) — they're written to be
+safe to re-run.
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`
@@ -879,6 +918,13 @@ against the live Supabase project's SQL editor (or via the Supabase CLI)
   no live upload endpoint yet. `case_id`, `uploaded_by`, `storage_path`
   (generic string, storage-backend-agnostic), `content_type`, `size_bytes`.
   RLS mirrors `case_outcomes`; immutable by omission.
+- `protocol_questions` — the protocol assistant's shared facility FAQ
+  (docs/DECISIONS.md §27). `asked_by`, `facility_id`, `question_text`,
+  `language`, `llm_answer_text`, `llm_grounded`, `status`
+  (`answered`/`pending_curation`/`curated`), `curator_answer_text`,
+  `curated_by`, `curated_at`. Carries NO PHI — RLS SELECT is facility-wide
+  for every role (including `asha_worker`) by design, unlike
+  `case_records`; UPDATE (curation) is `doctor`/`supervisor`/`admin` only.
 
 **Role scoping model** (enforced consistently in application code — see §3's
 route descriptions): `admin` = global scope (sees/manages everything). `doctor`

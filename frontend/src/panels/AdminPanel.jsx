@@ -6,10 +6,12 @@ import AdminStats from '../components/admin/AdminStats'
 import AdminAuditLog from '../components/admin/AdminAuditLog'
 import AnalyticsDashboard from '../components/AnalyticsDashboard'
 import OutbreakSignals from '../components/OutbreakSignals'
+import ProtocolAssistant from '../components/ProtocolAssistant'
 
 const TABS = [
   { id: 'analytics',  label: 'Analytics' },
   { id: 'outbreak',   label: 'Outbreak Signals' },
+  { id: 'protocol',   label: 'Protocol Assistant' },
   { id: 'users',      label: 'Users' },
   { id: 'facilities', label: 'Facilities' },
   { id: 'system',     label: 'System' },
@@ -25,6 +27,7 @@ export default function AdminPanel() {
       <main className="max-w-5xl mx-auto px-4 py-6">
         {activeTab === 'analytics'  && <AnalyticsDashboard />}
         {activeTab === 'outbreak'   && <OutbreakSignals />}
+        {activeTab === 'protocol'   && <ProtocolAssistant canCurate />}
         {activeTab === 'users'      && <AdminUsers />}
         {activeTab === 'facilities' && <AdminFacilities />}
         {activeTab === 'system'     && <AdminStats />}

@@ -20,6 +20,17 @@ a treating doctor. VitalNet's `supervisor` role is modeled directly on this
 real-world role (`docs/DECISIONS.md` §25), which is why it is a distinct
 fourth role rather than a permission bolted onto `doctor` or `admin`.
 
+**ASHABot** — a real, deployed WhatsApp-based guideline assistant for ASHA
+workers (Khushi Baby + Microsoft Research India, CHI 2025 paper). Uses
+retrieval over a curated knowledge base and an explicit "I don't know"
+rather than fabricating an answer, escalating unresolved questions to human
+experts. Its own published data found that escalation mechanism (synchronous
+multi-reviewer consensus) averaged ~60 hours to resolve — too slow for
+real-time use. VitalNet's protocol assistant (`docs/DECISIONS.md` §27)
+adopts ASHABot's grounding/never-fabricate design but replaces synchronous
+consensus with asynchronous curation, logged to `protocol_questions` and
+answered whenever a supervisor/doctor/admin is free.
+
 **PHC (Primary Health Centre)** — the first-tier government healthcare
 facility in rural India, typically staffed by one or a few doctors, serving
 a cluster of villages. A `facilities` row with `type = 'PHC'` represents

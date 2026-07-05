@@ -8,6 +8,7 @@
  *   - @/api/analytics.js  → getAnalyticsSummary, getEmergencyRate
  *   - @/api/supervisor.js → getTeamMetrics
  *   - @/api/outbreak.js   → getOutbreakSignals
+ *   - @/api/protocol.js   → askProtocolQuestion, listProtocolQuestions, curateProtocolAnswer
  *   - @/stores/syncStore.js → submitCase, processQueue (stateful offline queue manager)
  *
  * This barrel keeps existing consumers working without requiring immediate refactors.
@@ -34,3 +35,4 @@ export { getAnalyticsSummary, getEmergencyRate, getResponseTimes, getMlAgreement
 export { listActiveFacilities, createReferral, listReferrals, updateReferralStatus, updateFacilityCapacity } from '@/api/referrals'
 export { getTeamMetrics } from '@/api/supervisor'
 export { getOutbreakSignals } from '@/api/outbreak'
+export { askProtocolQuestion, listProtocolQuestions, curateProtocolAnswer } from '@/api/protocol'

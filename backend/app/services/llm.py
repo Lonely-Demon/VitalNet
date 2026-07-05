@@ -411,3 +411,126 @@ async def generate_patient_summary(briefing: dict, triage_result: dict, language
     except Exception as e:
         logger.warning("Patient-summary generation failed: %s — using fallback text", e)
         return {"summary": _fallback_patient_summary(triage_result), "generated": False}
+
+
+# ─── Protocol / guideline lookup assistant (docs/DECISIONS.md §27) ────────────
+#
+# Deliberately implemented as its OWN self-contained tiered-fallback call —
+# does not share _call_groq/_call_gemini/_SYSTEM_PROMPT with generate_briefing
+# above. This is a safety property, not an accident: this call path never
+# takes patient vitals/symptoms as input and never produces a triage-like
+# output, so it must be structurally impossible for it to influence, or be
+# confused with, the triage-critical briefing path. Grounded via
+# context-stuffing protocol_knowledge.md (a "RAG-lite" — the reference
+# corpus is small enough to fit directly, no vector DB needed) rather than
+# the model's own parametric medical knowledge, mirroring ASHABot's
+# "retrieval over a curated knowledge base, never fabricate" design
+# (CHI 2025 paper) — but replacing its too-slow (~60h average) synchronous
+# multi-reviewer consensus with async curation (see protocol_routes.py).
+
+PROTOCOL_KNOWLEDGE_PATH = Path(__file__).parent / "protocol_knowledge.md"
+
+try:
+    _PROTOCOL_KNOWLEDGE: str = PROTOCOL_KNOWLEDGE_PATH.read_text(encoding="utf-8")
+except FileNotFoundError:
+    logger.error("[CRITICAL] Protocol knowledge base not found at %s", PROTOCOL_KNOWLEDGE_PATH)
+    _PROTOCOL_KNOWLEDGE = "(No reference material available.)"
+
+_PROTOCOL_SYSTEM_PROMPT = (
+    "You answer general clinical-protocol and guideline questions for "
+    "community health workers, using ONLY the reference material below. "
+    "Never use outside medical knowledge, and never guess.\n\n"
+    f"{_PROTOCOL_KNOWLEDGE}\n\n"
+    "Rules:\n"
+    "1. If the reference material above answers the question, answer using "
+    "only that material, in the requested language, under 150 words.\n"
+    "2. If the question is about a SPECIFIC patient's symptoms, vitals, or "
+    "presentation (asking what a specific patient's diagnosis or triage "
+    "should be), refuse and say: \"This assistant cannot assess a specific "
+    "patient. Please submit this patient as a case for triage instead.\" "
+    "Set grounded to true for this case — a refusal is a complete, correct "
+    "answer, not a knowledge gap.\n"
+    "3. If the question is a genuine general protocol question but the "
+    "reference material does NOT cover it, say you don't know and that the "
+    "question has been forwarded to a supervisor/doctor for a real answer. "
+    "Set grounded to false — do NOT guess or invent an answer.\n\n"
+    "Respond with a single JSON object: "
+    '{"answer": "<your response in the requested language>", "grounded": true|false}. '
+    "No markdown, no text outside the JSON object."
+)
+
+
+def _fallback_protocol_answer() -> dict:
+    return {
+        "answer": "The protocol assistant is temporarily unavailable. Your question has "
+                  "been forwarded to a supervisor/doctor for an answer.",
+        "grounded": False,
+        "generated": False,
+    }
+
+
+async def generate_protocol_answer(question_text: str, language: str = "en") -> dict:
+    """
+    Best-effort. Returns {"answer": str, "grounded": bool, "generated": bool}.
+    Never raises. grounded=False means the caller should queue the question
+    for human curation (protocol_routes.py); generated=False means no LLM
+    tier produced an answer at all (canned fallback text, also treated as
+    needing curation).
+    """
+    language_name = PATIENT_SUMMARY_LANGUAGE_NAMES.get(language, "English")
+    question = _sanitize_field(question_text, 500)
+    user_content = f"Question (answer in {language_name}): {question}"
+
+    if _groq_client:
+        for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+            try:
+                response = await _groq_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": _PROTOCOL_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_content},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.1,
+                    max_tokens=400,
+                    timeout=15,
+                )
+                parsed = _parse_llm_json(response.choices[0].message.content)
+                return {
+                    "answer": str(parsed.get("answer") or "").strip() or _fallback_protocol_answer()["answer"],
+                    "grounded": bool(parsed.get("grounded")),
+                    "generated": True,
+                }
+            except groq.RateLimitError:
+                logger.warning("Rate limit on Groq/%s for protocol answer — moving to next tier", model)
+                continue
+            except Exception as e:
+                logger.warning("Error on Groq/%s for protocol answer: %s — moving to next tier", model, e)
+                continue
+
+    if _gemini_configured:
+        import google.generativeai as genai
+        for model_name in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
+            try:
+                model = genai.GenerativeModel(
+                    model_name=model_name,
+                    system_instruction=_PROTOCOL_SYSTEM_PROMPT,
+                    generation_config=genai.GenerationConfig(
+                        response_mime_type="application/json",
+                        temperature=0.1,
+                        max_output_tokens=400,
+                    ),
+                )
+                response = await model.generate_content_async(user_content)
+                parsed = _parse_llm_json(response.text)
+                return {
+                    "answer": str(parsed.get("answer") or "").strip() or _fallback_protocol_answer()["answer"],
+                    "grounded": bool(parsed.get("grounded")),
+                    "generated": True,
+                }
+            except Exception as e:
+                logger.warning("Error on Gemini/%s for protocol answer: %s — moving to next tier", model_name, e)
+                continue
+
+    logger.warning("All LLM tiers exhausted for protocol question — queuing for curation.")
+    return _fallback_protocol_answer()
