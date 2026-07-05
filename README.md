@@ -113,9 +113,19 @@ architecture/sequence/entity-relationship diagrams.
 
 ## 🛠️ Local Development Setup
 
+**Quick start:** `./setup.sh` installs both the backend and frontend
+dependencies and walks you through creating `backend/.env.local` and
+`frontend/.env.local` from the `.env.example` templates (prompting once for
+each key — anything left blank stays as the template placeholder and can be
+filled in later). Both `.env.local` files are gitignored; nothing this
+script writes is ever committed, and it's safe to re-run — it never
+overwrites an `.env.local` that already has real values. It still can't
+create a Supabase project for you or run its migrations — see step 1 below
+for what's left.
+
 For a fully-narrated first-time walkthrough (including making a trivial
 change and opening your first PR), see **[docs/ONBOARDING.md](./docs/ONBOARDING.md)**.
-The condensed version:
+The manual, step-by-step version `setup.sh` automates:
 
 ### 1. Prerequisites
 - **Python 3.13** (production target — see `backend/runtime.txt`; 3.11+
