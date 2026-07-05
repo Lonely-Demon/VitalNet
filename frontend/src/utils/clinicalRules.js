@@ -2,7 +2,8 @@
 //
 // Deterministic clinical safety rules for the OFFLINE triage path — a 1:1
 // mirror of backend/app/ml/classifier.py (_safety_net_check and
-// _news2_concerning_vital). These run REGARDLESS of the ML tree evaluator, so:
+// _news2_concerning_vital) and backend/app/ml/contraindications.py. These
+// run REGARDLESS of the ML tree evaluator, so:
 //   1. Unambiguous critical presentations escalate to EMERGENCY even for inputs
 //      the model was never trained on ("classify under any circumstances").
 //   2. A concerning single vital can never be left as ROUTINE (URGENT floor).
@@ -80,4 +81,77 @@ export function news2ConcerningVital(formData) {
   if (temp !== null && (temp <= 35.0 || temp >= 39.1)) return `concerning temperature (${temp}°C)`
 
   return null
+}
+
+// ---------------------------------------------------------------------------
+// Contraindication/interaction flags — mirrors
+// backend/app/ml/contraindications.py::RULES exactly. See that module's
+// docstring for scope: free-text keyword matching against a small curated
+// list, not a general drug-interaction database. Never changes the triage
+// tier — the caller folds any flag into a "needs review" style signal.
+// ---------------------------------------------------------------------------
+
+const CONTRAINDICATION_RULES = [
+  {
+    id: 'nsaid_renal',
+    medicationTerms: ['ibuprofen', 'diclofenac', 'naproxen', 'nsaid', 'mefenamic', 'aceclofenac'],
+    conditionTerms: ['kidney', 'renal', 'ckd', 'dialysis'],
+    message: 'NSAID use with known kidney/renal disease — NSAIDs can worsen renal function; verify before recommending.',
+  },
+  {
+    id: 'ace_arb_renal',
+    medicationTerms: ['enalapril', 'lisinopril', 'ramipril', 'captopril', 'losartan', 'telmisartan', 'olmesartan', 'ace inhibitor'],
+    conditionTerms: ['kidney', 'renal', 'ckd', 'dialysis'],
+    message: 'ACE inhibitor/ARB with known kidney disease — risk of hyperkalemia or worsening renal function; verify before recommending.',
+  },
+  {
+    id: 'metformin_vomiting',
+    medicationTerms: ['metformin', 'glucophage'],
+    symptomCodes: ['persistent_vomiting'],
+    message: 'Metformin with persistent vomiting — risk of dehydration-related lactic acidosis; verify before continuing metformin.',
+  },
+  {
+    id: 'anticoagulant_bleeding',
+    medicationTerms: ['warfarin', 'acitrom', 'dabigatran', 'apixaban', 'rivaroxaban', 'heparin', 'anticoagulant'],
+    symptomCodes: ['severe_bleeding'],
+    message: 'Anticoagulant use with active severe bleeding — bleeding risk is compounded; flag for urgent clinical attention.',
+  },
+  {
+    id: 'beta_blocker_bradycardia',
+    medicationTerms: ['atenolol', 'metoprolol', 'propranolol', 'bisoprolol', 'beta blocker', 'beta-blocker'],
+    maxHeartRate: 55,
+    message: 'Beta-blocker use with a low heart rate — may indicate excessive beta-blockade; verify before further heart-rate-lowering treatment.',
+  },
+  {
+    id: 'hypoglycemia_agent_altered_consciousness',
+    medicationTerms: ['insulin', 'glimepiride', 'glipizide', 'glyburide', 'gliclazide', 'sulfonylurea'],
+    symptomCodes: ['altered_consciousness'],
+    message: 'Insulin/sulfonylurea use with altered consciousness — consider hypoglycemia; verify blood glucose before assuming another cause.',
+  },
+]
+
+/**
+ * Returns an array of human-readable contraindication flags (possibly
+ * empty). Mirrors classifier.py::check_contraindications /
+ * contraindications.py::RULES.
+ */
+export function checkContraindications(formData) {
+  const medications = (formData.current_medications || '').toLowerCase()
+  if (!medications) return []
+
+  const conditions = (formData.known_conditions || '').toLowerCase()
+  const symptoms = new Set(formData.symptoms || [])
+  const heartRate = num(formData.heart_rate)
+
+  const flags = []
+  for (const rule of CONTRAINDICATION_RULES) {
+    if (!rule.medicationTerms.some((term) => medications.includes(term))) continue
+
+    const conditionHit = Boolean(rule.conditionTerms) && rule.conditionTerms.some((term) => conditions.includes(term))
+    const symptomHit = Boolean(rule.symptomCodes) && rule.symptomCodes.some((code) => symptoms.has(code))
+    const heartRateHit = rule.maxHeartRate !== undefined && heartRate !== null && heartRate < rule.maxHeartRate
+
+    if (conditionHit || symptomHit || heartRateHit) flags.push(rule.message)
+  }
+  return flags
 }

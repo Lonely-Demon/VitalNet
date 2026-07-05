@@ -126,7 +126,8 @@
       "emergencySmsNoNumber": "No facility phone number on file — choose a contact manually in your messaging app.",
       "ambulanceCallTitle": "Need an ambulance?",
       "ambulanceCallDescription": "Call 108, India's national ambulance and emergency helpline. This works over a normal phone call, even without a data connection. Availability depends on your area — it may not be reachable everywhere.",
-      "ambulanceCallButton": "Call 108"
+      "ambulanceCallButton": "Call 108",
+      "contraindicationTitle": "Possible contraindication — verify with a clinician"
     },
     "preliminary": {
       "label": "Preliminary triage",

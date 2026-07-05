@@ -171,6 +171,8 @@ export default function BriefingCard({ caseData, onReviewed }) {
             <p className="text-xs text-urgent font-bold mt-1">
               {caseData.human_review_requested
                 ? '⚑ Review requested by submitter'
+                : caseData.contraindication_flags?.length > 0
+                ? '⚑ Possible contraindication flagged — see below'
                 : '⚠ Model uncertain — clinician review recommended'}
             </p>
           )}
@@ -181,6 +183,14 @@ export default function BriefingCard({ caseData, onReviewed }) {
       {/* Expanded briefing */}
       {expanded && b && (
         <div className="px-5 pb-5 border-t border-leaf/40 pt-4 space-y-5 bg-surface2/30">
+
+          {caseData.contraindication_flags?.length > 0 && (
+            <BriefingSection title="Contraindication Flags">
+              <ul className="text-sm text-emergency space-y-1.5">
+                {caseData.contraindication_flags.map((flag, i) => <li key={i}>· {flag}</li>)}
+              </ul>
+            </BriefingSection>
+          )}
 
           <BriefingSection title="Primary Signal">
             <p className="text-sm text-text font-medium leading-relaxed">{b.primary_risk_driver}</p>

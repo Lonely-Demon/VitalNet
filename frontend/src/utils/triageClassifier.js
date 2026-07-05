@@ -21,7 +21,7 @@
 //      safe result — triage never fails.
 
 import { evaluateTrees } from './treeEvaluator.js'
-import { safetyNetCheck, news2ConcerningVital } from './clinicalRules.js'
+import { safetyNetCheck, news2ConcerningVital, checkContraindications } from './clinicalRules.js'
 
 const TREES_PATH = '/models/triage_trees.json'
 const FEATURES_CONFIG_PATH = '/models/features_config.json'
@@ -430,9 +430,12 @@ function orderFeatureVector(featureMap) {
  * well-formed input, even if the tree model failed to load (rules-only
  * fallback). Shape:
  *   { triageLevel, confidence, lowConfidence, isLocal: true,
- *     safetyNet, news2Floor, modelUnavailable }
+ *     safetyNet, news2Floor, modelUnavailable, contraindicationFlags }
  */
 export async function runTriage(formData) {
+  // Independent of tier — computed once, attached to whatever result below.
+  const contraindicationFlags = checkContraindications(formData)
+
   // Layer 1 — deterministic safety net. Works with no model at all.
   const safetyReason = safetyNetCheck(formData)
   if (safetyReason) {
@@ -444,6 +447,7 @@ export async function runTriage(formData) {
       safetyNet: true,
       news2Floor: false,
       modelUnavailable: false,
+      contraindicationFlags,
     }
   }
 
@@ -484,5 +488,6 @@ export async function runTriage(formData) {
     safetyNet: false,
     news2Floor,
     modelUnavailable,
+    contraindicationFlags,
   }
 }

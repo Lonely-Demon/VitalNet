@@ -287,14 +287,24 @@ backend/
 │   │   │                             layers per prediction: (1) _safety_net_check →
 │   │   │                             EMERGENCY for extreme vitals/critical symptoms,
 │   │   │                             (2) the trained model, (3) _news2_concerning_vital
-│   │   │                             floor → never ROUTINE on a concerning vital.
-│   │   │                             Also emits a low_confidence abstention flag.
+│   │   │                             floor → never ROUTINE on a concerning vital. Also
+│   │   │                             attaches contraindication_flags (below) and emits
+│   │   │                             a low_confidence abstention flag.
+│   │   ├── contraindications.py      check_contraindications() — free-text keyword-
+│   │   │                             matched flags (NSAID+renal, ACE-inhibitor+renal,
+│   │   │                             metformin+vomiting, anticoagulant+bleeding, beta-
+│   │   │                             blocker+bradycardia, insulin+altered-consciousness).
+│   │   │                             Advisory, not a drug-interaction database — see
+│   │   │                             docs/DECISIONS.md §17. Never changes triage tier;
+│   │   │                             cases.py folds any flag into needs_review. Mirrored
+│   │   │                             in JS clinicalRules.js::checkContraindications.
 │   │   ├── clinical_features.py     ClinicalFeatureEngineer — expands ~14 raw intake
 │   │   │                             fields into 45 engineered features. MIRRORED in
 │   │   │                             JS (frontend triageClassifier.js). The safety
-│   │   │                             net + floor are mirrored in JS clinicalRules.js.
-│   │   │                             Change one side → change the other → retrain →
-│   │   │                             `npm run test:parity` (CI-enforced).
+│   │   │                             net + floor + contraindication flags are mirrored
+│   │   │                             in JS clinicalRules.js. Change one side → change
+│   │   │                             the other → retrain → `npm run test:parity`
+│   │   │                             (CI-enforced).
 │   │   └── models/triage_classifier.pkl
 │   │                                 The trained model + SHAP explainer bundle.
 │   │                                 Regenerate via scripts/train_classifier.py — never
@@ -371,6 +381,10 @@ backend/
 │   ├── test_classifier_safety.py     Property tests for the safety guarantees (extreme
 │   │                                 vitals → EMERGENCY; concerning vital never ROUTINE;
 │   │                                 low_confidence present). Run in CI.
+│   ├── test_contraindications.py     Unit tests for check_contraindications() — one
+│   │                                 positive/negative case per rule, plus predict_
+│   │                                 triage() integration (flags present on both the
+│   │                                 safety-net and model-decision exit paths).
 │   ├── test_admin_authz.py           Asserts every /api/admin route — across
 │   │                                 admin_routes.py AND dsr_routes.py (see
 │   │                                 ADMIN_ROUTE_MODULES) — is require_role('admin')-
@@ -591,6 +605,9 @@ tests/
 │   ├── featureParity.test.mjs   `npm run test:feature-parity` — asserts buildFeatureMap()
 │   │                            matches ClinicalFeatureEngineer. Freezes the global Date
 │   │                            constructor (see docs/DECISIONS.md §12). CI.
+│   ├── contraindications.test.mjs `npm run test:contraindications` — asserts
+│   │                            checkContraindications() (clinicalRules.js) agrees with
+│   │                            app/ml/contraindications.py on flag count per case. CI.
 │   ├── offline.spec.js          Playwright E2E: login → offline → submit → reconnect →
 │   │                            sync. Needs a running dev server + seeded test users;
 │   │                            not part of the unit-test CI job.
@@ -702,9 +719,11 @@ doctor-override columns, the `case_outcomes` table; `phase18_
 push_subscriptions.sql` — `push_subscriptions` table, `case_records.
 last_escalated_at`; `phase19_referrals.sql` — the `referrals` table + RLS +
 Realtime; `phase20_case_attachments.sql` — the `case_attachments` schema
-scaffold, SELECT/INSERT RLS only, no live upload endpoint yet). Run them in
-order against the live Supabase project's SQL editor (or via the Supabase
-CLI) — they're written to be safe to re-run.
+scaffold, SELECT/INSERT RLS only, no live upload endpoint yet;
+`phase21_contraindication_flags.sql` — `case_records.contraindication_flags`
+jsonb column, default `[]`). Run them in order against the live Supabase
+project's SQL editor (or via the Supabase CLI) — they're written to be
+safe to re-run.
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`

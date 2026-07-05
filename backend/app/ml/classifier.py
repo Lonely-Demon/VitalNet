@@ -27,6 +27,8 @@ from typing import Dict, Any, Optional
 
 import numpy as np
 
+from app.ml.contraindications import check_contraindications
+
 logger = logging.getLogger("vitalnet")
 
 PKL_PATH = Path(__file__).parent / "models" / "triage_classifier.pkl"
@@ -238,6 +240,12 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
         [[features[name] for name in _feature_names]], dtype=np.float32
     )
 
+    # Contraindication/interaction flags (app/ml/contraindications.py) — an
+    # independent, additive check that never changes the triage tier itself;
+    # the caller (cases.py) folds any flag into needs_review. Computed
+    # before either exit path below since it applies regardless of tier.
+    contraindication_flags = check_contraindications(form_data)
+
     # Layer 1 — deterministic safety net: extreme presentations -> EMERGENCY,
     # independent of the model. Certain by construction, so never low-confidence.
     safety_reason = _safety_net_check(form_data)
@@ -249,6 +257,7 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
             "model_version": _model_version,
             "safety_net_triggered": True,
             "low_confidence": False,
+            "contraindication_flags": contraindication_flags,
         }
 
     # Layer 2 — trained model.
@@ -288,6 +297,7 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
         "safety_net_triggered": False,
         "news2_floor_triggered": bool(floor_reason),
         "low_confidence": low_confidence,
+        "contraindication_flags": contraindication_flags,
     }
 
 

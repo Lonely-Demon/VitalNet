@@ -88,7 +88,9 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
     `consent_captured_at`.
 - **Response `200`**: the created/existing `case_records` row (includes
   `triage_level`, `triage_confidence`, `risk_driver`, `id`, `created_at`,
-  `facility_id`, `created_offline`).
+  `facility_id`, `created_offline`, `contraindication_flags` — a possibly-
+  empty array of deterministic keyword-matched flags, see
+  `app/ml/contraindications.py`; any flag forces `needs_review`).
 - **Side effect**: if the result is EMERGENCY, fires a Web Push notification
   to the facility's subscribed doctors as a background task (never adds
   latency to this response).

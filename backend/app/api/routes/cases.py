@@ -172,8 +172,13 @@ async def submit_case(
             "risk_driver": triage_result["risk_driver"],
             "triage_model_version": triage_result.get("model_version"),
             "low_confidence": bool(triage_result.get("low_confidence")),
+            "contraindication_flags": triage_result.get("contraindication_flags") or [],
             "llm_status": briefing.get("llm_status", "generated"),
-            "needs_review": bool(briefing.get("needs_review") or form.human_review_requested),
+            "needs_review": bool(
+                briefing.get("needs_review")
+                or form.human_review_requested
+                or triage_result.get("contraindication_flags")
+            ),
             "briefing": briefing,
             "llm_model_used": briefing.get("_model_used", "unknown"),
             "created_offline": form.created_offline,
@@ -293,6 +298,7 @@ async def get_cases(
             "id, patient_name, patient_age, patient_sex, patient_location, chief_complaint, "
             "triage_level, triage_priority, triage_confidence, risk_driver, briefing, "
             "low_confidence, needs_review, human_review_requested, human_review_reason, "
+            "contraindication_flags, "
             "triage_model_version, overridden_triage, override_reason, overridden_by, overridden_at, "
             "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
         )

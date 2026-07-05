@@ -360,3 +360,30 @@ a government partnership this codebase cannot secure by writing more code.
 not a coordinated dispatch. It works precisely because it depends on
 nothing VitalNet doesn't already control (a static phone number), at the
 cost of not being as capable as a real dispatch integration would be.
+
+### 17. Contraindication flags are free-text keyword matching, not a drug database
+
+**Context**: `known_conditions` and `current_medications`
+(`app/models/schemas.py::IntakeForm`) are free text, not coded against
+RxNorm/ICD or any structured drug database. A general drug-drug
+interaction checker needs structured input; faking that coverage on free
+text would produce false confidence, which is worse than no checker.
+
+**Decision**: `app/ml/contraindications.py` checks a small, curated list
+of well-established condition/medication/symptom combinations (NSAID +
+renal disease, ACE inhibitor/ARB + renal disease, metformin + persistent
+vomiting, anticoagulant + severe bleeding, beta-blocker + bradycardia,
+insulin/sulfonylurea + altered consciousness) via case-insensitive
+substring matching — the same technique `clinical_features.py` already
+uses for `_calculate_comorbidity_risk`. A flag never changes the triage
+tier; `cases.py` folds any flag into `needs_review`, the same mechanism
+`human_review_requested` already uses, so a doctor looks rather than the
+system silently escalating or de-escalating on an unverified match.
+Mirrored 1:1 in `frontend/src/utils/clinicalRules.js` for the offline
+path (`docs/DECISIONS.md` §2's parity requirement), with a dedicated
+parity test (`test:contraindications`) alongside the tree/feature ones.
+
+**Consequences**: this is advisory, not comprehensive — anything not on
+the six-rule list is not checked, and the module's own docstring says so.
+Extending coverage means adding another `ContraindicationRule` entry in
+both languages, not building toward a general interaction engine.

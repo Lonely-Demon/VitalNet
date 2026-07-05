@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:parity": "node tests/treeParity.test.mjs",
-    "test:feature-parity": "node tests/featureParity.test.mjs"
+    "test:feature-parity": "node tests/featureParity.test.mjs",
+    "test:contraindications": "node tests/contraindications.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",

@@ -121,6 +121,11 @@ preserve parity). The abstention flag is the shipped uncertainty mechanism.
   triage never silently fails.
 - **Transparency:** SHAP explanations accompany model predictions; safety-net /
   floor escalations state their deterministic reason.
+- **Contraindication flags are advisory, not comprehensive:**
+  `app/ml/contraindications.py` checks a small curated list of free-text
+  keyword matches (see `docs/DECISIONS.md` §17) — it never changes the
+  triage tier, only forces `needs_review`, and does not attempt general
+  drug-drug interaction checking (no structured drug database exists here).
 - **No PII in logs:** validation errors are scrubbed of input values
   (`app/main.py`).
 - **Fairness and drift monitoring:** `scripts/fairness_audit.py` (subgroup

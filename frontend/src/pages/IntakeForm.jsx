@@ -274,6 +274,14 @@ export default function IntakeForm() {
                   {offlineTriage.lowConfidence && (
                     <p className="text-xs text-urgent mt-2 font-mono">{t('intakeForm.result.lowConfidenceShort')}</p>
                   )}
+                  {offlineTriage.contraindicationFlags?.length > 0 && (
+                    <div className="mt-3 text-left text-xs text-urgent bg-urgent/5 border border-urgent/20 rounded-lg p-3">
+                      <p className="font-semibold mb-1">{t('intakeForm.result.contraindicationTitle')}</p>
+                      <ul className="list-disc ml-4 space-y-1">
+                        {offlineTriage.contraindicationFlags.map((flag) => <li key={flag}>{flag}</li>)}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
               {offlineTriage?.triageLevel === 'EMERGENCY' && (
@@ -301,6 +309,14 @@ export default function IntakeForm() {
                   {result.triage_level}
                 </span>
               </div>
+              {result.contraindication_flags?.length > 0 && (
+                <div className="mb-4 text-left text-xs text-urgent bg-urgent/5 border border-urgent/20 rounded-lg p-3">
+                  <p className="font-semibold mb-1">{t('intakeForm.result.contraindicationTitle')}</p>
+                  <ul className="list-disc ml-4 space-y-1">
+                    {result.contraindication_flags.map((flag) => <li key={flag}>{flag}</li>)}
+                  </ul>
+                </div>
+              )}
               {result.triage_level === 'EMERGENCY' && <AmbulanceCallButton />}
               <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">{t('intakeForm.result.successTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">{result.risk_driver}</p>

@@ -65,6 +65,8 @@ jobs:
         # class of bug where offline triage silently uses different engineered
         # features than the server for the same patient (see FEATURES_ROADMAP §1.2).
         run: npm run test:feature-parity --prefix frontend
+      - name: Contraindication-flag parity (JS == Python)
+        run: npm run test:contraindications --prefix frontend
       - name: Build
         run: npm run build --prefix frontend
         env:
@@ -120,6 +122,8 @@ jobs:
         run: npm run test:parity --prefix frontend
       - name: Feature-engineering parity (JS == Python)
         run: npm run test:feature-parity --prefix frontend
+      - name: Contraindication-flag parity (JS == Python)
+        run: npm run test:contraindications --prefix frontend
       - name: Build
         run: npm run build --prefix frontend
         env:
