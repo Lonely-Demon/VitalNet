@@ -571,7 +571,10 @@ frontend/src/
 │   │                          EmergencySmsAlert (offline-emergency sms: URI intent —
 │   │                          shown in IntakeForm's queued-result view when the local
 │   │                          triage is EMERGENCY; PHI-free fixed message body, see
-│   │                          docs/DECISIONS.md §14).
+│   │                          docs/DECISIONS.md §14), AmbulanceCallButton (tel:108
+│   │                          intent, shown alongside the EMERGENCY result online AND
+│   │                          offline — docs/DECISIONS.md §16 on why this is a phone
+│   │                          call and not a dispatch integration).
 │   └── admin/                 AdminUsers (includes the CSV bulk-import upload/preview
 │                              flow), AdminFacilities, AdminStats, AdminAuditLog.
 public/

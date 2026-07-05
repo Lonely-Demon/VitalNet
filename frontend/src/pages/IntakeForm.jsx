@@ -9,6 +9,7 @@ import { useDraftSave } from '../hooks/useDraftSave'
 import { validateForm } from '../utils/validation'
 import VoiceInputButton from '../components/VoiceInputButton'
 import { EmergencySmsAlert } from '../components/EmergencySmsAlert'
+import { AmbulanceCallButton } from '../components/AmbulanceCallButton'
 
 // Stable English identifiers — these are the actual values submitted to the
 // API (chief_complaint is a free-text-ish field, not a coded enum server-
@@ -275,7 +276,12 @@ export default function IntakeForm() {
                   )}
                 </div>
               )}
-              {offlineTriage?.triageLevel === 'EMERGENCY' && <EmergencySmsAlert />}
+              {offlineTriage?.triageLevel === 'EMERGENCY' && (
+                <>
+                  <AmbulanceCallButton />
+                  <EmergencySmsAlert />
+                </>
+              )}
               <div className="mb-6">
                 <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide shadow-sm bg-sand text-urgent border border-urgent/20 font-mono">
                   {t('intakeForm.result.savedOfflineBadge')}
@@ -295,6 +301,7 @@ export default function IntakeForm() {
                   {result.triage_level}
                 </span>
               </div>
+              {result.triage_level === 'EMERGENCY' && <AmbulanceCallButton />}
               <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">{t('intakeForm.result.successTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">{result.risk_driver}</p>
             </>

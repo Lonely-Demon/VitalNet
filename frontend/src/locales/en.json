@@ -123,7 +123,10 @@
       "emergencySmsDescription": "This case is offline and classified EMERGENCY. If the facility has cell signal, send a workflow alert by SMS so staff know to check the queue as soon as this device reconnects. This message carries no patient details.",
       "emergencySmsButton": "Alert facility by SMS",
       "emergencySmsBody": "VitalNet ALERT: an EMERGENCY-classified case is queued offline at this facility's ASHA worker device. Please check the VitalNet queue as soon as possible. This is an automated workflow alert, not a clinical recommendation.",
-      "emergencySmsNoNumber": "No facility phone number on file — choose a contact manually in your messaging app."
+      "emergencySmsNoNumber": "No facility phone number on file — choose a contact manually in your messaging app.",
+      "ambulanceCallTitle": "Need an ambulance?",
+      "ambulanceCallDescription": "Call 108, India's national ambulance and emergency helpline. This works over a normal phone call, even without a data connection. Availability depends on your area — it may not be reachable everywhere.",
+      "ambulanceCallButton": "Call 108"
     },
     "preliminary": {
       "label": "Preliminary triage",

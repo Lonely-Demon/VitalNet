@@ -337,3 +337,26 @@ the first time via the server path, since availability no longer requires
 deployment, the endpoint returns `503` and the hook silently falls back to
 the browser path on browsers that support it, or surfaces the existing
 `unsupported`/`failed` error state on ones that don't.
+
+### 16. Ambulance alert ships as a `tel:108` intent, not a dispatch integration
+
+**Context**: a nearest-ambulance-dispatch feature was proposed. Research
+into India's 108 emergency ambulance service (operated mainly by GVK EMRI
+under contract to 17 state governments, ~9,600 ambulances) found that it
+already does GPS-based nearest-ambulance dispatch **internally**, but does
+not expose a public API a third-party app can call into.
+
+**Decision**: ship only the tier that needs nobody's permission — a
+`tel:108` call intent (`AmbulanceCallButton.jsx`), shown alongside the
+EMERGENCY triage result exactly where `EmergencySmsAlert.jsx` already
+sits, both online and offline. A self-maintained ambulance registry
+(mirroring the `facilities` table) and a formal GVK EMRI dispatch
+integration were both considered and explicitly **not** built: the
+registry adds an ongoing maintenance burden for a resource this project's
+own target areas often don't have, and the dispatch integration requires
+a government partnership this codebase cannot secure by writing more code.
+
+**Consequences**: this is a deliberately modest feature — a phone call,
+not a coordinated dispatch. It works precisely because it depends on
+nothing VitalNet doesn't already control (a static phone number), at the
+cost of not being as capable as a real dispatch integration would be.
