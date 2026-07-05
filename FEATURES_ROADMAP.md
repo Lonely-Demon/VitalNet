@@ -866,6 +866,49 @@ persisted or shown.
 
 ---
 
+## Tier 1c — Round-3 additions — ✅ ALL DONE
+
+The user asked for a supervisor dashboard, an outbreak dashboard, a
+protocol/guideline lookup assistant, and a researched, documented decision
+on the role/access model. All three features are built; the role decision
+is docs/DECISIONS.md §25.
+
+### 1c.1 Supervisor role + team-metrics dashboard — ✅ DONE
+
+**Status**: Implemented. Fourth role `supervisor`, modeled on NHM's real
+ASHA Facilitator role (docs/DECISIONS.md §25) — facility-scoped,
+aggregate-only, non-PHI. `GET /api/supervisor/team-metrics`
+(`app/api/routes/supervisor_routes.py`) returns per-ASHA-worker submission
+count, needs_review/contraindication/deterioration rates, and tier
+distribution, using one narrow `supabase_admin` aggregate query (same
+exception class as §20/§22). `SupervisorPanel.jsx`/`TeamMetrics.jsx` render
+it; `AdminUsers.jsx`/`admin_routes.py` widened to provision the role.
+
+### 1c.2 Outbreak early-warning dashboard — ✅ DONE
+
+**Status**: Implemented. CDC's EARS C1 method (docs/DECISIONS.md §26): a
+(facility, symptom) pair is flagged when today's count exceeds the 7-day
+trailing baseline mean + 3 standard deviations, gated by a minimum floor.
+`GET /api/outbreak/signals` (`app/api/routes/outbreak_routes.py`), visible
+to `doctor`/`supervisor`/`admin`. `OutbreakSignals.jsx` is shared across
+Doctor/Supervisor/Admin panels. Informational only — explicitly not framed
+as a validated surveillance system.
+
+### 1c.3 Protocol/guideline lookup assistant — ✅ DONE
+
+**Status**: Implemented, informed by ASHABot's own published design
+(docs/DECISIONS.md §27). `generate_protocol_answer` (`app/services/llm.py`)
+is a fully separate LLM call path from the triage briefing, grounded via
+`protocol_knowledge.md` context-stuffing, refusing patient-specific
+questions. `POST /api/protocol/ask`, `GET .../questions`, `PATCH
+.../questions/{id}/curate` (`app/api/routes/protocol_routes.py`); new
+`protocol_questions` table (migration `phase25_...`) uses real RLS
+(facility-wide SELECT for every role — no PHI). `ProtocolAssistant.jsx` is
+shared across all four panels (ask/view for `asha_worker`, plus curation
+for `doctor`/`supervisor`/`admin`).
+
+---
+
 ## Explicitly out of scope for this roadmap
 
 - **Native mobile app (React Native/Flutter)**: the PWA approach

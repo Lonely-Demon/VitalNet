@@ -83,10 +83,20 @@ docs — start with whichever matches what you're trying to do:
   `docs/DECISIONS.md` §10, a patient-safety decision, not an oversight).
 - **Voice-to-text intake assist**: Browser-native speech-to-text on
   free-text fields, gated on connectivity (Chrome's engine needs it).
-- **Role-based access**: Three roles — `asha_worker`, `doctor`, `admin` —
-  enforced both via backend `require_role()` dependencies and Supabase Row
-  Level Security. An Admin panel manages users (including CSV bulk
-  onboarding), facilities, system stats, and the PHI audit log.
+- **Role-based access**: Four roles — `asha_worker`, `doctor`, `supervisor`,
+  `admin` — enforced both via backend `require_role()` dependencies and
+  Supabase Row Level Security. `supervisor` (modeled on NHM's real ASHA
+  Facilitator role) gets a facility-scoped, aggregate-only, non-PHI team
+  dashboard — see `docs/DECISIONS.md` §25. An Admin panel manages users
+  (including CSV bulk onboarding), facilities, system stats, and the PHI
+  audit log.
+- **Outbreak signals**: a lightweight EARS C1 aberration-detection
+  dashboard over facility symptom counts — informational only, not a
+  validated surveillance system (`docs/DECISIONS.md` §26).
+- **Protocol assistant**: a grounded guideline lookup tool (ANC schedule,
+  immunisation schedule, danger signs, referral criteria) informed by
+  ASHABot's own published design, with async human curation instead of its
+  too-slow synchronous consensus (`docs/DECISIONS.md` §27).
 - **Production hardening**: per-user API rate limiting (`slowapi`),
   structured JSON logging, Pydantic-validated/bounded request schemas,
   prompt-injection-resistant LLM context building, a global exception

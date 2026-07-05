@@ -991,6 +991,15 @@ victim's budget.
   and `golden_vectors.json` must always be regenerated together from the same
   `train_classifier.py` run — never independently. The `npm run test:parity` CI
   check fails if the JS offline path desyncs from the server model.
+- `generate_protocol_answer` (`llm.py`) must stay a fully separate call path
+  from `generate_briefing` — never take patient vitals/symptoms as input,
+  never share the triage system prompt. This is what makes it structurally
+  impossible for the protocol assistant to influence a triage decision.
+- `supervisor` must never be added to `case_records`' row-level SELECT
+  policy — its only sanctioned access to case-derived data is the aggregate
+  `supabase_admin` queries in `supervisor_routes.py`/`outbreak_routes.py`
+  (docs/DECISIONS.md §25/§26). If a future feature needs supervisor to see
+  more, add another narrow aggregate, don't widen the row-level policy.
 
 ## 8. Keeping this document current
 
