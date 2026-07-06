@@ -21,7 +21,7 @@ shap==0.51.0
 # README.md's "3.11+ also works for local development"). Revisit once this
 # project's local-dev floor moves to 3.12+, ideally alongside a retrain to
 # re-verify the pkl round-trips cleanly under the new numpy.
-numpy==2.2.6
+numpy==2.5.1
 # httpx is capped below 0.28 because supabase==2.10.0 requires httpx>=0.26,<0.28 —
 # bumping past that needs a supabase-py upgrade too (a bigger, separately-risky
 # change — postgrest/gotrue/realtime all move together), not a solo httpx bump.
