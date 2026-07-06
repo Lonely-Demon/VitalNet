@@ -27,6 +27,9 @@ const PREECLAMPSIA_SEVERE_SYMPTOMS = new Set(['severe_headache', 'severe_abdomin
 
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v))
 
+// 'altered_consciousness' -> 'altered consciousness', comma-joined and sorted.
+const readable = (symptomCodes) => [...symptomCodes].map((s) => s.replace(/_/g, ' ')).sort().join(', ')
+
 /**
  * Extreme-presentation safety net. Returns a human-readable reason (→ EMERGENCY)
  * or null. Mirrors classifier.py::_safety_net_check.
@@ -35,8 +38,7 @@ export function safetyNetCheck(formData) {
   const symptoms = new Set(formData.symptoms || [])
   const hits = [...symptoms].filter((s) => CRITICAL_SYMPTOMS_OVERRIDE.has(s))
   if (hits.length) {
-    const readable = hits.map((h) => h.replace(/_/g, ' ')).sort().join(', ')
-    return `Critical symptom present: ${readable}`
+    return `Critical symptom present: ${readable(hits)}`
   }
 
   const age = num(formData.patient_age)
@@ -57,8 +59,7 @@ export function safetyNetCheck(formData) {
   if (bpSys !== null && bpSys >= 180) {
     const neuro = [...symptoms].filter((s) => HYPERTENSIVE_NEURO.has(s))
     if (neuro.length) {
-      const readable = neuro.map((h) => h.replace(/_/g, ' ')).sort().join(', ')
-      return `Hypertensive crisis (systolic BP ${bpSys} mmHg) with neurological symptom(s): ${readable} — possible hypertensive encephalopathy/stroke`
+      return `Hypertensive crisis (systolic BP ${bpSys} mmHg) with neurological symptom(s): ${readable(neuro)} — possible hypertensive encephalopathy/stroke`
     }
   }
 
@@ -73,8 +74,7 @@ export function safetyNetCheck(formData) {
       if (bpSys >= 140 || bpDia >= 90) {
         const hit = [...symptoms].filter((s) => PREECLAMPSIA_SEVERE_SYMPTOMS.has(s))
         if (hit.length) {
-          const readable = hit.map((h) => h.replace(/_/g, ' ')).sort().join(', ')
-          return `Hypertension in pregnancy (BP ${bpSys}/${bpDia} mmHg) with severe feature(s): ${readable} — possible preeclampsia with severe features`
+          return `Hypertension in pregnancy (BP ${bpSys}/${bpDia} mmHg) with severe feature(s): ${readable(hit)} — possible preeclampsia with severe features`
         }
       }
     }

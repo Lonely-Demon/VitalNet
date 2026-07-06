@@ -4,7 +4,7 @@ VitalNet Classifier Interface.
 Loads the single unified HistGradientBoostingClassifier (see
 backend/scripts/train_classifier.py for training + the clinical rationale)
 and exposes:
-  - predict_triage() / run_triage() — main prediction entry point
+  - predict_triage() — main prediction entry point
   - get_classifier_info() — startup/health-check introspection
 
 Two safety layers run on every prediction, in order:
@@ -61,6 +61,12 @@ CRITICAL_SYMPTOMS_OVERRIDE = {
 # Practice Bulletin 222) — used only alongside is_pregnant + a preeclampsia-
 # range BP reading below (docs/DECISIONS.md §30).
 PREECLAMPSIA_SEVERE_SYMPTOMS = {"severe_headache", "severe_abdominal_pain"}
+
+
+def _readable(symptom_codes: set) -> str:
+    """'altered_consciousness' -> 'altered consciousness', comma-joined and sorted."""
+    return ", ".join(sorted(s.replace("_", " ") for s in symptom_codes))
+
 
 # ── NEWS2 "concerning single vital" floor (C1) ─────────────────────────────
 # The safety net (above) escalates EXTREME single vitals straight to EMERGENCY.
@@ -187,7 +193,7 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
     symptoms = set(form_data.get("symptoms") or [])
     hit = symptoms & CRITICAL_SYMPTOMS_OVERRIDE
     if hit:
-        readable = ", ".join(sorted(h.replace("_", " ") for h in hit))
+        readable = _readable(hit)
         return f"Critical symptom present: {readable}"
 
     age = form_data.get("patient_age")
@@ -212,7 +218,7 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
             "severe_headache", "weakness_one_side", "difficulty_speaking", "altered_consciousness",
         }
         if neuro_hit:
-            readable = ", ".join(sorted(h.replace("_", " ") for h in neuro_hit))
+            readable = _readable(neuro_hit)
             return (
                 f"Hypertensive crisis (systolic BP {bp_sys} mmHg) with neurological "
                 f"symptom(s): {readable} — possible hypertensive encephalopathy/stroke"
@@ -231,7 +237,7 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
                 )
             preeclampsia_hit = symptoms & PREECLAMPSIA_SEVERE_SYMPTOMS
             if (bp_sys >= 140 or bp_dia >= 90) and preeclampsia_hit:
-                readable = ", ".join(sorted(h.replace("_", " ") for h in preeclampsia_hit))
+                readable = _readable(preeclampsia_hit)
                 return (
                     f"Hypertension in pregnancy (BP {bp_sys}/{bp_dia} mmHg) with severe "
                     f"feature(s): {readable} — possible preeclampsia with severe features"
@@ -379,7 +385,3 @@ def get_classifier_info() -> Dict[str, Any]:
         },
         "is_enhanced": False,  # legacy field name kept for API stability
     }
-
-
-# Backwards-compatible alias — cases.py imports run_triage
-run_triage = predict_triage

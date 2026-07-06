@@ -93,12 +93,12 @@ sys.path.insert(0, BACKEND_DIR)
 sys.path.insert(0, os.path.dirname(__file__))  # for tree_export
 
 from app.ml.clinical_features import ClinicalFeatureEngineer  # noqa: E402
+from app.ml.classifier import CRITICAL_SYMPTOMS_OVERRIDE  # noqa: E402
 from tree_export import onnx_to_tree_json, evaluate_tree_json  # noqa: E402
 
 MODELS_DIR = os.path.join(BACKEND_DIR, "app", "ml", "models")
 PKL_PATH = os.path.join(MODELS_DIR, "triage_classifier.pkl")
 FRONTEND_MODELS_DIR = os.path.join(PROJECT_ROOT, "frontend", "public", "models")
-ONNX_DIR = FRONTEND_MODELS_DIR  # retained name; used only as the models output dir
 FEATURES_CONFIG_PATH = os.path.join(FRONTEND_MODELS_DIR, "features_config.json")
 # Offline inference (Option 6): the browser loads this compact tree JSON and
 # evaluates it in pure JS — no onnxruntime-web WASM. See scripts/tree_export.py.
@@ -145,12 +145,6 @@ COMPLAINTS_EMERGENCY = [
     "Altered consciousness / confusion", "Seizure", "Severe bleeding", "Injury / trauma",
 ]
 CONDITIONS_POOL = ["", "", "", "diabetes", "hypertension", "asthma", "heart disease", "copd", "kidney disease"]
-
-CRITICAL_SYMPTOMS_OVERRIDE = {"altered_consciousness", "seizure", "severe_bleeding", "swelling_face_throat"}
-
-
-def clip(val, lo, hi):
-    return max(lo, min(hi, val))
 
 
 # ---------------------------------------------------------------------------
@@ -369,11 +363,11 @@ def _correlated_vitals(age, severity):
         temp = {"hyperthermia": 41.2, "hypothermia": 33.5}.get(pattern, np.random.normal(37.5, 1.2))
 
     return dict(
-        hr=int(clip(hr, 25, 220)),
-        bp_sys=int(clip(bp_sys, 50, 260)),
-        bp_dia=int(clip(bp_dia, 25, 160)),
-        spo2=int(clip(spo2, 60, 100)),
-        temp=round(float(clip(temp, 30.0, 43.0)), 1),
+        hr=int(np.clip(hr, 25, 220)),
+        bp_sys=int(np.clip(bp_sys, 50, 260)),
+        bp_dia=int(np.clip(bp_dia, 25, 160)),
+        spo2=int(np.clip(spo2, 60, 100)),
+        temp=round(float(np.clip(temp, 30.0, 43.0)), 1),
     )
 
 
@@ -474,7 +468,7 @@ def _apply_missing_vitals(vitals: dict) -> dict:
 
 
 def generate_patient(severity, allow_missing=True):
-    age = int(clip(np.random.exponential(32) + (5 if severity in ("severe", "critical") else 0), 0, 95))
+    age = int(np.clip(np.random.exponential(32) + (5 if severity in ("severe", "critical") else 0), 0, 95))
     sex = np.random.choice(["male", "female"], p=[0.49, 0.51])
     vitals = _correlated_vitals(age, severity)
     reference_month = int(np.random.randint(1, 13))
@@ -493,9 +487,9 @@ def generate_patient(severity, allow_missing=True):
         conditions = np.random.choice(["diabetes", "heart disease", "hypertension"])
     elif severity in ("severe", "critical") and edge < 0.16:
         # sepsis-without-fever pattern
-        vitals["bp_sys"] = int(clip(np.random.normal(92, 8), 78, 104))
-        vitals["hr"] = int(clip(np.random.normal(116, 10), 100, 140))
-        vitals["temp"] = round(float(clip(np.random.normal(36.6, 0.5), 35.5, 37.6)), 1)
+        vitals["bp_sys"] = int(np.clip(np.random.normal(92, 8), 78, 104))
+        vitals["hr"] = int(np.clip(np.random.normal(116, 10), 100, 140))
+        vitals["temp"] = round(float(np.clip(np.random.normal(36.6, 0.5), 35.5, 37.6)), 1)
         symptoms = _sample_symptoms(severity, reference_month, location)
     else:
         symptoms = _sample_symptoms(severity, reference_month, location)

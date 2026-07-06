@@ -10,8 +10,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.core.auth import require_role
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
-from app.core.database import get_supabase_for_user
-from app.api.routes.cases import _authorize_case_row_access, _parse_uuid, _resolved_role, limiter
+from app.core.database import get_supabase_for_user, extract_bearer_token
+from app.api.routes.cases import _fetch_authorized_case, _parse_uuid, _resolved_role, limiter
 
 router = APIRouter(prefix="/api/security", tags=["security"])
 
@@ -29,21 +29,10 @@ async def soft_delete_case(
         raise HTTPException(status_code=400, detail="Missing device binding header")
 
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
-    case = (
-        db.table("case_records")
-        .select("id, submitted_by, facility_id, deleted_at")
-        .eq("id", case_uuid)
-        .maybe_single()
-        .execute()
-    )
-    row = (case.data if case else None) or {}
-    if not row or row.get("deleted_at") is not None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    _authorize_case_row_access(user, row)
+    row = _fetch_authorized_case(db, case_uuid, user)
 
     update_result = (
         db.table("case_records")

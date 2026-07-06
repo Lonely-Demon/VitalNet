@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from app.core.auth import require_role
 from app.core.database import supabase_admin
 from app.core.scoping import resolve_facility_scope
-from app.api.routes.cases import limiter
+from app.api.routes.cases import limiter, _resolved_role, _resolved_facility
 
 logger = logging.getLogger("vitalnet")
 
@@ -108,8 +108,8 @@ async def get_team_metrics(
     if not (1 <= days <= MAX_WINDOW_DAYS):
         raise HTTPException(status_code=400, detail=f"days must be between 1 and {MAX_WINDOW_DAYS}")
 
-    role = user.get("resolved_role") or ""
-    scoped_facility_id = resolve_facility_scope(role, user.get("resolved_facility_id"), facility_id)
+    role = _resolved_role(user)
+    scoped_facility_id = resolve_facility_scope(role, _resolved_facility(user), facility_id)
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 

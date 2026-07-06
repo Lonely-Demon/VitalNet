@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import require_role
 from app.core.config import settings
-from app.core.database import get_supabase_for_user, supabase_admin
+from app.core.database import get_supabase_for_user, supabase_admin, extract_bearer_token
 from app.services.push import push_emergency_alert
 from app.api.routes.cases import limiter
 
@@ -43,7 +43,7 @@ async def subscribe(
     if not settings.vapid_public_key or not settings.vapid_private_key:
         raise HTTPException(status_code=503, detail="Push notifications are not configured on this server")
 
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
     db.table("push_subscriptions").upsert(
@@ -68,7 +68,7 @@ async def unsubscribe(
     authorization: str = Header(None),
     user: dict = Depends(require_role("doctor", "admin")),
 ):
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     db.table("push_subscriptions").delete().eq("endpoint", endpoint).eq("user_id", user["sub"]).execute()
     return {"status": "unsubscribed"}

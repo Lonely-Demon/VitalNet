@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from app.core.auth import require_role
 from app.core.database import supabase_admin
 from app.core.scoping import resolve_facility_scope
-from app.api.routes.cases import limiter
+from app.api.routes.cases import limiter, _resolved_role, _resolved_facility
 
 logger = logging.getLogger("vitalnet")
 
@@ -114,8 +114,8 @@ async def get_outbreak_signals(
     Scope: doctor/supervisor are always restricted to their own facility;
     admin defaults to system-wide, or narrows via `facility_id`.
     """
-    role = user.get("resolved_role") or ""
-    scoped_facility_id = resolve_facility_scope(role, user.get("resolved_facility_id"), facility_id)
+    role = _resolved_role(user)
+    scoped_facility_id = resolve_facility_scope(role, _resolved_facility(user), facility_id)
 
     today = datetime.now(timezone.utc).date().isoformat()
     since = (datetime.now(timezone.utc) - timedelta(days=BASELINE_DAYS + 1)).isoformat()

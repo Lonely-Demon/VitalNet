@@ -8,15 +8,14 @@ status beyond just reviewed/unreviewed.
 import logging
 from datetime import datetime, timezone
 from typing import Literal
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.core.auth import require_role
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
-from app.core.database import get_supabase_for_user, supabase_admin
-from app.api.routes.cases import limiter
+from app.core.database import get_supabase_for_user, supabase_admin, extract_bearer_token
+from app.api.routes.cases import limiter, _parse_uuid, _resolved_role, _resolved_facility
 
 logger = logging.getLogger("vitalnet")
 
@@ -54,13 +53,6 @@ class UpdateFacilityCapacityRequest(BaseModel):
     capacity_status: Literal["available", "limited", "full"]
 
 
-def _parse_uuid(value: str, field: str = "id") -> str:
-    try:
-        return str(UUID(value))
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"Invalid {field}")
-
-
 # ── Facility picker (for the referral target dropdown) ────────────────────────
 
 
@@ -85,9 +77,9 @@ async def list_active_facilities(
     now) and is sorted least-loaded first — a suggestion, not an
     enforcement; the doctor can still choose any facility in the list.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
-    facility_id = user.get("resolved_facility_id")
+    facility_id = _resolved_facility(user)
 
     query = (
         db.table("facilities")
@@ -150,10 +142,10 @@ async def update_facility_capacity(
     automated capacity check.
     """
     facility_uuid = _parse_uuid(facility_id, "facility_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
-    role = user.get("resolved_role") or ""
-    own_facility_id = user.get("resolved_facility_id")
+    role = _resolved_role(user)
+    own_facility_id = _resolved_facility(user)
 
     if role != "admin" and (not own_facility_id or own_facility_id != facility_uuid):
         raise HTTPException(status_code=403, detail="Can only update your own facility's capacity")
@@ -203,10 +195,10 @@ async def create_referral(
     """
     case_uuid = _parse_uuid(case_id, "case_id")
     receiving_facility_uuid = _parse_uuid(body.receiving_facility_id, "receiving_facility_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
-    role = user.get("resolved_role") or ""
-    facility_id = user.get("resolved_facility_id")
+    role = _resolved_role(user)
+    facility_id = _resolved_facility(user)
 
     case_result = (
         db.table("case_records")
@@ -276,10 +268,10 @@ async def list_referrals(
     filters which). A doctor with no facility_id sees nothing, matching the
     scoping convention used by get_cases/review_case elsewhere.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
-    role = user.get("resolved_role") or ""
-    facility_id = user.get("resolved_facility_id")
+    role = _resolved_role(user)
+    facility_id = _resolved_facility(user)
 
     if role != "admin" and not facility_id:
         return {"referrals": []}
@@ -322,10 +314,10 @@ async def update_referral_status(
     forward-only ALLOWED_TRANSITIONS state machine.
     """
     referral_uuid = _parse_uuid(referral_id, "referral_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
-    role = user.get("resolved_role") or ""
-    facility_id = user.get("resolved_facility_id")
+    role = _resolved_role(user)
+    facility_id = _resolved_facility(user)
 
     existing = (
         db.table("referrals")

@@ -6,6 +6,14 @@ Transforms raw patient data into clinically meaningful features for ML classific
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
+# Symptoms tracked as individual boolean flags — used both as standalone
+# basic features and as inputs to the symptom-interaction cluster features.
+_TRACKED_SYMPTOMS = ('chest_pain', 'breathlessness', 'altered_consciousness', 'severe_bleeding', 'seizure', 'high_fever')
+
+# Location-string keyword match used by both the geographic-disease-risk and
+# healthcare-access-score features.
+_RURAL_LOCATION_TERMS = ('village', 'rural', 'remote', 'tribal')
+
 
 class ClinicalFeatureEngineer:
     """
@@ -73,17 +81,14 @@ class ClinicalFeatureEngineer:
             'spo2': float(raw_data.get('spo2', -1) or -1),
             'heart_rate': float(raw_data.get('heart_rate', -1) or -1),
             'temperature': float(raw_data.get('temperature', -1) or -1),
-            'symptom_count': float(len([s for s in symptoms if s in [
-                'chest_pain', 'breathlessness', 'altered_consciousness',
-                'severe_bleeding', 'seizure', 'high_fever'
-            ]])),
-            'chest_pain': 1.0 if 'chest_pain' in symptoms else 0.0,
-            'breathlessness': 1.0 if 'breathlessness' in symptoms else 0.0,
-            'altered_consciousness': 1.0 if 'altered_consciousness' in symptoms else 0.0,
-            'severe_bleeding': 1.0 if 'severe_bleeding' in symptoms else 0.0,
-            'seizure': 1.0 if 'seizure' in symptoms else 0.0,
-            'high_fever': 1.0 if 'high_fever' in symptoms else 0.0,
+            'symptom_count': float(len([s for s in symptoms if s in _TRACKED_SYMPTOMS])),
+            **self._symptom_flags(symptoms),
         }
+
+    def _symptom_flags(self, symptoms: List[str]) -> Dict[str, float]:
+        """1.0/0.0 flag for each of _TRACKED_SYMPTOMS — shared by the basic
+        features above and the symptom-interaction clusters below."""
+        return {name: (1.0 if name in symptoms else 0.0) for name in _TRACKED_SYMPTOMS}
 
     def _engineer_vital_features(self, raw_data: Dict[str, Any]) -> Dict[str, float]:
         """Engineer vital sign-derived features"""
@@ -119,12 +124,13 @@ class ClinicalFeatureEngineer:
         symptoms = raw_data.get('symptoms', [])
         bp_sys = raw_data.get('bp_systolic', 120)
 
-        chest_pain = 1.0 if 'chest_pain' in symptoms else 0.0
-        breathlessness = 1.0 if 'breathlessness' in symptoms else 0.0
-        altered_consciousness = 1.0 if 'altered_consciousness' in symptoms else 0.0
-        severe_bleeding = 1.0 if 'severe_bleeding' in symptoms else 0.0
-        seizure = 1.0 if 'seizure' in symptoms else 0.0
-        high_fever = 1.0 if 'high_fever' in symptoms else 0.0
+        flags = self._symptom_flags(symptoms)
+        chest_pain = flags['chest_pain']
+        breathlessness = flags['breathlessness']
+        altered_consciousness = flags['altered_consciousness']
+        severe_bleeding = flags['severe_bleeding']
+        seizure = flags['seizure']
+        high_fever = flags['high_fever']
 
         return {
             'cardiopulmonary_cluster': chest_pain * breathlessness,
@@ -556,8 +562,7 @@ class ClinicalFeatureEngineer:
         areas (weaker vector control, greater distance to the nearest PHC).
         """
         location_lower = location.lower()
-        rural_terms = ['village', 'rural', 'remote', 'tribal']
-        if any(term in location_lower for term in rural_terms):
+        if any(term in location_lower for term in _RURAL_LOCATION_TERMS):
             return 1.2
         return 1.0
 
@@ -566,8 +571,7 @@ class ClinicalFeatureEngineer:
         location_lower = location.lower()
 
         # Rural indicators
-        rural_terms = ['village', 'rural', 'remote', 'tribal']
-        if any(term in location_lower for term in rural_terms):
+        if any(term in location_lower for term in _RURAL_LOCATION_TERMS):
             return 0.5  # Lower accessibility
 
         # Urban indicators

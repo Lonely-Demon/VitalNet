@@ -14,10 +14,10 @@ from slowapi import Limiter
 from app.core.auth import require_role, verify_sub_for_rate_limit
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
-from app.core.database import get_supabase_for_user, supabase_admin
+from app.core.database import get_supabase_for_user, supabase_admin, extract_bearer_token
 from app.core.metrics import record_triage_classification
 from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput, PATIENT_KEY_RE
-from app.ml.classifier import run_triage
+from app.ml.classifier import predict_triage
 from app.services.llm import generate_briefing, generate_patient_summary
 from app.services.push import push_emergency_alert
 
@@ -72,7 +72,7 @@ def _parse_uuid(value: str, field: str = "id") -> str:
 
 def _normalized_iso_ts(value: str, field: str) -> str:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc).isoformat()
@@ -144,6 +144,28 @@ def _authorize_case_row_access(user: dict, row: dict) -> None:
     raise HTTPException(status_code=403, detail="Not authorized for this case")
 
 
+def _fetch_authorized_case(db, case_uuid: str, user: dict) -> dict:
+    """
+    Fetch a non-deleted case row by id (404 if missing/deleted), then apply
+    _authorize_case_row_access (403 if not authorized). Shared by every
+    endpoint that acts on a single existing case (review, triage-override,
+    outcome, soft-delete).
+    """
+    result = (
+        db.table("case_records")
+        .select("id, facility_id, submitted_by, deleted_at")
+        .eq("id", case_uuid)
+        .maybe_single()
+        .execute()
+    )
+    row = (result.data if result else None) or {}
+    if not row or row.get("deleted_at") is not None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    _authorize_case_row_access(user, row)
+    return row
+
+
 # ── Submit Case ────────────────────────────────────────────────────────────────
 
 
@@ -172,9 +194,9 @@ async def submit_case(
 
     # Step 1: Classifier + SHAP (always runs — LLM-independent)
     try:
-        triage_result = run_triage(form_data)
+        triage_result = predict_triage(form_data)
         briefing = await generate_briefing(form_data, triage_result)
-        raw_token = (authorization or "").split(" ", 1)[-1]
+        raw_token = extract_bearer_token(authorization)
         db = get_supabase_for_user(raw_token)
 
         deterioration_alert, deterioration_visit_count = _check_deterioration_pattern(
@@ -325,7 +347,7 @@ async def get_cases(
     facility_id assigned see all cases (unscoped), same as before this
     endpoint had scoping.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
     facility_id = _resolved_facility(user)
@@ -406,22 +428,11 @@ async def review_case(
     if they somehow obtained its id).
     """
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
 
-    case_result = (
-        db.table("case_records")
-        .select("id, facility_id, submitted_by, deleted_at")
-        .eq("id", case_uuid)
-        .maybe_single()
-        .execute()
-    )
-    case_row = (case_result.data if case_result else None) or {}
-    if not case_row or case_row.get("deleted_at") is not None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    _authorize_case_row_access(user, case_row)
+    case_row = _fetch_authorized_case(db, case_uuid, user)
 
     update_result = db.table("case_records").update(
         {
@@ -476,22 +487,11 @@ async def override_triage(
     Scoped the same way as review_case.
     """
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
 
-    case_result = (
-        db.table("case_records")
-        .select("id, facility_id, submitted_by, deleted_at")
-        .eq("id", case_uuid)
-        .maybe_single()
-        .execute()
-    )
-    case_row = (case_result.data if case_result else None) or {}
-    if not case_row or case_row.get("deleted_at") is not None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    _authorize_case_row_access(user, case_row)
+    case_row = _fetch_authorized_case(db, case_uuid, user)
 
     update_result = db.table("case_records").update(
         {
@@ -544,22 +544,11 @@ async def record_case_outcome(
     Scoped the same way as review_case.
     """
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
 
-    case_result = (
-        db.table("case_records")
-        .select("id, facility_id, submitted_by, deleted_at")
-        .eq("id", case_uuid)
-        .maybe_single()
-        .execute()
-    )
-    case_row = (case_result.data if case_result else None) or {}
-    if not case_row or case_row.get("deleted_at") is not None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    _authorize_case_row_access(user, case_row)
+    case_row = _fetch_authorized_case(db, case_uuid, user)
 
     result = db.table("case_outcomes").insert(
         {
@@ -607,7 +596,7 @@ async def get_my_cases(
     RLS enforces ownership at DB level; the explicit filter is for clarity.
     Returns a limited column set — full briefing JSONB is doctor-facing only.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     limit = max(1, min(limit, 100))
 
@@ -672,7 +661,7 @@ async def get_cases_by_patient_key(
     if not PATIENT_KEY_RE.match(key):
         raise HTTPException(status_code=400, detail="Invalid patient_key format")
 
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
     facility_id = _resolved_facility(user)
@@ -722,7 +711,7 @@ async def get_case_detail(
 ):
     """Returns the full record including briefing JSONB for one case after ownership/facility authorization checks."""
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
     result = (
@@ -771,7 +760,7 @@ async def case_patient_summary(
     layered on the case, not part of the clinical record.
     """
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
     result = (

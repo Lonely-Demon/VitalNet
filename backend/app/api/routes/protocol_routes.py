@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.core.auth import require_role
-from app.core.database import get_supabase_for_user
+from app.core.database import get_supabase_for_user, extract_bearer_token
 from app.services.llm import generate_protocol_answer
 from app.api.routes.cases import limiter
 
@@ -62,7 +62,7 @@ async def ask_protocol_question(
     if not facility_id:
         raise HTTPException(status_code=400, detail="Account has no facility assigned")
 
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
     result = await generate_protocol_answer(body.question_text, body.language)
@@ -102,7 +102,7 @@ async def list_protocol_questions(
     `facility_id`/`status` params here are just query narrowing, not an
     access grant.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
     query = db.table("protocol_questions").select("*").order("created_at", desc=True)
@@ -136,7 +136,7 @@ async def curate_protocol_answer(
     facility; require_role here is a clean 403 for other roles, not the
     enforcement itself.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
     update = {
