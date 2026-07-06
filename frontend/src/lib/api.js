@@ -5,7 +5,7 @@
  *   - @/api/auth.js       → authHeaders
  *   - @/api/cases.js      → getCases, reviewCase, getMySubmissions, overrideTriage, recordCaseOutcome, getPatientSummary, getCaseHistoryByPatientKey
  *   - @/api/admin.js      → adminList/Create/Update/Deactivate/Reactivate users + facilities + stats
- *   - @/api/analytics.js  → getAnalyticsSummary, getEmergencyRate
+ *   - @/api/analytics.js  → getAnalyticsSummary, getResponseTimes
  *   - @/api/supervisor.js → getTeamMetrics
  *   - @/api/outbreak.js   → getOutbreakSignals
  *   - @/api/protocol.js   → askProtocolQuestion, listProtocolQuestions, curateProtocolAnswer
@@ -31,7 +31,7 @@ export {
   adminGetStats,
   adminGetAuditLog,
 } from '@/api/admin'
-export { getAnalyticsSummary, getEmergencyRate, getResponseTimes, getMlAgreement, exportCases } from '@/api/analytics'
+export { getAnalyticsSummary, getResponseTimes, getMlAgreement, exportCases } from '@/api/analytics'
 export { listActiveFacilities, createReferral, listReferrals, updateReferralStatus, updateFacilityCapacity } from '@/api/referrals'
 export { getTeamMetrics } from '@/api/supervisor'
 export { getOutbreakSignals } from '@/api/outbreak'

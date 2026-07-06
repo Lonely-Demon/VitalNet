@@ -2,6 +2,7 @@
  * auth.js — Stateless Supabase auth helpers.
  * No state stored here; all auth helpers are pure functions.
  */
+import { v4 as uuidv4 } from 'uuid'
 import { supabase } from '@/lib/supabase'
 
 const DEVICE_ID_KEY = 'vn_device_id'
@@ -14,14 +15,24 @@ const DEVICE_ID_KEY = 'vn_device_id'
 export function getDeviceId() {
   let deviceId = localStorage.getItem(DEVICE_ID_KEY)
   if (!deviceId) {
-    deviceId = typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c =>
-          (+c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))).toString(16)
-        )
+    deviceId = uuidv4()
     localStorage.setItem(DEVICE_ID_KEY, deviceId)
   }
   return deviceId
+}
+
+/**
+ * Standard header shape for an already-known access token. Exported so
+ * callers holding their own session (e.g. syncStore.js, which fetches and
+ * null-checks the session itself) don't need to re-fetch it via authHeaders().
+ */
+export function buildAuthHeaders(token) {
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`,
+    'X-Device-Id': getDeviceId(),
+    'X-CSRF-Token': 'vitalnet-spa',
+  }
 }
 
 /**
@@ -31,10 +42,5 @@ export function getDeviceId() {
 export async function authHeaders() {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) throw new Error('Not authenticated')
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${session.access_token}`,
-    'X-Device-Id': getDeviceId(),
-    'X-CSRF-Token': 'vitalnet-spa',
-  }
+  return buildAuthHeaders(session.access_token)
 }

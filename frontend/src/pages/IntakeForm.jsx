@@ -96,6 +96,16 @@ const BADGE_COLORS = {
   ROUTINE: "bg-routine/10 text-routine border border-routine/30",
 }
 
+// Preliminary-result card styling — container (border + faint bg) and badge
+// (bg + text, no border) classes per tier, keyed the same way as BADGE_COLORS
+// but distinct shapes, so not reused from it. Unrecognized tiers fall back to
+// ROUTINE styling (matches the previous ternary chains' behavior).
+const PRELIM_RESULT_STYLES = {
+  EMERGENCY: { container: "border-emergency/30 bg-emergency/5", badge: "bg-emergency/10 text-emergency" },
+  URGENT: { container: "border-urgent/30 bg-urgent/5", badge: "bg-urgent/10 text-urgent" },
+  ROUTINE: { container: "border-routine/30 bg-routine/5", badge: "bg-routine/10 text-routine" },
+}
+
 const emptyForm = {
   patient_name: "",
   patient_age: "",
@@ -378,6 +388,10 @@ export default function IntakeForm() {
       </div>
     )
   }
+
+  const prelimStyle = localResult
+    ? (PRELIM_RESULT_STYLES[localResult.triageLevel] || PRELIM_RESULT_STYLES.ROUTINE)
+    : null
 
   return (
     <form onSubmit={handleSubmit} className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300 relative pb-32">
@@ -672,21 +686,9 @@ export default function IntakeForm() {
 
       {/* Preliminary Triage Result Display */}
       {localResult && (
-        <div className={`mt-4 rounded-lg border p-4 animate-fade-up ${
-          localResult.triageLevel === 'EMERGENCY'
-            ? 'border-emergency/30 bg-emergency/5'
-            : localResult.triageLevel === 'URGENT'
-            ? 'border-urgent/30 bg-urgent/5'
-            : 'border-routine/30 bg-routine/5'
-        }`}>
+        <div className={`mt-4 rounded-lg border p-4 animate-fade-up ${prelimStyle.container}`}>
           <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center rounded-pill px-3 py-1 text-xs font-bold tracking-widest uppercase font-mono ${
-              localResult.triageLevel === 'EMERGENCY'
-                ? 'bg-emergency/10 text-emergency'
-                : localResult.triageLevel === 'URGENT'
-                ? 'bg-urgent/10 text-urgent'
-                : 'bg-routine/10 text-routine'
-            }`}>
+            <span className={`inline-flex items-center rounded-pill px-3 py-1 text-xs font-bold tracking-widest uppercase font-mono ${prelimStyle.badge}`}>
               {localResult.triageLevel}
             </span>
             <span className="text-sm font-medium text-text2">

@@ -32,24 +32,19 @@ export default function ASHAPanel() {
 
   // Process any queued offline submissions on mount and on every 'online' event
   useEffect(() => {
-    processQueue().then(result => {
+    function notifySyncResult(result) {
       if (result.synced > 0) {
         showToast(`${result.synced} offline submission${result.synced > 1 ? 's' : ''} synced`, 'success')
       }
       if (result.requiresLogin) {
         showToast('Please sign in again to sync offline submissions', 'warning')
       }
-    })
+    }
+
+    processQueue().then(notifySyncResult)
 
     function handleOnline() {
-      processQueue().then(result => {
-        if (result.synced > 0) {
-          showToast(`${result.synced} submission${result.synced > 1 ? 's' : ''} synced`, 'success')
-        }
-        if (result.requiresLogin) {
-          showToast('Re-login required to sync offline submissions', 'warning')
-        }
-      })
+      processQueue().then(notifySyncResult)
     }
 
     window.addEventListener('online', handleOnline)

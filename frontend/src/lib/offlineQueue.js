@@ -1,23 +1,6 @@
-import { openDB } from 'idb'
+import { getOfflineDB } from './offlineDB'
 
-const DB_NAME    = 'vitalnet_offline'
 const STORE_NAME = 'submission_queue'
-
-async function getQueueDB() {
-  return openDB(DB_NAME, 2, {
-    upgrade(db, oldVersion) {
-      // Create submission_queue (fresh install or upgrading from nothing)
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'client_id' })
-        store.createIndex('queued_at', 'queued_at')
-      }
-      // Create form-drafts store (added in v2 — see useDraftSave.js)
-      if (!db.objectStoreNames.contains('form-drafts')) {
-        db.createObjectStore('form-drafts')
-      }
-    }
-  })
-}
 
 function notifyQueueChange() {
   window.dispatchEvent(new CustomEvent('offline-queue-changed'))
@@ -27,7 +10,7 @@ const MAX_QUEUE_SIZE = 50
 
 /** Queue a submission for later sync. No token stored — fresh token fetched at sync time. */
 export async function enqueue(clientId, payload) {
-  const db = await getQueueDB()
+  const db = await getOfflineDB()
 
   // Guard: refuse to queue if at capacity
   const count = await db.count(STORE_NAME)
@@ -45,17 +28,17 @@ export async function enqueue(clientId, payload) {
 }
 
 export async function dequeue(clientId) {
-  const db = await getQueueDB()
+  const db = await getOfflineDB()
   await db.delete(STORE_NAME, clientId)
   notifyQueueChange()
 }
 
 export async function getAllQueued() {
-  const db = await getQueueDB()
+  const db = await getOfflineDB()
   return db.getAllFromIndex(STORE_NAME, 'queued_at')
 }
 
 export async function getQueueCount() {
-  const db = await getQueueDB()
+  const db = await getOfflineDB()
   return db.count(STORE_NAME)
 }

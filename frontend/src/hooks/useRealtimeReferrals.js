@@ -1,5 +1,5 @@
 // frontend/src/hooks/useRealtimeReferrals.js
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 
 /**
@@ -15,8 +15,6 @@ import { supabase } from '../lib/supabase'
  * @param {string}   options.facilityId - Filters to referrals touching this facility (optional; omit for admin/global)
  */
 export function useRealtimeReferrals({ onInsert, onUpdate, facilityId } = {}) {
-  const channelRef = useRef(null)
-
   useEffect(() => {
     const channelName = `referrals_${facilityId ?? 'all'}_${Date.now()}`
     let channel = supabase.channel(channelName)
@@ -43,7 +41,6 @@ export function useRealtimeReferrals({ onInsert, onUpdate, facilityId } = {}) {
     }
 
     channel.subscribe()
-    channelRef.current = channel
 
     return () => {
       supabase.removeChannel(channel)
