@@ -13,9 +13,9 @@ google-generativeai==0.8.6
 # regenerated triage_classifier.pkl + triage_classifier.onnx in the same
 # change, or the app will crash at startup (load_classifier() raises).
 scikit-learn==1.9.0
-# shap==0.51.0 — do not downgrade to 0.46.0 (source build fails on Windows+Python 3.13)
+# shap==0.52.0 — do not downgrade to 0.46.0 (source build fails on Windows+Python 3.13)
 # do not upgrade past 0.51.x without re-verifying SHAP round-trip on triage_classifier.pkl
-shap==0.51.0
+shap==0.52.0
 # numpy is held below 2.4 for now — 2.5.x requires Python >=3.12, which
 # would break local dev on the documented-supported Python 3.11 floor (see
 # README.md's "3.11+ also works for local development"). Revisit once this
