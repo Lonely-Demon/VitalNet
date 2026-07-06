@@ -25,7 +25,7 @@ numpy==2.2.6
 # httpx is capped below 0.28 because supabase==2.10.0 requires httpx>=0.26,<0.28 —
 # bumping past that needs a supabase-py upgrade too (a bigger, separately-risky
 # change — postgrest/gotrue/realtime all move together), not a solo httpx bump.
-httpx==0.27.2
+httpx==0.28.1
 python-jose[cryptography]==3.5.0
 supabase==2.10.0
 email-validator==2.3.0
