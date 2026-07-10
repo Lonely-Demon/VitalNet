@@ -3,7 +3,6 @@
 // it to the patient (printed, or shown for a photo) for their next visit.
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import QRCode from 'qrcode'
 
 export function PatientKeyCard({ patientKey }) {
   const { t } = useTranslation()
@@ -12,7 +11,11 @@ export function PatientKeyCard({ patientKey }) {
   useEffect(() => {
     let cancelled = false
     if (!patientKey) return
-    QRCode.toDataURL(patientKey, { width: 200, margin: 1 })
+    // Lazy-load the qrcode library only when a card actually renders (after a
+    // successful submission), so its ~50 KB stays out of the ASHA worker's
+    // initial panel chunk — a real cold-start win on 2 GB-class devices.
+    import('qrcode')
+      .then(({ default: QRCode }) => QRCode.toDataURL(patientKey, { width: 200, margin: 1 }))
       .then(url => { if (!cancelled) setQrDataUrl(url) })
       .catch(() => { if (!cancelled) setQrDataUrl(null) })
     return () => { cancelled = true }
