@@ -142,18 +142,32 @@ proportionally more of).
 - No respiratory rate or supplemental-O2 status (not collected by the intake
   form), so the NEWS2 approximation omits those parameters.
 - Trained for rural Indian primary care; not validated elsewhere.
-- The safety net's paediatric HR floor is intentionally conservative (may
-  over-triage some children to URGENT — an accepted safe-side tradeoff).
-- **No age-adjusted or altitude-adjusted "normal" vital ranges in the
-  trained model itself** (distinct from the floor above): a hemodynamically
-  normal infant (e.g. HR 140 bpm, which is unremarkable for a 6-month-old)
-  or an asymptomatic chronic high-altitude resident (baseline SpO2 ~88%) can
-  be over-triaged by the *model's own learned judgment*, not just the
-  deterministic floor — confirmed via an independent validation review
-  (`docs/DECISIONS.md` §30). Over-triage (safer direction), not fixed this
-  pass; the correct fix is enriching `train_classifier.py`'s synthetic
-  generator with age/altitude-aware baselines and retraining, not a
-  safety-net rule.
+- The safety net's + NEWS2 floor's paediatric thresholds are intentionally
+  conservative and NOT age-adjusted (they must stay dead-simple and mirror
+  1:1 in JS): a normal infant's HR ~140 or systolic BP ~85 can be floored to
+  URGENT by the adult NEWS2 bands. This is mild over-triage in the safe
+  direction (never EMERGENCY, never a missed escalation) — an accepted
+  tradeoff, unchanged in v3.1.0.
+- **Model-level infant over-triage — FIXED in v3.1.0** (was a documented
+  limitation in v3.0.0): a hemodynamically normal infant (e.g. 6-month-old,
+  HR 140, BP 85/55 — all normal for age) was previously escalated to
+  EMERGENCY by the *model's own judgment* because (a) the synthetic-label
+  scorer age-adjusted HR and temperature but **not systolic BP**, so a normal
+  infant's low-for-adult BP scored as "hypotension" and the label itself said
+  EMERGENCY, and (b) infants were only ~1.7% of the training set. v3.1.0 adds
+  an age-banded paediatric BP scorer (PALS 5th-percentile hypotension
+  thresholds), age-appropriate BP generation, an age-gated qSOFA hypotension
+  criterion, and ~22% paediatric oversampling. That exact case now classifies
+  URGENT (the conservative floor), not EMERGENCY, while genuinely sick
+  children (frank hypotension for age, SpO2 84, neonatal fever) still escalate
+  correctly. See `docs/DECISIONS.md` §31.
+- **Altitude over-triage — still a documented limitation** (not fixable
+  without an altitude field): an asymptomatic chronic high-altitude resident
+  with baseline SpO2 ~88% is escalated (URGENT by the floor, sometimes
+  EMERGENCY by the model). Without an altitude/baseline-SpO2 input the app
+  cannot distinguish adapted chronic hypoxia from acute hypoxia, and treating
+  an isolated SpO2 of 88 as concerning is the clinically safe default. A
+  future `baseline_spo2` or altitude field would resolve it.
 - **No monotonic constraints (considered, currently infeasible):** several
   engineered features are constructed as unambiguous "higher = worse" scores
   (`shock_index`, `sepsis_risk_score`, `hemodynamic_instability`,

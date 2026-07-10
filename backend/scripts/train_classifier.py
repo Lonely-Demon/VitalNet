@@ -110,7 +110,7 @@ GOLDEN_PATH = os.path.join(GOLDEN_DIR, "golden_vectors.json")
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
-MODEL_VERSION = "3.0.0"
+MODEL_VERSION = "3.1.0"
 LABEL_MAP = {0: "ROUTINE", 1: "URGENT", 2: "EMERGENCY"}
 
 engineer = ClinicalFeatureEngineer()
@@ -218,6 +218,38 @@ def _pediatric_hr_score(age, hr):
     return 3
 
 
+def _pediatric_bp_score(age, bp_sys):
+    """Age-banded systolic-BP scoring. A normal infant's systolic BP (~80-95)
+    is 'hypotensive' by adult bands, so scoring it with _bp_sys_score labels a
+    perfectly healthy infant EMERGENCY (the documented over-triage in
+    MODEL_CARD.md / DECISIONS.md §30). Thresholds use the standard PALS
+    5th-percentile hypotension definition:
+        neonate (<1mo):  SBP < 60
+        infant (1-12mo): SBP < 70
+        child (1-<12yr): SBP < 70 + 2*age
+    Adolescents (>=12) fall back to the adult bands (adult hypotension applies).
+    """
+    if bp_sys is None:
+        return 0
+    if age >= 12:
+        return _bp_sys_score(bp_sys)
+    if age < 1 / 12:
+        hypo = 60
+    elif age < 1:
+        hypo = 70
+    else:
+        hypo = 70 + 2 * age
+    if bp_sys < hypo:
+        return 3            # frank hypotension for age
+    if bp_sys < hypo + 8:
+        return 2            # borderline-low for age
+    if bp_sys < hypo + 15:
+        return 1
+    if bp_sys >= 140:
+        return 2            # paediatric hypertension is genuinely concerning
+    return 0
+
+
 def _pediatric_temp_score(age, temp):
     """Fever in infants is weighted more heavily — same clinical principle as
     ClinicalFeatureEngineer._pediatric_fever_assessment (neonatal fever is a
@@ -234,7 +266,7 @@ def _pediatric_temp_score(age, temp):
 def news2_like_score(age, bp_sys, hr, spo2, temp):
     """Aggregate 0-15+ vital-derangement score. Age-adjusted for paediatrics."""
     spo2_s = _spo2_score(spo2)
-    bp_s = _bp_sys_score(bp_sys)
+    bp_s = _pediatric_bp_score(age, bp_sys) if age < 18 else _bp_sys_score(bp_sys)
     temp_s = _pediatric_temp_score(age, temp) if age < 18 else _temp_score(temp)
     hr_s = _pediatric_hr_score(age, hr) if age < 18 else _adult_hr_score(hr)
 
@@ -248,11 +280,14 @@ def news2_like_score(age, bp_sys, hr, spo2, temp):
     return spo2_s + bp_s + temp_s + hr_s, max(spo2_s, bp_s, temp_s, hr_s)
 
 
-def qsofa_score(bp_sys, altered_consciousness):
+def qsofa_score(bp_sys, altered_consciousness, age=40):
     """Simplified qSOFA (respiratory rate is not collected by VitalNet's
-    intake form, so this uses the two available qSOFA criteria)."""
+    intake form, so this uses the two available qSOFA criteria). qSOFA is
+    validated for ADULTS; SBP<=100 is normal for a young child, so the
+    hypotension criterion is only applied at age>=12 (altered mentation is
+    concerning at any age)."""
     score = 0
-    if bp_sys is not None and bp_sys <= 100:
+    if age >= 12 and bp_sys is not None and bp_sys <= 100:
         score += 1
     if altered_consciousness:
         score += 1
@@ -275,7 +310,7 @@ def assign_triage_label(patient: dict) -> int:
         return 2
 
     aggregate, worst_single = news2_like_score(age, bp_sys, hr, spo2, temp)
-    qsofa = qsofa_score(bp_sys, "altered_consciousness" in symptoms)
+    qsofa = qsofa_score(bp_sys, "altered_consciousness" in symptoms, age)
 
     concerning_symptom_count = len(symptoms & {
         "chest_pain", "breathlessness", "high_fever", "severe_abdominal_pain",
@@ -314,7 +349,11 @@ def _correlated_vitals(age, severity):
     low BP + high HR together, not independently sampled). The TRUE label is
     computed afterwards by assign_triage_label(), independent of this hint."""
     base_hr = 75 + max(0, 18 - age) * 2 - max(0, age - 60) * 0.15
-    base_bp = 118 + max(0, age - 40) * 0.4
+    # Age-appropriate baseline systolic BP: children run LOWER than adults
+    # (~85 in infancy rising ~2/yr), so anchoring to the adult ~118 would make
+    # the generator emit physiologically-impossible infants and the model would
+    # never see the normal-low-BP-infant pattern it must learn (DECISIONS.md §30).
+    base_bp = (85 + 2.0 * age) if age < 12 else (118 + max(0, age - 40) * 0.4)
 
     if severity == "healthy":
         hr = np.random.normal(base_hr, 10)
@@ -467,8 +506,21 @@ def _apply_missing_vitals(vitals: dict) -> dict:
     return v
 
 
-def generate_patient(severity, allow_missing=True):
-    age = int(np.clip(np.random.exponential(32) + (5 if severity in ("severe", "critical") else 0), 0, 95))
+def _sample_age(severity, pediatric):
+    """Adult ages follow an exponential (most patients are working-age adults).
+    When `pediatric`, draw a child age skewed young (infants/toddlers) so the
+    model sees enough normal-for-age paediatric physiology to learn the age
+    interaction — the fix for the documented infant over-triage
+    (MODEL_CARD.md / DECISIONS.md §30). Roughly half of paediatric draws are
+    under 2, where adult vital bands are most wrong."""
+    if pediatric:
+        # Mixture: heavy under-2 mass, tapering to 17.
+        return float(np.clip(np.random.exponential(3.5), 0, 17))
+    return int(np.clip(np.random.exponential(32) + (5 if severity in ("severe", "critical") else 0), 0, 95))
+
+
+def generate_patient(severity, allow_missing=True, pediatric=False):
+    age = _sample_age(severity, pediatric)
     sex = np.random.choice(["male", "female"], p=[0.49, 0.51])
     vitals = _correlated_vitals(age, severity)
     reference_month = int(np.random.randint(1, 13))
@@ -534,13 +586,21 @@ def build_dataset():
     severities = ["healthy", "mild", "moderate", "severe", "critical"]
     severity_weights = [0.30, 0.22, 0.22, 0.16, 0.10]  # oversample severe/critical for label yield
 
+    # Fraction of draws forced to paediatric ages (<18, skewed to infants).
+    # The natural adult-exponential age draw yields only ~1.7% infants, far too
+    # few for the model to learn age-normalised vitals — the root cause of the
+    # documented infant over-triage. Oversampling here (paired with the
+    # age-aware label scorer + age-appropriate BP generation above) is the fix.
+    PEDIATRIC_FRACTION = 0.22
+
     print(f"[1/9] Generating synthetic patients (target {N_PER_CLASS}/class, "
-          f"{NUM_FEATURES} features)...")
+          f"{NUM_FEATURES} features, ~{int(PEDIATRIC_FRACTION*100)}% paediatric)...")
     attempts = 0
     while min(len(v) for v in buckets.values()) < N_PER_CLASS:
         attempts += 1
         severity = np.random.choice(severities, p=severity_weights)
-        patient = generate_patient(severity)
+        pediatric = np.random.random() < PEDIATRIC_FRACTION
+        patient = generate_patient(severity, pediatric=pediatric)
         label = assign_triage_label(patient)
         if len(buckets[label]) < N_PER_CLASS:
             buckets[label].append(patient)
@@ -576,17 +636,31 @@ def main():
     print("[3/9] Training HistGradientBoostingClassifier ...")
     # Class weights favour EMERGENCY recall — a missed emergency is far more
     # costly than a false-positive urgent flag in this clinical context.
-    clf = HistGradientBoostingClassifier(
+    # max_leaf_nodes caps each tree's size — the primary lever on the shipped
+    # triage_trees.json footprint (what a decade-old phone downloads and parses
+    # offline). 24 leaves keeps accuracy within noise of the default 31 while
+    # shrinking the JSON meaningfully; the safety net + NEWS2 floor still
+    # guarantee the unambiguous emergencies independent of model capacity.
+    HGB_PARAMS = dict(
         max_iter=450,
         max_depth=7,
-        learning_rate=0.06,
+        max_leaf_nodes=24,
+        # A slightly higher learning rate converges in materially FEWER boosting
+        # iterations, so the shipped triage_trees.json (what a decade-old phone
+        # downloads and parses) is smaller — the primary efficiency lever here.
+        # Paired with a tighter early-stopping patience so training stops as
+        # soon as the held-out loss plateaus rather than padding out more trees.
+        learning_rate=0.09,
         l2_regularization=0.5,
-        class_weight={0: 1.0, 1: 2.0, 2: 6.0},
+        # EMERGENCY weight bumped 6->7 to protect emergency recall against the
+        # faster/shorter fit and the harder age-conditional boundaries.
+        class_weight={0: 1.0, 1: 2.0, 2: 7.0},
         random_state=RANDOM_SEED,
         early_stopping=True,
         validation_fraction=0.1,
-        n_iter_no_change=25,
+        n_iter_no_change=18,
     )
+    clf = HistGradientBoostingClassifier(**HGB_PARAMS)
     clf.fit(X_train, y_train)
 
     print("[4/9] Evaluating on held-out test set ...")
@@ -609,11 +683,7 @@ def main():
     print("[4b/9] Stratified 5-fold cross-validation (robustness beyond one split) ...")
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_SEED)
     cv_pred = cross_val_predict(
-        HistGradientBoostingClassifier(
-            max_iter=450, max_depth=7, learning_rate=0.06, l2_regularization=0.5,
-            class_weight={0: 1.0, 1: 2.0, 2: 6.0}, random_state=RANDOM_SEED,
-            early_stopping=True, validation_fraction=0.1, n_iter_no_change=25,
-        ),
+        HistGradientBoostingClassifier(**HGB_PARAMS),
         X, y, cv=skf,
     )
     cv_acc = accuracy_score(y, cv_pred)

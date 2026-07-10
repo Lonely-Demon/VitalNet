@@ -1059,3 +1059,85 @@ demonstrate. Phase 1 and the stress test in this same review are the
 counter-example: same target code, correct field names, legitimately clean
 results across 3,491 cases — proof the classifier itself was never the
 problem for those findings.
+
+### 31. Model v3.1.0 — age-aware paediatric labels, bit-exact float32 parity, and a lighter model
+
+**Context**: a round-5 ML pass targeting three explicit goals — maximum
+accuracy, the lightest possible model for decade-old hardware, and closing
+the documented infant over-triage limitation (§30 / MODEL_CARD). All three
+were achieved together; the model shrank while the paediatric limitation was
+fixed and calibration held.
+
+**Root cause of the infant over-triage (a label bug, not just data
+sparsity)**: `train_classifier.py`'s synthetic-label scorer age-adjusted
+heart rate (`_pediatric_hr_score`) and temperature (`_pediatric_temp_score`)
+but scored systolic BP with adult bands (`_bp_sys_score`) at every age. A
+6-month-old's perfectly normal systolic BP (~85) is "hypotensive" by adult
+bands, so the scorer stamped a healthy infant's *label* EMERGENCY, and the
+model faithfully learned it. Confirmed by direct probe: `shock_index`
+(HR/SBP) for that infant is 1.65 (adult "shock" > ~0.9) and
+`hemodynamic_instability` 10.0 — the feature engineering is adult-anchored
+too. Infants were also only ~1.7% of the exponential-age training draw, so
+the model had few counter-examples.
+
+**Fix (all in `train_classifier.py`, the training-time scorer/generator —
+the trained artifacts change, no inference-code or JS feature-engineering
+change)**:
+1. `_pediatric_bp_score(age, bp_sys)` — age-banded systolic-BP scoring using
+   the standard PALS 5th-percentile hypotension thresholds (neonate <60,
+   infant <70, child <70+2·age), routed in `news2_like_score` for age<18.
+2. Age-gated the qSOFA hypotension criterion (SBP≤100 is normal for a young
+   child; only applied at age≥12).
+3. Age-appropriate BP *generation* — `_correlated_vitals` now anchors a
+   child's baseline systolic BP to ~85+2·age instead of the adult ~118, so
+   the generator emits physiologically real infants and the model actually
+   sees the normal-low-BP-infant pattern.
+4. ~22% paediatric oversampling (`_sample_age`, `PEDIATRIC_FRACTION`), skewed
+   to under-2s where adult bands are most wrong.
+
+Result: the exact 6-month-old case (HR 140, BP 85/55, all normal) now
+classifies **URGENT** (the conservative NEWS2 floor — mild, safe over-triage
+that stays documented and unchanged) instead of **EMERGENCY**, while
+genuinely sick children (frank hypotension for age, SpO2 84, neonatal fever)
+still escalate correctly. The deterministic layers were deliberately left
+adult-tuned and untouched — they must stay dead-simple and JS-mirrored, and
+their residual URGENT flooring is the safe direction.
+
+**Bit-exact float32 parity (a genuine hardening of the safety-critical
+online/offline agreement)**: the retrain surfaced a latent parity bug. The
+offline JS tree evaluator and its Python reference (`tree_export.py`) compared
+`x <= threshold` in float64 against a threshold decimal-rounded to 9 places,
+while the server casts features to `np.float32` before `predict`. A feature
+value landing exactly on a split threshold (common for low-cardinality
+discrete features) could therefore take a different branch offline vs online —
+2 of 5,400 held-out samples diverged (adjacent tiers, at genuine model
+boundaries, but a real divergence). The old model passed only by luck. **Fix**:
+both evaluators now cast *both* operands to float32 in the comparison
+(`np.float32(...)` / `Math.fround(...)`), which snaps the rounded threshold
+back to the identical float32 the server used — making
+sklearn == onnx == tree-JSON == JS bit-identical. Verified: 0 disagreements
+across the full held-out set, and `treeEvaluator.js` remains a 1:1 mirror of
+the reference. The 9-decimal JSON rounding is kept (compactness) since the
+float32 cast makes it lossless for the comparison.
+
+**Efficiency (the "lightest possible" goal)**: `max_leaf_nodes=24` (from the
+default 31) plus a faster learning rate (0.09) with tighter early-stopping
+patience (18) converge in fewer boosting iterations. The shipped
+`triage_trees.json` — the artifact a 2 GB phone downloads and parses offline
+— dropped from **1,236 KB / 747 trees to 934 KB / 702 trees (~24% smaller)**
+with no loss of accuracy. EMERGENCY class weight was nudged 6→7 to protect
+emergency recall against the shorter fit.
+
+**Metrics (v3.1.0, held-out balanced test / 5-fold CV / realistic
+prevalence)**: ~98.7% / 98.6% accuracy, CV EMERGENCY recall 0.985, ECE 0.003
+(balanced) / 0.009 (realistic-prevalence), realistic-prevalence accuracy
+~99.3%. The handful of model-level EMERGENCY misses are adjacent-tier
+(EMERGENCY→URGENT) or caught at inference by the safety net / NEWS2 floor —
+the two-layer guarantee is unchanged. Full numbers regenerate into
+`MODEL_CARD.md` / `CLASSIFIER_CHANGELOG.md` on every training run.
+
+**Deliberately not done**: an altitude / `baseline_spo2` field (the remaining
+over-triage limitation is unresolvable without it, and treating isolated
+SpO2 88 as concerning is the safe default); age-in-months intake capture
+(specced as FEATURES_ROADMAP §4.1 — the model now understands fractional
+infant age, but the integer-year intake field can't yet supply it precisely).
