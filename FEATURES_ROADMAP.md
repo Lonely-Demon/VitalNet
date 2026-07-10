@@ -909,6 +909,255 @@ for `doctor`/`supervisor`/`admin`).
 
 ---
 
+## Tier 4 — Round-5 additions (specs only, not yet built)
+
+These emerged from the round-5 ML-and-hardening pass. Several are direct
+follow-ons to the age-aware classifier work (§ ML retrain, DECISIONS §31):
+the model now reasons about paediatric physiology, but the intake form still
+can't *capture* the inputs that make that reasoning precise (age in months,
+gestational age, weight). The rest are high-value, mostly-deterministic,
+offline-first tools that fit the weak-hardware / poor-connectivity target
+without adding ML risk. Each is written implementation-ready; none is built.
+
+Prioritisation note: 4.1, 4.2, and 4.4 are the highest value-to-effort —
+each is small, each sharpens a clinical-safety guarantee the app already
+makes, and each is pure structured data + deterministic logic (no new
+dependency, no ML retrain, trivially offline). 4.3 and 4.6 are the biggest
+day-to-day utility wins for the health worker. 4.5 and 4.7 build on data
+the app already collects.
+
+### 4.1 Age-in-months entry for infants (< 2 years)
+
+**Why**: `patient_age` is an integer year, so every child under 1 is entered
+as `0` and every child under 2 collapses to `0` or `1`. That erases exactly
+the distinction the safety net and the age-aware classifier depend on most:
+a 2-week-old and an 11-month-old are both "age 0", yet the neonatal-fever
+rule (`age < 0.25` → EMERGENCY on temp ≥ 38) and the paediatric vital bands
+(HR/BP/temp normal ranges change fastest in the first year) diverge sharply
+across that range. The model is now trained on fractional infant ages
+(DECISIONS §31) but at inference receives only integer `0`, so the youngest,
+highest-risk patients are precisely where intake precision is worst. This is
+the single highest-yield data-quality fix for triage safety.
+
+**Effort**: Small.
+
+**Implementation**:
+1. **Schema** (`app/models/schemas.py`): add `age_months: Optional[int]`
+   (bounded 0–23) to `IntakeForm`. Add a validator: when `patient_age == 0`
+   (or `<= 1`), `age_months` may be set; when both are present, the effective
+   age used everywhere downstream is `age_months / 12.0`. Add a computed
+   helper `effective_age_years()` on the model returning
+   `age_months / 12 if age_months is not None else float(patient_age)`.
+2. **Backend wiring** (`cases.py::submit_case`): pass the effective age into
+   `form_data["patient_age"]` before `predict_triage()` and before persisting,
+   so the classifier and the deterministic layers receive the fractional age
+   they already understand. Persist `age_months` in a new nullable
+   `case_records.age_months` column (migration, §1.1 pattern) for audit/recall.
+3. **Frontend** (`IntakeForm.jsx`): render a "Months" number input
+   *conditionally*, only when the entered age is `0` or `1`, right beside the
+   years field (mirror the existing conditional-field pattern used for
+   `is_pregnant`). i18n keys in all three locale files (English placeholder in
+   `hi`/`ta`, per DECISIONS §10). Zod bound in `validation.js` (0–23).
+4. **Offline JS mirror** (`triageClassifier.js`): apply the same
+   `age_months → fractional age` substitution before `buildFeatureMap`, so
+   offline triage uses the precise age too. Add a case to
+   `featureParity.test.mjs`.
+5. **Tests**: `test_classifier_safety.py` — assert a 2-week-old
+   (`age_months=0`) with temp 38.5 is EMERGENCY (neonatal fever) while an
+   18-month-old (`age_months=18`) with the same temp is not force-escalated by
+   that specific rule; assert the effective-age substitution is applied.
+
+### 4.2 Gestational age (weeks) for pregnant patients
+
+**Why**: `is_pregnant` (DECISIONS §30) gates the severe-hypertension /
+preeclampsia rule, but pregnancy risk is strongly gestational-age dependent:
+preeclampsia is a concern from ~20 weeks, preterm labour before 37 weeks is
+itself an emergency pathway, and third-trimester physiology (resting
+tachycardia, lower BP baseline) changes what "normal" vitals mean. A single
+`gestational_weeks` integer unlocks materially better obstetric triage and
+sharper LLM briefings, at near-zero cost, and composes directly with the
+existing pregnancy rule.
+
+**Effort**: Small.
+
+**Implementation**:
+1. **Schema**: `gestational_weeks: Optional[int]` (bounded 0–45) on
+   `IntakeForm`; only meaningful when `is_pregnant` is true (validator: warn,
+   don't reject, if set while `is_pregnant` is false — clinicians mis-tap).
+2. **Deterministic rule** (`classifier.py::_safety_net_check`, mirrored in
+   `clinicalRules.js`): when `is_pregnant` and `gestational_weeks >= 20`, keep
+   the existing ACOG BP thresholds; additionally, `gestational_weeks` in
+   `[20, 37)` **with** `severe_abdominal_pain` or `severe_bleeding` →
+   EMERGENCY (preterm-labour / abruption red flag). Add golden-parity cases to
+   `safetyNet.test.mjs` and `test_classifier_safety.py`.
+3. **Frontend**: conditional "Weeks pregnant" input shown only when
+   `is_pregnant` is checked (same conditional pattern). Persist in a nullable
+   `case_records.gestational_weeks` column.
+4. **LLM briefing** (`llm.py`): include gestational age in the prompt context
+   when present so the differential reflects trimester.
+
+### 4.3 Offline clinical calculators (dose-by-weight, ORS/dehydration, drip rate)
+
+**Why**: The single most-requested day-to-day tool for a rural health worker
+is not triage — it's arithmetic they must get exactly right under pressure:
+paediatric drug dose by weight, ORS volume for a dehydrated child, IV drip
+rate. These are pure deterministic formulae, need no connectivity, carry no
+PHI, and involve no ML. Shipping them as an offline calculator panel turns
+VitalNet from a triage-only tool into the app a worker keeps open all shift,
+which is also the surest route to adoption. Getting these *provably* right is
+the classic "not lazy about correctness" case — each formula gets a table of
+worked reference values as its test.
+
+**Effort**: Medium (mostly careful, well-tested formula work + a simple UI).
+
+**Implementation**:
+1. **Pure module** `frontend/src/utils/clinicalCalculators.js` — no React, no
+   network. Functions: `weightBasedDose({ mgPerKg, weightKg, maxMg })`,
+   `orsVolume({ weightKg, dehydration })` (WHO Plan A/B/C), `ivDripRate(
+   { volumeMl, durationMin, dropFactor })`, `pediatricMaintenanceFluid(
+   weightKg)` (Holliday-Segar 4-2-1). Each returns a value **and** the
+   worked steps (for transparency — a health worker should see the arithmetic,
+   not just trust a black box).
+2. **A curated drug table** `frontend/src/data/pediatricDoses.json` — a
+   *small, explicitly-scoped* list of common essential-medicine paediatric
+   doses (paracetamol, ORS, zinc, amoxicillin, ...), each with a source
+   citation and hard max. **Not** a general prescribing database — a
+   docstring and an on-screen disclaimer must say so, exactly like the
+   contraindication checker's scoping (DECISIONS §17).
+3. **UI**: a new "Calculators" tab/panel (no role restriction — every user
+   gets it), each calculator a small form. Precached by the service worker so
+   it works fully offline. i18n for all labels.
+4. **Tests** (`clinicalCalculators.test.mjs`, node, no framework): a table of
+   worked reference cases per formula (e.g. "15 mg/kg paracetamol × 12 kg =
+   180 mg, capped at 500 mg"); assert exact outputs. This is the runnable
+   check the logic demands.
+5. **Explicitly out of scope**: adult dosing, IV compatibility, anything
+   requiring a real drug database. State this in the module docstring.
+
+### 4.4 Paediatric malnutrition screen (MUAC + weight-for-age z-score)
+
+**Why**: Severe acute malnutrition is one of the highest-impact,
+most-missed rural paediatric red flags, and it is invisible to a
+vitals-and-symptoms triage — a wasted child can have "normal" vitals. MUAC
+(mid-upper-arm circumference) < 115 mm is a WHO-standard, tape-measure-only,
+no-equipment red flag that an ASHA worker can capture in seconds. Adding a
+MUAC field (for children 6–59 months) plus a deterministic flag is a large
+clinical-safety win for a tiny amount of code, and it is exactly the kind of
+"catch what the vitals miss" backstop this app is built around.
+
+**Effort**: Small–medium.
+
+**Implementation**:
+1. **Schema**: `muac_mm: Optional[int]` (bounded 50–250) and optional
+   `weight_kg: Optional[float]` on `IntakeForm`, meaningful for age 0.5–5.
+2. **Deterministic flag** (a new advisory flag, like contraindication_flags —
+   never lowers a tier, only raises review): a helper
+   `check_nutrition_flags(form_data)` in a small module mirrored in JS. MUAC
+   `< 115 mm` (age 6–59 mo) → "Severe acute malnutrition (MUAC <115 mm) —
+   refer" and **floor the tier at URGENT** (via the existing NEWS2-floor
+   mechanism); MUAC `115–125 mm` → "Moderate acute malnutrition" advisory
+   flag only. Fold into `needs_review` exactly like contraindication flags.
+3. **Frontend**: MUAC input shown conditionally for under-5s; a colour-coded
+   result chip (red/yellow/green mirroring the MUAC tape) rendered inline.
+4. **Tests**: `test_classifier_safety.py` — MUAC 110 at age 2 floors to at
+   least URGENT and sets the flag; MUAC 130 does not; MUAC on an adult is
+   ignored. Mirror in a JS parity test.
+5. **Optional extension** (documented, not built): WHO weight-for-age
+   z-score from a bundled LMS table when `weight_kg` + precise age are
+   present — pure lookup, offline; specify the table source (WHO Child
+   Growth Standards) but leave the ~2 KB LMS asset for a follow-up.
+
+### 4.5 Cross-visit vitals trend sparkline for returning patients
+
+**Why**: The patient continuity code (DECISIONS §21) and the cross-visit
+deterioration flag (§22) already collect a patient's visit history, but the
+doctor only ever sees today's snapshot plus a boolean "deterioration"
+alert. A tiny inline sparkline of BP / SpO2 / HR / temp across a returning
+patient's recent visits turns that latent data into at-a-glance clinical
+context — "this is the third visit with a climbing heart rate" — with **zero
+new data collection**, just visualisation of rows already in `case_records`.
+
+**Effort**: Small–medium.
+
+**Implementation**:
+1. **Backend**: extend `GET /api/cases/by-patient-key/{key}` (already exists)
+   to include the vitals columns (`bp_systolic`, `spo2`, `heart_rate`,
+   `temperature`, `created_at`, `triage_level`) in its select, still
+   facility-scoped and audit-logged exactly as now. No new endpoint.
+2. **Frontend**: a dependency-free inline SVG sparkline component
+   (`Sparkline.jsx`, ~40 lines — no chart library, keeps the bundle light per
+   the weak-hardware constraint) rendered on `BriefingCard.jsx` when the case
+   has a `patient_key` with ≥ 2 prior visits. One sparkline per vital, most
+   recent on the right, with the current visit's point emphasised.
+3. **Accessibility**: each sparkline needs a text alternative (e.g. "heart
+   rate over last 4 visits: 78, 92, 110, 124 bpm") per the a11y pass.
+4. **Tests**: a small component test asserting the SVG path is generated from
+   a known series; no clinical-logic test needed (pure visualisation).
+
+### 4.6 Structured SBAR handoff note for referrals
+
+**Why**: The referral workflow (§2.3) records *that* a patient was referred,
+but the receiving facility gets no structured clinical handoff — the single
+biggest cause of information loss at a rural referral. SBAR
+(Situation-Background-Assessment-Recommendation) is the global standard
+handoff format. Auto-drafting an SBAR from data the case *already contains*
+(vitals, symptoms, triage, briefing) gives the receiving clinician a
+complete, skimmable summary and makes the referral genuinely useful, not
+just a status change.
+
+**Effort**: Medium.
+
+**Implementation**:
+1. **Deterministic draft first** (no LLM dependency for the core): a pure
+   function `buildSbar(caseRecord)` assembling S/B/A/R sections from
+   structured fields — Situation (age/sex/chief complaint/duration),
+   Background (known conditions, current meds, prior visits via patient key),
+   Assessment (triage tier + risk driver + any flags), Recommendation
+   (referral reason + urgency). Works fully offline, no network.
+2. **Optional LLM polish** (online only, additive): reuse the existing
+   4-tier LLM fallback (`llm.py`) to smooth the deterministic draft into
+   prose — but the deterministic SBAR is always the fallback and is never
+   *replaced* by the LLM, only reworded; the triage tier stays hard-locked
+   exactly as the briefing does.
+3. **Delivery**: render the SBAR on the referral detail view for both
+   referring and receiving facility; offer "copy to clipboard" and include it
+   in the CSV export (§1b.3). Persist the deterministic SBAR text on the
+   `referrals` row so it's available offline at the receiving end.
+4. **Tests**: assert `buildSbar` produces all four sections from a fixture
+   case and never emits PHI beyond what the case already contains; assert the
+   triage tier in the SBAR always equals the case's tier (the hard-lock
+   invariant).
+
+### 4.7 Confidence-and-acuity review routing for the doctor queue
+
+**Why**: The backend already computes two signals the doctor queue ignores:
+`low_confidence` (model abstention) and `deterioration_alert`. A case that is
+EMERGENCY **and** low-confidence, or one carrying a deterioration/
+contraindication/nutrition flag, is exactly the case a doctor should see
+first and look at hardest — yet today the queue sorts on tier + recency
+alone. Surfacing these signals as sort priority and distinct visual treatment
+routes scarce clinician attention to the riskiest, most-uncertain cases,
+using data already in every row.
+
+**Effort**: Small.
+
+**Implementation**:
+1. **Backend** (`cases.py::get_cases`): add a stable secondary sort so that
+   within a tier, cases with any of `low_confidence`, `deterioration_alert`,
+   `contraindication_flags`, (future) nutrition flag rank above unflagged
+   ones. Keep the keyset-pagination contract intact (extend the composite
+   cursor, don't break it — see the existing `before_priority` logic).
+2. **Frontend** (`DoctorPanel.jsx` pending-review list): a distinct
+   left-border / badge treatment for flagged cases and a one-line reason
+   ("model uncertain", "repeat severe visit", "possible contraindication"),
+   colour-safe per the a11y contrast tokens.
+3. **No schema change** — every signal already exists on the row.
+4. **Tests**: assert the sort places a flagged EMERGENCY above an unflagged
+   EMERGENCY of the same recency; assert pagination stays stable across the
+   new sort key.
+
+---
+
 ## Explicitly out of scope for this roadmap
 
 - **Native mobile app (React Native/Flutter)**: the PWA approach
