@@ -8,8 +8,9 @@
 > *validation-ready*: so that on the day either unlock arrives, evaluation is a
 > command, not a rebuild.
 
-Companion to `backend/app/ml/MODEL_CARD.md`, `docs/CLINICAL_GOVERNANCE.md`, and
-`docs/CLINICAL_RISK_MANAGEMENT.md`.
+Companion to `backend/app/ml/MODEL_CARD.md`, `docs/CLINICAL_GOVERNANCE.md`,
+`docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`,
+and `docs/RULES_PRIMARY_DESIGN.md`.
 
 ## 0. The two unlocks (the actual bottleneck)
 
@@ -31,12 +32,13 @@ These advance the safety case and the deployment goal without new resources.
   `docs/CLINICAL_RISK_MANAGEMENT.md §3`. Decides the rules-primary question on
   evidence.
 - **A2 — ISO 14971 hazard analysis.** *Done* — `docs/CLINICAL_RISK_MANAGEMENT.md`.
-- **A3 — First-class evaluation harness.** Build a single entry point that,
-  given a labelled dataset (synthetic today, real later), reports at the
-  chosen operating point: sensitivity, specificity, PPV, NPV **with 95% CIs**;
-  per-tier confusion; **calibration** (reliability curve + ECE); **subgroup**
-  slices (age band, sex, pregnancy, missing-vital cohorts); and **decision-curve
-  / net-benefit** analysis. Wire real data in by swapping the input only.
+- **A3 — First-class evaluation harness.** *Started* —
+  `backend/scripts/evaluate_on_real.py` reports, given a labelled dataset
+  (synthetic today, real later): sensitivity/specificity/PPV/NPV **with Wilson
+  95% CIs**, per-tier confusion, the **EMERGENCY under-triage safety rate**,
+  **calibration** (reliability + ECE), **subgroup** slices (age band, sex,
+  missing-vital cohorts), and the real-data **guardrail lift**. Wire real data
+  in by swapping the input only. Remaining: add decision-curve / net-benefit.
 - **A4 — Retire the fragile/biasing features (hazards H4, H5).** Replace
   negation-blind free-text keyword matching; reconsider location-as-individual-
   risk multipliers. Re-run parity tests after any `clinical_features.py` change.
@@ -51,11 +53,21 @@ These advance the safety case and the deployment goal without new resources.
   the reviewer, and whether the `low_confidence`/`needs_review` signals
   actually change behaviour. Write findings even without a formal usability
   study.
-- **A7 — Consider the rules-primary architecture inversion.** If A1 shows the
-  model's surviving deviations are non-trivial and undefendable, make the
-  deterministic scorer the *primary* triage and demote the ML to an advisory
-  flag that can only *raise* review, never set the tier. Preserves auditability
-  and makes A5/clinician sign-off tractable.
+- **A7 — Rules-primary architecture inversion.** *Designed* —
+  `docs/RULES_PRIMARY_DESIGN.md`. A1 confirmed the model's surviving deviations
+  are net-negative on safety, so the design makes the deterministic scorer the
+  *primary* triage (`T_final = max(T_rule, T_model)`) and demotes the ML to a
+  safe-direction-only escalator + logged advisory disagreement. Preserves
+  auditability and makes clinician sign-off tractable. **Not wired in** —
+  gated on the §5 validation gate in that doc.
+
+- **A8 — External validation on real public data (no clinician needed).**
+  See `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`: acquire a real,
+  clinician-labelled ED dataset (MIMIC-IV-ED is the best fit) under its licence,
+  map it to VitalNet's schema, and run it through A3's harness. This is the
+  highest-probability way to attack hazard H2 without a clinician — the first
+  real-patient signal VitalNet has ever had (on a proxy population; caveats in
+  that doc).
 
 ## Part B — Retrospective validation study (gated on real data)
 
