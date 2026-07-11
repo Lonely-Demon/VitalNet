@@ -1,0 +1,44 @@
+name: apps/api (Edge Function)
+
+# Round 6 rebuild plan, Phase 3 — the new Deno/Hono edge function backend.
+# Runs independently of the pnpm-based frontend/clinical-core CI (ci.yml)
+# since this app has its own toolchain (Deno, not Node/pnpm) and its own
+# deno.json import map.
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+  push:
+    branches: [main, dev]
+    paths:
+      - "apps/api/**"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: apps/api/supabase/functions/api
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - uses: denoland/setup-deno@v2  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          deno-version: v2.x
+
+      - name: Format check
+        run: deno fmt --check .
+
+      - name: Lint
+        run: deno lint .
+
+      - name: Typecheck
+        run: deno check index.ts
+
+      - name: Test
+        run: deno test --allow-net --allow-env
