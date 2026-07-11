@@ -1156,6 +1156,168 @@ using data already in every row.
    EMERGENCY of the same recency; assert pagination stays stable across the
    new sort key.
 
+### 4.8 ABHA (Ayushman Bharat Health Account) integration — spec only
+
+**Status**: Specification, not implemented. No ABDM sandbox credentials
+exist for this project; nothing below is wired into any code path. This
+section exists so a future implementation has a concrete starting design
+instead of starting from zero, and so VitalNet's existing patient-key
+mechanism (`docs/DECISIONS.md` §21) is deliberately designed to not
+conflict with it.
+
+**Why**: India's Ayushman Bharat Digital Mission (ABDM) issues every
+citizen a portable, opt-in health ID (ABHA number, a 14-digit ID, and/or an
+ABHA address, a human-readable `name@abdm` handle) meant to link health
+records across providers. VitalNet's own patient continuity key
+(`XXXX-XXXX`, generated client-side, internal to this app only — §21) was
+deliberately scoped to solve a narrower, more urgent problem: letting an
+ASHA worker recognize a *returning* patient across visits to *this app*,
+without any dependency on connectivity, a government API, or a patient
+having already enrolled in ABDM (rural enrollment is uneven). ABHA
+integration is a genuinely separate, larger effort — real-time API
+dependency on an external government system, a formal consent-manager
+handshake, and PHI flowing to/from a system outside VitalNet's own audit
+boundary — and is out of scope for the offline-first rural PHC triage tool
+this app currently is. This spec exists so that *if* ABDM integration is
+ever prioritized, it is designed to extend the existing patient-key
+mechanism rather than replace or conflict with it.
+
+**Effort**: Large — genuinely out of scope for an autonomous coding pass;
+requires ABDM sandbox enrollment (a real organizational registration, not
+a code change), a consent-manager integration decision, and likely legal/
+compliance review beyond `docs/COMPLIANCE_DPDP.md`'s current scope (ABDM's
+consent framework is a distinct regulatory regime layered on top of, not
+replacing, DPDP).
+
+**Spec**:
+
+1. **ABDM sandbox first, always.** Any implementation work starts against
+   the ABDM sandbox environment (https://sandbox.abdm.gov.in — a real
+   external dependency to register for, not something this spec can
+   pre-configure) with synthetic ABHA IDs. No real-patient ABHA number is
+   ever exercised against non-production code.
+2. **Capture field, additive and optional.** A new nullable
+   `case_records.abha_id` (or address, whichever the eventual integration
+   targets) column, captured *in addition to* — never instead of — the
+   existing internal `patient_key`. An ASHA worker without a scanner/reader
+   for the patient's ABHA card, or a patient not yet enrolled in ABDM, must
+   be able to submit a case exactly as today, with the field simply absent.
+   ABHA capture is never a submission blocker.
+3. **Patient-key fallback mapping.** `patient_key` remains the primary
+   internal identity `useLocalTriage`/cross-visit deterioration detection
+   (§22) key off, since it is guaranteed available (generated locally,
+   works offline) where `abha_id` is not. If both are present on a
+   patient's records, a mapping table (`patient_key <-> abha_id`, not a
+   replacement of one by the other) lets a future feature reconcile the
+   two without forcing a migration of existing `patient_key`-keyed data.
+   This mapping is itself PHI and inherits the same RLS/audit posture as
+   `case_records`.
+4. **Consent-manager notes.** ABDM requires interaction through a
+   registered Consent Manager (CM) — VitalNet would need to either
+   integrate with an existing CM or the ABDM Consent Manager reference
+   sandbox, and obtain patient consent *through that flow* before any
+   health-record fetch/push, which is a distinct consent artifact from
+   VitalNet's own DPDP consent-capture gate (`docs/COMPLIANCE_DPDP.md`) —
+   the two must not be conflated or treated as satisfying each other.
+   Any future implementation should treat the ABDM consent artifact
+   (a signed consent request/grant, with its own ID and expiry) as a
+   first-class audited record, same posture as `phi_audit_log` today.
+5. **Read scope, deliberately unspecified.** Whether a future integration
+   only *links* an ABHA ID (identity linking, no record exchange) or also
+   *fetches* prior records via ABDM's Health Information Exchange is an
+   explicit open product decision, not decided by this spec — record
+   exchange is a materially larger scope (consent-manager record-fetch
+   flows, FHIR-format health records to parse/display) than identity
+   linking alone, and should be scoped as a separate decision once linking
+   itself is validated.
+6. **Not this app's launch blocker.** See "Pilot v1 scope" below — ABHA
+   integration is explicitly not required for a first pilot deployment.
+
+---
+
+## Pilot v1 scope — launch blockers and surface area
+
+This section names what must be true, and what can reasonably be deferred,
+before VitalNet is used with real patients at any facility, even a small
+controlled pilot. It complements `docs/CLINICAL_GOVERNANCE.md` (regulatory/
+clinical-validation gaps) and `docs/CLINICAL_REVIEW.md` (the rules-engine
+sign-off gate) — this section is about product/deployment scope, not model
+correctness.
+
+### Launch blocker: hi/ta translations are English placeholders
+
+**This blocks any pilot where ASHA workers or doctors are not comfortable
+working in English.** `hi.json`/`ta.json` are currently byte-for-byte
+copies of `en.json` (`apps/web/src/locales/README.md`,
+`docs/DECISIONS.md` §10) — selecting Hindi or Tamil in the language
+switcher changes `document.documentElement.lang` and persists the
+preference, but every displayed string, including every symptom label and
+clinical option, is still English. This was a deliberate choice, not an
+oversight: machine-translating clinical terminology without a clinician
+review pass risks a mistranslated symptom option changing what a worker
+believes they're recording, which is a patient-safety issue, not a
+cosmetic one. Real Hindi/Tamil text requires a clinician (or a qualified
+medical translator with clinician review) pass on every string in
+`en.json`, not just `hi.json`/`ta.json` file population — a coding task
+cannot close this gap. **Any pilot site where the primary working language
+of ASHA workers/doctors is not English should not launch until this is
+done for that site's language**, full stop — English-fluent pilot sites
+(if any exist in VitalNet's actual target deployment geography) are the
+only ones this does not block.
+
+### Pilot v1 surface — what's actually needed for a first controlled trial
+
+A minimal first pilot needs the safety-critical loop and nothing else has
+to be *removed* to be safe — but a smaller surface reduces the training
+burden on a small pilot cohort and narrows what needs monitoring closely
+during an initial trial. Suggested split, for whoever scopes an actual
+pilot to decide against real constraints (facility count, staffing,
+timeline):
+
+**Core (the loop a pilot cannot function without)**:
+- Intake form + consent capture, online and offline (`IntakeForm.jsx`)
+- Local + server triage (rules-first once `docs/CLINICAL_REVIEW.md`'s
+  sign-off lands; hybrid/model-primary until then) with the safety net and
+  NEWS2 floor
+- Doctor review dashboard, override, and outcome recording
+  (`DoctorPanel.jsx`'s Pending Review / All Cases)
+- Offline outbox + background sync (`lib/outbox.js`)
+- PHI audit logging (non-optional, not a feature toggle)
+- `asha_worker`/`doctor` roles, RLS
+
+**Not required for v1** (present in the codebase, genuinely useful, but a
+pilot can defer without compromising the core safety loop):
+- `supervisor` role + Team Metrics dashboard (needs a facility with an
+  actual ASHA-Facilitator-equivalent role staffed to be meaningful)
+- Outbreak Signals dashboard (needs enough facilities reporting for EARS
+  aggregation to mean anything — a single-facility pilot has no population
+  to aggregate over)
+- Protocol/guideline assistant (valuable, but adds an LLM-dependent
+  surface + a curation workflow that's easier to introduce once the core
+  loop is validated)
+- Admin CSV bulk user import, analytics dashboard + CSV export (a handful
+  of pilot users can be onboarded manually; analytics needs volume to be
+  meaningful)
+- Web Push notifications, voice-to-text intake
+- QR patient-continuity card, cross-visit deterioration trend flag (useful
+  once there's a returning-patient population to actually observe)
+- ABHA integration (§4.8 — spec only, not implemented; explicitly not a
+  pilot blocker)
+- The SMS-alert scaffolding and photo-attachment scaffolding (neither has
+  a live endpoint — see `docs/DECISIONS.md` §11, §14)
+
+### Optional: a `VITE_PILOT_MODE` flag
+
+Not built. If a real pilot needs a genuinely reduced UI surface (rather
+than the above being purely a "what to train pilot users on" list), a
+single `VITE_PILOT_MODE=true` env var read once in `App.jsx`'s role-based
+routing could hide the "Not required for v1" panels/nav entries above per
+role, without deleting any code or requiring a build variant. This is
+scaffolding-only guidance, not a decision to build it — implement only
+once an actual pilot's requirements confirm the UI needs hiding (as
+opposed to the pilot org just not being trained on those panels, which
+needs no code change at all).
+
 ---
 
 ## Explicitly out of scope for this roadmap

@@ -135,6 +135,10 @@ VitalNet/
 │   │                     DISASTER_RECOVERY.md — adversary-involved vs. not)
 │   ├── CLINICAL_GOVERNANCE.md Regulatory posture (CDSCO SaMD), model lifecycle
 │   │                     governance, five-layer guardrail architecture
+│   ├── CLINICAL_REVIEW.md     Sign-off checklist for packages/clinical-core/
+│   │                     src/rules/** changes (Round 6 Phase 7); the
+│   │                     outstanding gate on the rules-first cutover.
+│   │                     .github/CODEOWNERS requires review on that path.
 │   ├── COMPLIANCE_DPDP.md     India DPDP Act 2023 mapping — data-principal
 │   │                     rights, fiduciary obligations, honest gap list
 │   ├── ACCESSIBILITY.md       WCAG 2.1 AA audit — label association, live
@@ -173,7 +177,10 @@ VitalNet/
 │   │   ├── backend-keepalive.yml Pings the live legacy backend to avoid free-tier
 │   │   │                        cold starts. NOT deleted — backend/ is still live.
 │   │   └── supabase-keepalive.yml Pings Supabase to avoid the 7-day pause.
-│   └── dependabot.yml    Daily pip/npm/actions update PRs, targeting dev
+│   ├── dependabot.yml    Daily pip/npm/actions update PRs, targeting dev
+│   └── CODEOWNERS        Requires review on packages/clinical-core/src/rules/**
+│                       and the legacy backend's ML equivalents — see
+│                       docs/CLINICAL_REVIEW.md
 ├── README.md           Setup, features, deployment — start here
 ├── AGENTS.md           Conventions for coding agents working in this repo
 ├── CODEBASE_MAP.md     This file

@@ -40,6 +40,7 @@ docs — start with whichever matches what you're trying to do:
 | **[docs/DISASTER_RECOVERY.md](./docs/DISASTER_RECOVERY.md)** | RTO/RPO targets, restore procedures |
 | **[docs/INCIDENT_RESPONSE.md](./docs/INCIDENT_RESPONSE.md)** | Security incident runbook — detection through post-incident review |
 | **[docs/CLINICAL_GOVERNANCE.md](./docs/CLINICAL_GOVERNANCE.md)** | Regulatory posture (CDSCO), model lifecycle governance, guardrail architecture |
+| **[docs/CLINICAL_REVIEW.md](./docs/CLINICAL_REVIEW.md)** | Sign-off checklist for changes to the clinical rules engine; the rules-first cutover's outstanding gate |
 | **[docs/COMPLIANCE_DPDP.md](./docs/COMPLIANCE_DPDP.md)** | India DPDP Act 2023 mapping — data-principal rights, fiduciary obligations, gaps |
 | **[docs/ACCESSIBILITY.md](./docs/ACCESSIBILITY.md)** | WCAG 2.1 AA audit — what's fixed, what's verified, what's an honest known gap |
 | **[docs/SLO.md](./docs/SLO.md)** | Service level objectives, SLIs, and the `/api/metrics` Prometheus endpoint |

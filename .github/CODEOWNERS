@@ -1,0 +1,30 @@
+# VitalNet CODEOWNERS
+#
+# GitHub requests a review from the listed owner(s) on any PR touching a
+# matching path. Currently a single-maintainer repo, so this enforces
+# "the maintainer reviews clinical-rule changes deliberately" more than it
+# routes to a team — but it's also the literal hook required for
+# docs/CLINICAL_REVIEW.md's process to mean anything: a rules/** change
+# cannot merge unowned. Update the owner below to a real clinical-review
+# team/handle once one exists (docs/CLINICAL_REVIEW.md's "clinician
+# approver named" step is a human sign-off recorded in the PR itself,
+# independent of and in addition to this GitHub-level review requirement —
+# this file alone does not satisfy that checklist).
+
+# The deterministic clinical rules engine — every band, threshold, and
+# override that decides ROUTINE/URGENT/EMERGENCY. See docs/CLINICAL_REVIEW.md
+# for what this review must actually check before approving.
+/packages/clinical-core/src/rules/ @Lonely-Demon
+
+# The Zod intake schema and feature engineering feed the rules engine's
+# inputs and the advisory model — same review bar.
+/packages/clinical-core/src/schema.ts @Lonely-Demon
+/packages/clinical-core/src/features.ts @Lonely-Demon
+/packages/clinical-core/src/contraindications.ts @Lonely-Demon
+
+# The legacy backend's equivalent logic, still live in production —
+# changes here carry the same clinical-safety weight as the TypeScript
+# rules engine above, until backend/app/ is decommissioned.
+/backend/app/ml/classifier.py @Lonely-Demon
+/backend/app/ml/clinical_features.py @Lonely-Demon
+/backend/app/ml/contraindications.py @Lonely-Demon

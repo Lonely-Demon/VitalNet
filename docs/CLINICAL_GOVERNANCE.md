@@ -110,11 +110,23 @@ be audited, not just inferred from source.
   version that produced its triage (`app/ml/README.md`,
   `phase17_triage_provenance_and_override.sql`) — a doctor or auditor can
   always answer "which model made this call."
-- **Change control:** the model `.pkl`, the frontend `triage_trees.json`,
-  and the golden-vector test fixtures are regenerated **together, from one
-  command** (`scripts/train_classifier.py`) and never edited independently
-  — see `backend/README.md`. A parity test (`test_feature_parity.py` /
-  `featureParity.test.mjs`) fails CI if the two runtimes ever disagree.
+- **Change control:** the model `.pkl`, `triage_trees.json`, and the
+  golden-vector test fixtures are regenerated **together, from one
+  command** (`tools/training/train_classifier.py`) and never edited
+  independently — see `backend/app/ml/README.md`. `packages/clinical-core`'s
+  golden-vector test suite (CI-enforced) fails if the offline tree
+  evaluator ever disagrees with the committed model.
+- **The rules-first migration is a documented, gated change, not a silent
+  one** (`docs/DECISIONS.md` §33): a new architecture makes the
+  deterministic rules engine (`packages/clinical-core`) authoritative over
+  `triage_level`, with the trained model becoming advisory-only. This is
+  running today in `apps/api` (not yet receiving production traffic) —
+  `backend/`'s live model-primary design, described above, is unchanged and
+  still what patients actually experience. The quantified behavioural delta
+  between the two (88/10,000 synthetic patients, including 51
+  EMERGENCY→URGENT downgrades — `packages/clinical-core/test/
+  conformance/report.md`) requires the sign-off in `docs/CLINICAL_REVIEW.md`
+  before any cutover, not just a passing test suite.
 - **Retraining is human-gated, never automatic:**
   `scripts/retrain_from_outcomes.py` blends real doctor-recorded outcomes
   with synthetic data but does not auto-deploy; a human reviews the new
