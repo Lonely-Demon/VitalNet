@@ -109,17 +109,19 @@ def onnx_to_tree_json(onnx_model, n_features: int) -> Dict[str, Any]:
                         "only implements BRANCH_LEQ. Update both if this changes."
                     )
                 feat[nid] = rec["feat"]
-                # Round to keep the JSON compact, but at enough precision that
-                # it's lossless versus the underlying float32 threshold (float32
-                # has ~7 significant decimal digits total, so 9 decimal PLACES
-                # after typical single/double/triple-digit clinical feature
-                # magnitudes exceeds that entirely). 6 decimal places was found
-                # to occasionally round a threshold across a real feature value
-                # for LOW-CARDINALITY discrete features (e.g. seasonal_risk in
-                # {1.0, 1.1, 1.3}) whose split thresholds can land exactly on
-                # boundary values shared by many samples — flipping the
-                # occasional near-tied prediction between the JS/tree-JSON path
-                # and the server. See docs/DECISIONS.md §23.
+                # Round to keep the JSON compact. The 9-decimal rounding is NOT
+                # relied on for exactness — the evaluators (this reference +
+                # treeEvaluator.js) cast BOTH the feature value and the
+                # threshold to float32 before the `<=` comparison, exactly
+                # mirroring the server's `np.array(..., dtype=np.float32)` cast
+                # before predict. A 9-decimal-rounded threshold snaps back to
+                # the identical float32 as the unrounded onnx threshold, so the
+                # comparison is bit-identical to onnxruntime/sklearn regardless
+                # of the rounding. This closes a latent divergence where a
+                # feature value landing exactly on a split threshold (common for
+                # low-cardinality discrete features like seasonal_risk ∈
+                # {1.0,1.1,1.3}) took different branches online vs offline. See
+                # docs/DECISIONS.md §23/§31.
                 thr[nid] = round(rec["thr"], 9)
                 left[nid] = rec["left"]
                 right[nid] = rec["right"]
@@ -155,9 +157,11 @@ def evaluate_tree_json(tree_json: Dict[str, Any], x: List[float]):
     for tree in tree_json["trees"]:
         feat, thr, left, right, leaf = tree["feat"], tree["thr"], tree["left"], tree["right"], tree["leaf"]
         node = 0
-        # Walk until a leaf (feat == -1 marks a leaf node).
+        # Walk until a leaf (feat == -1 marks a leaf node). Cast both operands
+        # to float32 so the comparison is bit-identical to the server's float32
+        # model (mirrored by Math.fround in treeEvaluator.js). See onnx_to_tree_json.
         while feat[node] != -1:
-            node = left[node] if x[feat[node]] <= thr[node] else right[node]
+            node = left[node] if np.float32(x[feat[node]]) <= np.float32(thr[node]) else right[node]
         contribs = leaf[node]
         if contribs:
             for cls, w in contribs:
