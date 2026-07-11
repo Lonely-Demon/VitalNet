@@ -6,12 +6,11 @@ import { useToast } from '../components/ToastProvider'
 import { useAuth } from '../store/authStore'
 import { useLocalTriage } from '../hooks/useLocalTriage'
 import { useDraftSave } from '../hooks/useDraftSave'
-import { validateForm } from '../utils/validation'
+import { validateIntakeForm, generatePatientKey, normalizePatientKey } from '@vitalnet/clinical-core'
 import VoiceInputButton from '../components/VoiceInputButton'
 import { EmergencySmsAlert } from '../components/EmergencySmsAlert'
 import { AmbulanceCallButton } from '../components/AmbulanceCallButton'
 import { PatientKeyCard } from '../components/PatientKeyCard'
-import { generatePatientKey, normalizePatientKey } from '../utils/patientKey'
 import { getCaseHistoryByPatientKey } from '../api/cases'
 
 // Stable English identifiers — these are the actual values submitted to the
@@ -268,8 +267,8 @@ export default function IntakeForm() {
       consent_captured_at: new Date().toISOString(),
     }
 
-    // Zod clinical boundary validation
-    const validation = validateForm(payload)
+    // Zod clinical boundary validation — the same schema the server enforces
+    const validation = validateIntakeForm(payload)
     if (!validation.success) {
       setError(t('intakeForm.errors.validationFailed'))
       setFieldErrors(validation.errors)

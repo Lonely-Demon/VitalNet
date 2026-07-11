@@ -60,28 +60,13 @@ jobs:
       - name: clinical-core tests
         # The single source of clinical truth (packages/clinical-core) — every
         # rule's embedded citation+vector, the ported safety/fuzz suites, and
-        # the golden vectors. If this fails, a clinical rule regressed.
+        # the golden vectors (incl. the tree-evaluator and feature-engineering
+        # golden vectors that used to need separate apps/web parity suites —
+        # Round 6 rebuild plan Phase 5: apps/web now imports this package
+        # directly instead of maintaining its own mirrored copies, so there is
+        # nothing left in apps/web that could drift from the server). If this
+        # fails, a clinical rule regressed.
         run: pnpm --filter @vitalnet/clinical-core test
-      - name: Offline-model parity (JS == server model)
-        # Guards that the pure-JS offline tree evaluator produces the SAME
-        # triage as the server model on the committed golden vectors. If this
-        # fails, offline triage would diverge from online — block the merge.
-        run: pnpm --filter @vitalnet/web run test:parity
-      - name: Feature-engineering parity (JS == Python)
-        # Guards that triageClassifier.js::buildFeatureMap mirrors
-        # clinical_features.py::ClinicalFeatureEngineer exactly. Catches the
-        # class of bug where offline triage silently uses different engineered
-        # features than the server for the same patient (see FEATURES_ROADMAP §1.2).
-        run: pnpm --filter @vitalnet/web run test:feature-parity
-      - name: Contraindication-flag parity (JS == Python)
-        run: pnpm --filter @vitalnet/web run test:contraindications
-      - name: Safety-net parity (JS == Python)
-        # Guards that clinicalRules.js::safetyNetCheck/news2ConcerningVital
-        # mirror classifier.py exactly, including the pregnancy-hypertension
-        # rule (docs/DECISIONS.md §30) — an offline/online divergence here
-        # would mean a critical presentation triages differently with no
-        # connectivity.
-        run: pnpm --filter @vitalnet/web run test:safety-net
       - name: Build
         run: pnpm --filter @vitalnet/web run build
         env:
@@ -138,19 +123,6 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: clinical-core tests
         run: pnpm --filter @vitalnet/clinical-core test
-      - name: Offline-model parity (JS == server model)
-        run: pnpm --filter @vitalnet/web run test:parity
-      - name: Feature-engineering parity (JS == Python)
-        run: pnpm --filter @vitalnet/web run test:feature-parity
-      - name: Contraindication-flag parity (JS == Python)
-        run: pnpm --filter @vitalnet/web run test:contraindications
-      - name: Safety-net parity (JS == Python)
-        # Guards that clinicalRules.js::safetyNetCheck/news2ConcerningVital
-        # mirror classifier.py exactly, including the pregnancy-hypertension
-        # rule (docs/DECISIONS.md §30) — an offline/online divergence here
-        # would mean a critical presentation triages differently with no
-        # connectivity.
-        run: pnpm --filter @vitalnet/web run test:safety-net
       - name: Build
         run: pnpm --filter @vitalnet/web run build
         env:

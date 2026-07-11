@@ -3,16 +3,24 @@ name: apps/api (Edge Function)
 # Round 6 rebuild plan, Phase 3 — the new Deno/Hono edge function backend.
 # Runs independently of the pnpm-based frontend/clinical-core CI (ci.yml)
 # since this app has its own toolchain (Deno, not Node/pnpm) and its own
-# deno.json import map.
+# deno.json import map — EXCEPT for @vitalnet/clinical-core (Phase 4/5),
+# which apps/api imports via a relative path straight into that package's
+# build output (deno.json's import map), not a published package. dist/ is
+# gitignored, so a fresh checkout has none — this job's pnpm/build steps
+# below are load-bearing, not incidental: without them every Deno step
+# fails to resolve @vitalnet/clinical-core (verified locally by moving
+# packages/clinical-core/dist/ aside and re-running `deno check`).
 
 on:
   pull_request:
     paths:
       - "apps/api/**"
+      - "packages/clinical-core/**"
   push:
     branches: [main, dev]
     paths:
       - "apps/api/**"
+      - "packages/clinical-core/**"
 
 permissions:
   contents: read
@@ -20,25 +28,43 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: apps/api/supabase/functions/api
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
+      - name: Install workspace deps (no install scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build @vitalnet/clinical-core
+        # apps/api resolves this via a relative dist/ import (deno.json),
+        # not a registry package — nothing below can type-check or run
+        # without it built first.
+        run: pnpm --filter @vitalnet/clinical-core build
 
       - uses: denoland/setup-deno@v2  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
         with:
           deno-version: v2.x
 
       - name: Format check
+        working-directory: apps/api/supabase/functions/api
         run: deno fmt --check .
 
       - name: Lint
+        working-directory: apps/api/supabase/functions/api
         run: deno lint .
 
       - name: Typecheck
+        working-directory: apps/api/supabase/functions/api
         run: deno check index.ts
 
       - name: Test
+        working-directory: apps/api/supabase/functions/api
         run: deno test --allow-net --allow-env

@@ -11,6 +11,7 @@ import { z } from "zod";
 // @deno-types="../../../../../../packages/clinical-core/dist/index.d.ts"
 import { intakeFormSchema, PATIENT_KEY_RE, stripControlChars, triage } from "@vitalnet/clinical-core";
 import { requireRole } from "../_shared/auth.ts";
+import { idempotent } from "../_shared/idempotency.ts";
 import { rateLimit } from "../_shared/rateLimit.ts";
 import { extractBearerToken, getSupabaseForUser, HttpError } from "../_shared/database.ts";
 import { AuditEventType, getClientIp, logPhiAccess } from "../_shared/audit.ts";
@@ -117,196 +118,204 @@ async function checkDeteriorationPattern(
 
 // ── Submit Case ────────────────────────────────────────────────────────────
 
-cases.post("/api/submit", rateLimit(20, 60), requireRole("asha_worker", "admin"), async (c) => {
-  const user = c.get("user");
-  const rawBody = await readJsonBody(c);
-  const parsed = intakeFormSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    const errors: Record<string, string> = {};
-    for (const issue of parsed.error.issues) errors[issue.path.join(".")] = issue.message;
-    throw new HttpError(400, JSON.stringify({ detail: "Validation failed", errors }));
-  }
-  const form = parsed.data;
+cases.post(
+  "/api/submit",
+  rateLimit(20, 60),
+  requireRole("asha_worker", "admin"),
+  idempotent("case.submit"),
+  async (c) => {
+    const user = c.get("user");
+    const rawBody = await readJsonBody(c);
+    const parsed = intakeFormSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      const errors: Record<string, string> = {};
+      for (const issue of parsed.error.issues) errors[issue.path.join(".")] = issue.message;
+      throw new HttpError(400, JSON.stringify({ detail: "Validation failed", errors }));
+    }
+    const form = parsed.data;
 
-  const role = user.resolvedRole;
-  const facilityId = user.resolvedFacilityId;
-  if (role === "asha_worker" && !facilityId) {
-    throw new HttpError(403, "User is not assigned to a facility");
-  }
+    const role = user.resolvedRole;
+    const facilityId = user.resolvedFacilityId;
+    if (role === "asha_worker" && !facilityId) {
+      throw new HttpError(403, "User is not assigned to a facility");
+    }
 
-  try {
-    const patientName = sanitizeMedicalText(form.patient_name, 500) ?? form.patient_name;
-    const chiefComplaint = sanitizeMedicalText(form.chief_complaint, 200) ?? form.chief_complaint;
-    const location = sanitizeMedicalText(form.location, 500) ?? form.location;
-    const observations = form.observations !== undefined
-      ? sanitizeMedicalText(form.observations, 500) ?? form.observations
-      : form.observations;
-    const knownConditions = form.known_conditions !== undefined
-      ? sanitizeMedicalText(form.known_conditions, 500) ?? form.known_conditions
-      : form.known_conditions;
-    const currentMedications = form.current_medications !== undefined
-      ? sanitizeMedicalText(form.current_medications, 500) ?? form.current_medications
-      : form.current_medications;
+    try {
+      const patientName = sanitizeMedicalText(form.patient_name, 500) ?? form.patient_name;
+      const chiefComplaint = sanitizeMedicalText(form.chief_complaint, 200) ?? form.chief_complaint;
+      const location = sanitizeMedicalText(form.location, 500) ?? form.location;
+      const observations = form.observations !== undefined
+        ? sanitizeMedicalText(form.observations, 500) ?? form.observations
+        : form.observations;
+      const knownConditions = form.known_conditions !== undefined
+        ? sanitizeMedicalText(form.known_conditions, 500) ?? form.known_conditions
+        : form.known_conditions;
+      const currentMedications = form.current_medications !== undefined
+        ? sanitizeMedicalText(form.current_medications, 500) ?? form.current_medications
+        : form.current_medications;
 
-    // Step 1: rules-first triage (always runs — LLM-independent, network-independent).
-    const result = triage(
-      {
+      // Step 1: rules-first triage (always runs — LLM-independent, network-independent).
+      const result = triage(
+        {
+          patient_age: form.patient_age,
+          patient_sex: form.patient_sex,
+          bp_systolic: form.bp_systolic ?? null,
+          bp_diastolic: form.bp_diastolic ?? null,
+          spo2: form.spo2 ?? null,
+          heart_rate: form.heart_rate ?? null,
+          temperature: form.temperature ?? null,
+          symptoms: form.symptoms,
+          is_pregnant: form.is_pregnant ?? null,
+          chief_complaint: chiefComplaint,
+          complaint_duration: form.complaint_duration,
+          location,
+          known_conditions: knownConditions ?? null,
+          current_medications: currentMedications ?? null,
+        },
+        { mode: "rules_first", trees: TRIAGE_TREES, featureNames: FEATURE_NAMES },
+      );
+
+      const riskDriver = formatRiskDriver(result.tier, result.firedRules);
+      const triageConfidence = result.model?.confidence ?? 1.0;
+      const lowConfidence = result.model?.lowConfidence ?? false;
+
+      const briefing = await generateBriefing(
+        {
+          patient_age: form.patient_age,
+          patient_sex: form.patient_sex,
+          location,
+          chief_complaint: chiefComplaint,
+          complaint_duration: form.complaint_duration,
+          bp_systolic: form.bp_systolic,
+          bp_diastolic: form.bp_diastolic,
+          spo2: form.spo2,
+          heart_rate: form.heart_rate,
+          temperature: form.temperature,
+          symptoms: form.symptoms,
+          observations,
+          known_conditions: knownConditions,
+          current_medications: currentMedications,
+        },
+        {
+          triage_level: result.tier,
+          confidence_score: triageConfidence,
+          risk_driver: riskDriver,
+          low_confidence: lowConfidence,
+        },
+      );
+
+      const rawToken = extractBearerToken(c.req.header("authorization"));
+      const db = getSupabaseForUser(rawToken);
+
+      const { alert: deteriorationAlert, visitCount: deteriorationVisitCount } = await checkDeteriorationPattern(
+        db,
+        form.patient_key,
+        result.tier,
+      );
+
+      const record = {
+        client_id: form.client_id ?? crypto.randomUUID(),
+        submitted_by: user.sub,
+        facility_id: facilityId,
+        patient_name: patientName,
         patient_age: form.patient_age,
         patient_sex: form.patient_sex,
+        patient_location: location,
         bp_systolic: form.bp_systolic ?? null,
         bp_diastolic: form.bp_diastolic ?? null,
         spo2: form.spo2 ?? null,
         heart_rate: form.heart_rate ?? null,
         temperature: form.temperature ?? null,
-        symptoms: form.symptoms,
         is_pregnant: form.is_pregnant ?? null,
         chief_complaint: chiefComplaint,
         complaint_duration: form.complaint_duration,
-        location,
+        symptoms: form.symptoms ?? [],
+        observations: observations ?? null,
         known_conditions: knownConditions ?? null,
         current_medications: currentMedications ?? null,
-      },
-      { mode: "rules_first", trees: TRIAGE_TREES, featureNames: FEATURE_NAMES },
-    );
-
-    const riskDriver = formatRiskDriver(result.tier, result.firedRules);
-    const triageConfidence = result.model?.confidence ?? 1.0;
-    const lowConfidence = result.model?.lowConfidence ?? false;
-
-    const briefing = await generateBriefing(
-      {
-        patient_age: form.patient_age,
-        patient_sex: form.patient_sex,
-        location,
-        chief_complaint: chiefComplaint,
-        complaint_duration: form.complaint_duration,
-        bp_systolic: form.bp_systolic,
-        bp_diastolic: form.bp_diastolic,
-        spo2: form.spo2,
-        heart_rate: form.heart_rate,
-        temperature: form.temperature,
-        symptoms: form.symptoms,
-        observations,
-        known_conditions: knownConditions,
-        current_medications: currentMedications,
-      },
-      {
+        human_review_requested: form.human_review_requested,
+        human_review_reason: form.human_review_reason ?? null,
+        patient_key: form.patient_key ?? null,
+        consent_captured: form.consent_captured,
+        consent_captured_at: form.consent_captured_at ?? new Date().toISOString(),
         triage_level: result.tier,
-        confidence_score: triageConfidence,
+        triage_confidence: triageConfidence,
         risk_driver: riskDriver,
+        triage_model_version: TRIAGE_MODEL_VERSION,
         low_confidence: lowConfidence,
-      },
-    );
+        contraindication_flags: result.contraindicationFlags ?? [],
+        deterioration_alert: deteriorationAlert,
+        deterioration_visit_count: deteriorationVisitCount,
+        llm_status: briefing.llm_status ?? "generated",
+        needs_review: computeNeedsReview({
+          llmNeedsReview: Boolean(briefing.needs_review),
+          humanReviewRequested: form.human_review_requested,
+          hasContraindicationFlags: Boolean(result.contraindicationFlags && result.contraindicationFlags.length > 0),
+          deteriorationAlert,
+          modelAgreed: result.modelAgreed,
+        }),
+        briefing,
+        llm_model_used: briefing._model_used ?? "unknown",
+        created_offline: form.created_offline,
+        client_submitted_at: form.client_submitted_at ?? null,
+        // Advisory ML output (phase29_events_and_advisory_model.sql) —
+        // additive, never influences triage_level above.
+        model_tier: result.model?.tier ?? null,
+        rules_fired: result.firedRules ?? [],
+        model_agreed: result.modelAgreed ?? null,
+      };
 
-    const rawToken = extractBearerToken(c.req.header("authorization"));
-    const db = getSupabaseForUser(rawToken);
-
-    const { alert: deteriorationAlert, visitCount: deteriorationVisitCount } = await checkDeteriorationPattern(
-      db,
-      form.patient_key,
-      result.tier,
-    );
-
-    const record = {
-      client_id: form.client_id ?? crypto.randomUUID(),
-      submitted_by: user.sub,
-      facility_id: facilityId,
-      patient_name: patientName,
-      patient_age: form.patient_age,
-      patient_sex: form.patient_sex,
-      patient_location: location,
-      bp_systolic: form.bp_systolic ?? null,
-      bp_diastolic: form.bp_diastolic ?? null,
-      spo2: form.spo2 ?? null,
-      heart_rate: form.heart_rate ?? null,
-      temperature: form.temperature ?? null,
-      is_pregnant: form.is_pregnant ?? null,
-      chief_complaint: chiefComplaint,
-      complaint_duration: form.complaint_duration,
-      symptoms: form.symptoms ?? [],
-      observations: observations ?? null,
-      known_conditions: knownConditions ?? null,
-      current_medications: currentMedications ?? null,
-      human_review_requested: form.human_review_requested,
-      human_review_reason: form.human_review_reason ?? null,
-      patient_key: form.patient_key ?? null,
-      consent_captured: form.consent_captured,
-      consent_captured_at: form.consent_captured_at ?? new Date().toISOString(),
-      triage_level: result.tier,
-      triage_confidence: triageConfidence,
-      risk_driver: riskDriver,
-      triage_model_version: TRIAGE_MODEL_VERSION,
-      low_confidence: lowConfidence,
-      contraindication_flags: result.contraindicationFlags ?? [],
-      deterioration_alert: deteriorationAlert,
-      deterioration_visit_count: deteriorationVisitCount,
-      llm_status: briefing.llm_status ?? "generated",
-      needs_review: computeNeedsReview({
-        llmNeedsReview: Boolean(briefing.needs_review),
-        humanReviewRequested: form.human_review_requested,
-        hasContraindicationFlags: Boolean(result.contraindicationFlags && result.contraindicationFlags.length > 0),
-        deteriorationAlert,
-        modelAgreed: result.modelAgreed,
-      }),
-      briefing,
-      llm_model_used: briefing._model_used ?? "unknown",
-      created_offline: form.created_offline,
-      client_submitted_at: form.client_submitted_at ?? null,
-      // Advisory ML output (phase29_events_and_advisory_model.sql) —
-      // additive, never influences triage_level above.
-      model_tier: result.model?.tier ?? null,
-      rules_fired: result.firedRules ?? [],
-      model_agreed: result.modelAgreed ?? null,
-    };
-
-    const { data: upserted, error: upsertError } = await db
-      .from("case_records")
-      .upsert(record, { onConflict: "client_id", ignoreDuplicates: true })
-      .select();
-    if (upsertError) throw upsertError;
-
-    const isNewSubmission = Boolean(upserted && upserted.length > 0);
-    let response: Record<string, unknown>;
-    if (!isNewSubmission) {
-      // Upsert ignored the duplicate; fetch the existing row to return to the client.
-      const { data: existing, error: existingError } = await db
+      const { data: upserted, error: upsertError } = await db
         .from("case_records")
-        .select("id, client_id, triage_level, triage_confidence, risk_driver, created_at, created_offline, facility_id")
-        .eq("client_id", record.client_id);
-      if (existingError) throw existingError;
-      response = (existing && existing[0]) || record;
-    } else {
-      response = upserted![0]!;
+        .upsert(record, { onConflict: "client_id", ignoreDuplicates: true })
+        .select();
+      if (upsertError) throw upsertError;
+
+      const isNewSubmission = Boolean(upserted && upserted.length > 0);
+      let response: Record<string, unknown>;
+      if (!isNewSubmission) {
+        // Upsert ignored the duplicate; fetch the existing row to return to the client.
+        const { data: existing, error: existingError } = await db
+          .from("case_records")
+          .select(
+            "id, client_id, triage_level, triage_confidence, risk_driver, created_at, created_offline, facility_id",
+          )
+          .eq("client_id", record.client_id);
+        if (existingError) throw existingError;
+        response = (existing && existing[0]) || record;
+      } else {
+        response = upserted![0]!;
+      }
+
+      await logPhiAccess({
+        eventType: AuditEventType.PHI_CREATE,
+        userId: user.sub ?? "unknown",
+        userRole: role,
+        resourceType: "case_records",
+        resourceId: typeof response.id === "string" ? response.id : null,
+        facilityId,
+        ipAddress: getClientIp(c),
+        details: { created_offline: Boolean(form.created_offline), needs_review: Boolean(record.needs_review) },
+      });
+
+      // Genuinely new EMERGENCY case (not a retried duplicate) — notify the
+      // facility's subscribed doctors. Backgrounded: never adds latency to
+      // the ASHA worker's submission response; pushEmergencyAlert() itself
+      // no-ops safely if VAPID isn't configured.
+      if (isNewSubmission && result.tier === "EMERGENCY") {
+        runInBackground(
+          pushEmergencyAlert(facilityId, "EMERGENCY case submitted", `${chiefComplaint} — ${riskDriver}`.slice(0, 150)),
+        );
+      }
+
+      return c.json(response);
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+      console.error(`submit_case failed for client_id=${form.client_id ?? "(none)"}:`, e);
+      throw new HttpError(500, "An internal server error occurred. The case was not saved. Please retry.");
     }
-
-    await logPhiAccess({
-      eventType: AuditEventType.PHI_CREATE,
-      userId: user.sub ?? "unknown",
-      userRole: role,
-      resourceType: "case_records",
-      resourceId: typeof response.id === "string" ? response.id : null,
-      facilityId,
-      ipAddress: getClientIp(c),
-      details: { created_offline: Boolean(form.created_offline), needs_review: Boolean(record.needs_review) },
-    });
-
-    // Genuinely new EMERGENCY case (not a retried duplicate) — notify the
-    // facility's subscribed doctors. Backgrounded: never adds latency to
-    // the ASHA worker's submission response; pushEmergencyAlert() itself
-    // no-ops safely if VAPID isn't configured.
-    if (isNewSubmission && result.tier === "EMERGENCY") {
-      runInBackground(
-        pushEmergencyAlert(facilityId, "EMERGENCY case submitted", `${chiefComplaint} — ${riskDriver}`.slice(0, 150)),
-      );
-    }
-
-    return c.json(response);
-  } catch (e) {
-    if (e instanceof HttpError) throw e;
-    console.error(`submit_case failed for client_id=${form.client_id ?? "(none)"}:`, e);
-    throw new HttpError(500, "An internal server error occurred. The case was not saved. Please retry.");
-  }
-});
+  },
+);
 
 // ── Get Cases ──────────────────────────────────────────────────────────────
 

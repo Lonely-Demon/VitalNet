@@ -36,6 +36,12 @@ export default function ASHAPanel() {
       if (result.synced > 0) {
         showToast(`${result.synced} offline submission${result.synced > 1 ? 's' : ''} synced`, 'success')
       }
+      if (result.dead > 0) {
+        showToast(
+          `${result.dead} offline submission${result.dead > 1 ? 's' : ''} could not be saved — see the offline banner`,
+          'warning',
+        )
+      }
       if (result.requiresLogin) {
         showToast('Please sign in again to sync offline submissions', 'warning')
       }

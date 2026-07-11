@@ -35,6 +35,7 @@ supabase/functions/api/
     prompts.ts              # static system-prompt text ported from backend/prompts + protocol_knowledge.md (Phase 4)
     voice.ts                # Groq Whisper -> Sarvam AI transcription fallback (Phase 4)
     webpush.ts               # VAPID web push send (via the "web-push" npm package) — FLAGGED, see its header (Phase 4)
+    idempotency.ts            # unified-outbox X-Event-Id replay via client_events + fn_client_event_record (Phase 5)
   routes/                  # health, outbreak, supervisor, referral, metrics, protocol, analytics,
                             # cases, security, dsr, admin, push, voice (Phase 4)
   test/                    # deno test — see below
@@ -121,15 +122,56 @@ matching Python's round-half-to-even `round()` exactly — `Math.round()` disagr
 - **Not in this pass**: referral write endpoints (facility-capacity PATCH, create-referral
   POST, advance-status PATCH) — `referral.ts`'s own Tranche-A header called these out as
   Tranche B, but they weren't part of the plan's explicit Phase 4 endpoint list and
-  weren't read/ported this round; still served by the legacy backend. Also out of scope:
-  Phase 5's unified offline outbox (submissions still use the single-purpose
-  `submission_queue`, not a generic `client_events`-backed outbox) and the frontend's own
-  cutover from its mirrored clinical-logic files to `@vitalnet/clinical-core`.
+  weren't read/ported this round; still served by the legacy backend.
 
 The legacy FastAPI backend stays deployable and authoritative until each endpoint is
 individually cut over via the base-URL resolver map.
 
+### Phase 5 — unified offline outbox + frontend cutover to clinical-core
+
+`apps/web` now imports `@vitalnet/clinical-core` directly (workspace dependency) instead
+of maintaining four hand-mirrored clinical-logic files — `useLocalTriage` calls the SAME
+`triage()` function, in `rules_first` mode, that `POST /api/submit` calls server-side.
+`utils/triageClassifier.js` survives only as a thin model-loader (fetching
+`/models/*.json`, browser-specific and not clinical logic). The four apps/web parity test
+suites that existed to catch drift between the JS mirror and the Python original are
+deleted — there is nothing left in `apps/web` that could drift from the server.
+
+`apps/web`'s offline submission queue is now a generic outbox (IndexedDB v3,
+`lib/outbox.js`): `{ event_id, type, payload, created_at, attempts, status, last_error }`.
+`event_id` is the SAME uuid as `case_records.client_id` and the new `X-Event-Id` request
+header — `_shared/idempotency.ts` (wired into `POST /api/submit` after `requireRole`)
+reads `client_events` (via the caller's own RLS-scoped client — `client_events`' existing
+SELECT policy already scopes a read to the caller's own events or admin) and, on a repeat
+event_id, replays the STORED response instead of re-running the handler. This is a strict
+efficiency improvement layered on top of Phase 4's `case_records.client_id`
+upsert-with-ignore-duplicates (which still runs, as a second, DB-level safety net) — a
+retried drain (flaky connectivity, an app restart mid-sync) no longer re-runs triage or
+burns an LLM call for a case already recorded. Recording a response goes through
+`fn_client_event_record` (`backend/supabase/migrations/phase31_client_event_record_fn.sql`,
+a SECURITY DEFINER function — `client_events` has no INSERT policy by design, and this
+function sets `submitted_by` from the caller's own JWT, never a client-supplied value) —
+verified against a real local Postgres instance (RLS scoping, the unspoofable
+`submitted_by`, and the `ON CONFLICT DO NOTHING` replay-not-overwrite behavior all
+confirmed empirically, not just by inspection).
+
+A permanently-failing (4xx) outbox event is dead-lettered (`status: 'dead'`) rather than
+silently dropped — `OfflineBanner.jsx` surfaces dead letters with retry/discard actions,
+satisfying the plan's "4xx→dead surfaced in the UI... not silently dropped" requirement.
+
 ## Running locally
+
+`@vitalnet/clinical-core` is imported via a relative path straight into its build output
+(`../../../../../packages/clinical-core/dist/index.js` — see `deno.json`'s import map),
+not a published package, and `dist/` is gitignored like any build artifact. **Build it
+first**, or every route that touches triage (`routes/cases.ts`, `_shared/model.ts`) fails
+to resolve:
+
+```sh
+pnpm --filter @vitalnet/clinical-core build
+```
+
+Then:
 
 ```sh
 cd supabase/functions/api
@@ -137,7 +179,11 @@ SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_JWT_SECRET=... SUPABASE_SERVICE_
   deno run --allow-net --allow-env index.ts
 ```
 
-Or via the Supabase CLI once installed: `supabase functions serve api`.
+Or via the Supabase CLI once installed: `supabase functions serve api`. The same build
+step is required before `supabase functions deploy` — the CLI bundles whatever's on disk
+at deploy time, following the import graph outside `supabase/functions/api/` (Supabase's
+documented monorepo/shared-code support), so a stale or missing `dist/` ships stale or
+broken code silently.
 
 ## Testing
 

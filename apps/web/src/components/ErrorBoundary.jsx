@@ -1,5 +1,5 @@
 import { Component } from 'react'
-import { getQueueCount } from '../lib/offlineQueue'
+import { getPendingCount } from '../lib/outbox'
 
 /**
  * ErrorBoundary.jsx — React Error Boundary for VitalNet
@@ -22,7 +22,7 @@ export class ErrorBoundary extends Component {
   async componentDidCatch(error, errorInfo) {
     let queueCount = 0
     try {
-      queueCount = await getQueueCount()
+      queueCount = await getPendingCount()
     } catch {
       // IndexedDB might be unavailable — that's OK, just show 0
     }

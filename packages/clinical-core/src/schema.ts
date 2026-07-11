@@ -54,20 +54,31 @@ export const intakeFormSchema = z
   .object({
     // Patient identifiers
     patient_name: controlCharField(100).pipe(z.string().min(1, "Patient name is required")),
-    patient_age: z.number().int().min(0).max(120),
+    patient_age: z.number().int().min(0, "Age must be 0 or above").max(120, "Age must be realistic (max 120)"),
     patient_sex: z.enum(["male", "female", "other"]),
 
     chief_complaint: controlCharField(200).pipe(z.string().min(1, "Chief complaint is required")),
-    complaint_duration: z.string().min(1).max(50),
+    complaint_duration: z.string().min(1, "Complaint duration is required").max(50, "Complaint duration is too long"),
     location: controlCharField(200).pipe(z.string().min(1, "Location / village is required")),
 
     // Vitals — optional but bounded when present (bounds match the stricter
-    // of the two previously-mirrored schemas)
-    bp_systolic: z.number().int().min(30).max(300).nullish(),
-    bp_diastolic: z.number().int().min(10).max(200).nullish(),
-    spo2: z.number().int().min(50).max(100).nullish(),
-    heart_rate: z.number().int().min(10).max(250).nullish(),
-    temperature: z.number().min(25.0).max(45.0).nullish(),
+    // of the two previously-mirrored schemas). Custom messages here are
+    // user-facing text (apps/web's IntakeForm renders issue.message
+    // directly) as well as the API's 400 response body — keep them
+    // clinician-readable, not Zod's generic "Too big"/"Too small" defaults.
+    bp_systolic: z.number().int().min(30, "Systolic BP must be ≥ 30").max(300, "Systolic BP must be ≤ 300")
+      .nullish(),
+    bp_diastolic: z.number().int().min(10, "Diastolic BP must be ≥ 10").max(
+      200,
+      "Diastolic BP must be ≤ 200",
+    ).nullish(),
+    spo2: z.number().int().min(50, "SpO2 must be ≥ 50").max(100, "SpO2 must be ≤ 100").nullish(),
+    heart_rate: z.number().int().min(10, "Heart rate must be ≥ 10").max(250, "Heart rate must be ≤ 250")
+      .nullish(),
+    temperature: z.number().min(25.0, "Temperature (°C) must be ≥ 25").max(
+      45.0,
+      "Temperature (°C) must be ≤ 45",
+    ).nullish(),
 
     // Structured pregnancy flag — feeds the preeclampsia rule (rules.ts).
     // Deliberately a real field rather than relying on free-text keyword
