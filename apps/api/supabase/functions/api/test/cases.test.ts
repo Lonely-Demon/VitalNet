@@ -7,6 +7,7 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import {
   authorizeCaseRowAccess,
+  computeNeedsReview,
   formatRiskDriver,
   normalizedIsoTs,
   parseUuid,
@@ -141,4 +142,39 @@ Deno.test("formatRiskDriver: fired rules are joined with citations", () => {
     { id: "extreme_spo2", citation: "NEWS2 scale 1", detail: "Critically low oxygen saturation (80%)" },
   ]);
   assertEquals(result, "Critically low oxygen saturation (80%) (NEWS2 scale 1). Classified as EMERGENCY.");
+});
+
+// ── computeNeedsReview ───────────────────────────────────────────────────
+// Guards the advisory-ML safety property: a rules-vs-model disagreement
+// must surface for human review, even when nothing else would have
+// flagged the case. Most consequential for an EMERGENCY(model) ->
+// lower(rules) de-escalation, which would otherwise sink out of the
+// priority queue with no flag at all (the rules engine is deterministic,
+// so it's never "low confidence" about its own, lower tier).
+
+const BASE_NEEDS_REVIEW_INPUT = {
+  llmNeedsReview: false,
+  humanReviewRequested: false,
+  hasContraindicationFlags: false,
+  deteriorationAlert: false,
+  modelAgreed: true as boolean | undefined,
+};
+
+Deno.test("computeNeedsReview: false when nothing flags and the model agrees", () => {
+  assertEquals(computeNeedsReview(BASE_NEEDS_REVIEW_INPUT), false);
+});
+
+Deno.test("computeNeedsReview: true when the advisory model disagrees with the rules-authoritative tier", () => {
+  assertEquals(computeNeedsReview({ ...BASE_NEEDS_REVIEW_INPUT, modelAgreed: false }), true);
+});
+
+Deno.test("computeNeedsReview: false when no model ran (modelAgreed undefined) and nothing else flags", () => {
+  assertEquals(computeNeedsReview({ ...BASE_NEEDS_REVIEW_INPUT, modelAgreed: undefined }), false);
+});
+
+Deno.test("computeNeedsReview: still true when other signals flag but the model agrees", () => {
+  assertEquals(computeNeedsReview({ ...BASE_NEEDS_REVIEW_INPUT, deteriorationAlert: true }), true);
+  assertEquals(computeNeedsReview({ ...BASE_NEEDS_REVIEW_INPUT, hasContraindicationFlags: true }), true);
+  assertEquals(computeNeedsReview({ ...BASE_NEEDS_REVIEW_INPUT, humanReviewRequested: true }), true);
+  assertEquals(computeNeedsReview({ ...BASE_NEEDS_REVIEW_INPUT, llmNeedsReview: true }), true);
 });

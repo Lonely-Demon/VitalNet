@@ -17,6 +17,7 @@ import { AuditEventType, getClientIp, logPhiAccess } from "../_shared/audit.ts";
 import {
   authorizeCaseRowAccess,
   type CaseRowAuth,
+  computeNeedsReview,
   fetchAuthorizedCase,
   formatRiskDriver,
   normalizedIsoTs,
@@ -240,12 +241,13 @@ cases.post("/api/submit", rateLimit(20, 60), requireRole("asha_worker", "admin")
       deterioration_alert: deteriorationAlert,
       deterioration_visit_count: deteriorationVisitCount,
       llm_status: briefing.llm_status ?? "generated",
-      needs_review: Boolean(
-        briefing.needs_review ||
-          form.human_review_requested ||
-          (result.contraindicationFlags && result.contraindicationFlags.length > 0) ||
-          deteriorationAlert,
-      ),
+      needs_review: computeNeedsReview({
+        llmNeedsReview: Boolean(briefing.needs_review),
+        humanReviewRequested: form.human_review_requested,
+        hasContraindicationFlags: Boolean(result.contraindicationFlags && result.contraindicationFlags.length > 0),
+        deteriorationAlert,
+        modelAgreed: result.modelAgreed,
+      }),
       briefing,
       llm_model_used: briefing._model_used ?? "unknown",
       created_offline: form.created_offline,

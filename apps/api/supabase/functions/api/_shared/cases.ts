@@ -113,3 +113,34 @@ export function formatRiskDriver(tier: string, firedRules: readonly FiredRule[])
   const parts = firedRules.map((r) => `${r.detail} (${r.citation})`);
   return `${parts.join("; ")}. Classified as ${tier}.`;
 }
+
+export interface NeedsReviewInput {
+  llmNeedsReview: boolean;
+  humanReviewRequested: boolean;
+  hasContraindicationFlags: boolean;
+  deteriorationAlert: boolean;
+  /** result.modelAgreed from clinical-core's triage() — undefined when no
+   * advisory model ran (no tree bundle supplied). */
+  modelAgreed: boolean | undefined;
+}
+
+/**
+ * Whether a newly-submitted case needs a human (doctor) review. Folds in
+ * the advisory model's disagreement with the rules-authoritative tier
+ * (modelAgreed === false) — this is the safety signal the advisory-ML
+ * design (triage.ts's TriageResult.modelAgreed doc comment; Round 6
+ * rebuild plan Phase 4: "disagreement folds into needs_review") exists to
+ * guarantee: an EMERGENCY(model)->lower(rules) de-escalation must not sink
+ * out of the priority queue unflagged just because the rules engine (which
+ * is deterministic, so never "low confidence") was certain of its own
+ * lower tier.
+ */
+export function computeNeedsReview(input: NeedsReviewInput): boolean {
+  return Boolean(
+    input.llmNeedsReview ||
+      input.humanReviewRequested ||
+      input.hasContraindicationFlags ||
+      input.deteriorationAlert ||
+      input.modelAgreed === false,
+  );
+}
