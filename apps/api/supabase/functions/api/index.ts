@@ -20,6 +20,7 @@ import { supervisor } from "./routes/supervisor.ts";
 import { referral } from "./routes/referral.ts";
 import { metrics } from "./routes/metrics.ts";
 import { protocol } from "./routes/protocol.ts";
+import { analytics } from "./routes/analytics.ts";
 import type { AppEnv } from "./_shared/types.ts";
 
 const app = new Hono<AppEnv>();
@@ -70,6 +71,7 @@ app.route("/", supervisor);
 app.route("/", referral);
 app.route("/", metrics);
 app.route("/", protocol);
+app.route("/", analytics);
 
 Deno.serve(app.fetch);
 

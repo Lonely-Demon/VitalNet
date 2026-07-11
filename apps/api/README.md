@@ -55,7 +55,16 @@ calls `fn_outbreak_signal_counts` via `.rpc()`, facility-scoped via `_shared/sco
 `GET /api/metrics` (admin-only; `_shared/prometheus.ts` hand-formats the Prometheus text
 exposition format — no per-request HTTP metrics yet, see `phase30_triage_metrics_fn.sql`'s
 header for why that's a deliberate gap, not an omission), `GET /api/protocol/questions`
-(genuine Postgres RLS, no RPC — `protocol_questions` carries no PHI).
+(genuine Postgres RLS, no RPC — `protocol_questions` carries no PHI), and all five
+`analytics` endpoints (`GET /summary`, `/emergency-rate`, `/response-times`,
+`/ml-agreement`, `/export`) — the last remaining Tranche A route module. `/summary` runs
+5 queries concurrently with a per-query timeout and graceful degradation (`_shared/queryTimeout.ts`),
+matching the Python original's `asyncio.gather`/`_run_query` pattern. `/export` streams a
+CSV (`_shared/csv.ts`) and writes a PHI audit log entry via `_shared/audit.ts`'s
+`logPhiAccess()` (service-role, one of the two legitimate remaining uses). The
+percentile/median math (`_shared/analyticsStats.ts`) required matching Python's
+round-half-to-even `round()` exactly — `Math.round()` disagrees at exact `.5` index
+boundaries (caught by a test, see that file's `pythonRound` comment).
 
 **Scope refinement from the original plan**: `protocol`'s `POST /ask` and
 `PATCH /questions/:id/curate` are writes that also need `app/services/llm.py`'s 4-tier
@@ -63,7 +72,7 @@ Groq/Gemini fallback ported — moved to Tranche B (Phase 4) alongside `voice`, 
 LLM/external-API-heavy write surface, instead of force-fitting them into a "read-mostly"
 tranche just because they share a Python module with the one read endpoint.
 
-Not yet ported: analytics (Tranche A);
+**Tranche A is now complete.** Not yet ported:
 protocol's `/ask`+`/curate`, cases/security/dsr/admin/push/voice, and the rules-first
 flip on `/api/submit` (Tranche B, Phase 4). The legacy FastAPI backend stays deployable
 and authoritative for all of these until each is cut over — see the frontend's
