@@ -2,7 +2,12 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    // WebCrypto types (crypto.getRandomValues in patientKey.ts) — this
+    // package runs in browser, Deno, and Node 19+, all of which implement
+    // the standard WebCrypto API; "DOM" here only supplies ambient TYPES,
+    // it adds no runtime browser dependency.
+    "lib": ["ES2022", "DOM"]
   },
   "include": ["src"]
 }

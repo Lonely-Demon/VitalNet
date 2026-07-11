@@ -42,17 +42,43 @@ import the same `triage()` function from the same npm package.
 - A rule that only ever **raises** a tier must never be changed to lower
   one (NEWS2-floor invariant).
 - The deterministic safety-net/rules layer always overrides the advisory
-  model's opinion — see `triage.ts`'s mode handling.
-- Every rule row carries a citation and at least one embedded test vector
-  (`{ id, citation, tests: [{ input, expect }] }`) — `test/rules.test.ts`
-  executes every embedded vector automatically; a rule with no vector
-  fails the suite.
+  model's opinion — see `triage.ts`'s mode handling. In `rules_first`
+  mode (the default), the model's tier is never read for `tier` at all.
+- Every fired rule carries a citation (`FiredRule.citation`) so a clinician
+  can trace *why* a tier was assigned back to a named guideline — see
+  `test/engine.test.ts` for the safety-net/pregnancy/paediatric cases each
+  citation-bearing rule must get right.
 - `noUncheckedIndexedAccess` is on in `tsconfig.base.json` — vitals are
   frequently absent in the field (no BP cuff, no pulse oximeter) and every
   lookup must handle that explicitly, not implicitly.
 
+## Tests (`pnpm test`)
+
+- `test/engine.test.ts` — ported from `backend/tests/test_classifier_safety.py`:
+  every hand-picked safety-net, pregnancy, and paediatric case against `assignTier()`.
+- `test/engine.fuzz.test.ts` — ported from `backend/tests/test_classifier_fuzz.py`:
+  ~11,000 seeded randomized cases asserting `triage()`/`assignTier()` never
+  crash and the output contract + safety-net invariant hold under noise.
+- `test/contraindications.test.ts` — ported from `apps/web/tests/contraindications.test.mjs`.
+- `test/features.golden.test.ts` / `test/treeEvaluator.golden.test.ts` — replay
+  the committed `apps/web/tests/fixtures/*` golden vectors against
+  `buildFeatureMap()` / `evaluateTrees()`.
+- `test/cli.test.ts` — exercises `cli.mjs` as a real subprocess.
+- `test/conformance/hybrid.conformance.test.ts` — the migration conformance
+  gate: replays 10,000 synthetic patients (each already labeled by
+  Python's production `predict_triage`) through `triage()` in `hybrid`
+  mode and asserts exact tier agreement; also generates an informational
+  `rules_first` vs. current-production delta report. Regenerate the
+  patient set with `cd backend && python scripts/export_conformance_patients.py`;
+  see `test/conformance/report.md` for the latest run's results.
+
 ## Regenerating training artifacts
 
-`tools/training/train_classifier.py` calls this package's CLI for labeling
-and feature engineering, so the trained model's labels and the runtime
-rules engine can never drift apart. See `tools/training/README.md`.
+`cli.mjs` exposes `label` and `engineer-features` JSONL subcommands so the
+Python training pipeline (`backend/scripts/train_classifier.py`) can call
+into this package instead of maintaining its own copy of the rules/feature
+code. Wiring that pipeline to actually call the CLI (removing its
+duplicated `assign_triage_label`/band-scorer functions) is Phase 6 of the
+migration plan — until then, `train_classifier.py`'s own copy and this
+package's `rules/` are two implementations that the conformance test above
+keeps honest, not one.
