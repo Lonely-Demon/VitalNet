@@ -54,13 +54,20 @@ calls `fn_outbreak_signal_counts` via `.rpc()`, facility-scoped via `_shared/sco
 `fn_open_case_counts`), `GET /api/referrals` (RLS-scoped list, no RPC needed),
 `GET /api/metrics` (admin-only; `_shared/prometheus.ts` hand-formats the Prometheus text
 exposition format — no per-request HTTP metrics yet, see `phase30_triage_metrics_fn.sql`'s
-header for why that's a deliberate gap, not an omission).
+header for why that's a deliberate gap, not an omission), `GET /api/protocol/questions`
+(genuine Postgres RLS, no RPC — `protocol_questions` carries no PHI).
 
-Not yet ported: analytics, protocol (Tranche A);
-cases/security/dsr/admin/push/voice and the rules-first flip on `/api/submit` (Tranche
-B, Phase 4). The legacy FastAPI backend stays deployable and authoritative for all of
-these until each is cut over — see the frontend's per-endpoint base-URL resolver map
-(Phase 3 plan) for the rollback mechanism.
+**Scope refinement from the original plan**: `protocol`'s `POST /ask` and
+`PATCH /questions/:id/curate` are writes that also need `app/services/llm.py`'s 4-tier
+Groq/Gemini fallback ported — moved to Tranche B (Phase 4) alongside `voice`, the other
+LLM/external-API-heavy write surface, instead of force-fitting them into a "read-mostly"
+tranche just because they share a Python module with the one read endpoint.
+
+Not yet ported: analytics (Tranche A);
+protocol's `/ask`+`/curate`, cases/security/dsr/admin/push/voice, and the rules-first
+flip on `/api/submit` (Tranche B, Phase 4). The legacy FastAPI backend stays deployable
+and authoritative for all of these until each is cut over — see the frontend's
+per-endpoint base-URL resolver map (Phase 3 plan) for the rollback mechanism.
 
 ## Running locally
 
