@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import require_role
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
-from app.core.database import get_supabase_for_user, supabase_admin, extract_bearer_token
+from app.core.database import get_supabase_for_user, extract_bearer_token
 from app.api.routes.cases import limiter, _parse_uuid, _resolved_role, _resolved_facility
 
 logger = logging.getLogger("vitalnet")
@@ -95,22 +95,18 @@ async def list_active_facilities(
     # Open (unreviewed) case load per facility — a decision-support ranking
     # signal, not authoritative bed availability (docs/DECISIONS.md §20).
     # A doctor's own RLS-scoped token can only see their OWN facility's
-    # case_records (by design — the whole point of RLS here), so this ONE
-    # narrow aggregate uses supabase_admin instead. It is deliberately
-    # limited to a facility_id count — no patient data, no free text, no
-    # individual case rows ever leave this function.
-    open_cases = (
-        supabase_admin.table("case_records")
-        .select("facility_id")
-        .is_("reviewed_at", "null")
-        .is_("deleted_at", "null")
-        .execute()
-    )
+    # case_records (by design — the whole point of RLS here), so this calls
+    # fn_open_case_counts (a SECURITY DEFINER Postgres function, backend/
+    # supabase/migrations/phase28_security_definer_fns.sql) through `db`
+    # instead of supabase_admin. It is deliberately limited to a
+    # facility_id count — no patient data, no free text, no individual
+    # case rows ever leave the database.
+    open_cases = db.rpc("fn_open_case_counts", {}).execute()
     load_by_facility: dict[str, int] = {}
     for row in open_cases.data or []:
         fid = row.get("facility_id")
         if fid:
-            load_by_facility[fid] = load_by_facility.get(fid, 0) + 1
+            load_by_facility[fid] = row.get("open_count", 0)
 
     for f in facilities:
         f["open_case_count"] = load_by_facility.get(f["id"], 0)

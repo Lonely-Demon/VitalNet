@@ -19,19 +19,23 @@ Supabase database clients.
    no RLS backstop. tests/test_admin_authz.py enforces this for exactly those
    modules (see ADMIN_ROUTE_MODULES there).
 
-   NARROW AGGREGATE EXCEPTION: a small number of non-admin-gated endpoints
-   also use supabase_admin, each for exactly one deliberate reason — a role's
-   own RLS-scoped token structurally cannot see the aggregate it legitimately
-   needs (e.g. a doctor's facility-scoped referral picker needs another
-   facility's open-case *count*; a supervisor's team dashboard needs a
-   cross-worker aggregate that case_records' row-level policy was never
-   extended to grant them). Each is documented in docs/DECISIONS.md (§20
-   referral load-balancing, §22 deterioration alert, §25 supervisor team
-   metrics) and follows the same rule: only an aggregate (a count, rate, or
-   distribution) may cross the RLS boundary this way — never an individual
-   case row, patient field, or free text. Do not add a new supabase_admin call
-   outside admin_routes.py/dsr_routes.py/metrics_routes.py without that same
-   justification recorded in DECISIONS.md.
+   RETIRED NARROW AGGREGATE EXCEPTION (DECISIONS.md §29, §32): non-admin
+   endpoints used to reach past their own RLS-scoped token via supabase_admin
+   for exactly one aggregate each (a doctor's referral picker needing another
+   facility's open-case *count*; a supervisor's team dashboard needing a
+   cross-worker aggregate). Those four call sites (cases.py's deterioration
+   check, referral_routes.py's open-case counts, supervisor_routes.py's team
+   metrics, outbreak_routes.py's EARS signal query) now call SECURITY DEFINER
+   Postgres functions instead (backend/supabase/migrations/
+   phase28_security_definer_fns.sql — fn_deterioration_count,
+   fn_open_case_counts, fn_team_metrics, fn_outbreak_signal_counts), through
+   the caller's OWN get_supabase_for_user() client via .rpc(). Each function
+   re-derives the same narrow exception and role/facility scoping rule
+   inside the database itself (auth.uid() -> profiles), so the RLS-bypass
+   boundary lives next to the table it protects instead of in application
+   code. Do not add a new supabase_admin call outside admin_routes.py/
+   dsr_routes.py/metrics_routes.py — write a SECURITY DEFINER function
+   instead, following that same pattern, and record it in DECISIONS.md.
 """
 import hmac
 from typing import Optional
