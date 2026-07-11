@@ -52,30 +52,23 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - name: Install (no install scripts)
-        run: npm ci --prefix frontend --ignore-scripts
-      - name: Offline-model parity (JS == server model)
-        # Guards that the pure-JS offline tree evaluator produces the SAME
-        # triage as the server model on the committed golden vectors. If this
-        # fails, offline triage would diverge from online — block the merge.
-        run: npm run test:parity --prefix frontend
-      - name: Feature-engineering parity (JS == Python)
-        # Guards that triageClassifier.js::buildFeatureMap mirrors
-        # clinical_features.py::ClinicalFeatureEngineer exactly. Catches the
-        # class of bug where offline triage silently uses different engineered
-        # features than the server for the same patient (see FEATURES_ROADMAP §1.2).
-        run: npm run test:feature-parity --prefix frontend
-      - name: Contraindication-flag parity (JS == Python)
-        run: npm run test:contraindications --prefix frontend
-      - name: Safety-net parity (JS == Python)
-        # Guards that clinicalRules.js::safetyNetCheck/news2ConcerningVital
-        # mirror classifier.py exactly, including the pregnancy-hypertension
-        # rule (docs/DECISIONS.md §30) — an offline/online divergence here
-        # would mean a critical presentation triages differently with no
-        # connectivity.
-        run: npm run test:safety-net --prefix frontend
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
+      - name: Install workspace deps (no install scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: clinical-core tests
+        # The single source of clinical truth (packages/clinical-core) — every
+        # rule's embedded citation+vector, the ported safety/fuzz suites, and
+        # the golden vectors (incl. the tree-evaluator and feature-engineering
+        # golden vectors that used to need separate apps/web parity suites —
+        # Round 6 rebuild plan Phase 5: apps/web now imports this package
+        # directly instead of maintaining its own mirrored copies, so there is
+        # nothing left in apps/web that could drift from the server). If this
+        # fails, a clinical rule regressed.
+        run: pnpm --filter @vitalnet/clinical-core test
       - name: Build
-        run: npm run build --prefix frontend
+        run: pnpm --filter @vitalnet/web run build
         env:
           VITE_SUPABASE_URL: https://example.supabase.co
           VITE_SUPABASE_ANON_KEY: ci-placeholder-anon-key
@@ -123,23 +116,15 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - name: Install (no install scripts)
-        run: npm ci --prefix frontend --ignore-scripts
-      - name: Offline-model parity (JS == server model)
-        run: npm run test:parity --prefix frontend
-      - name: Feature-engineering parity (JS == Python)
-        run: npm run test:feature-parity --prefix frontend
-      - name: Contraindication-flag parity (JS == Python)
-        run: npm run test:contraindications --prefix frontend
-      - name: Safety-net parity (JS == Python)
-        # Guards that clinicalRules.js::safetyNetCheck/news2ConcerningVital
-        # mirror classifier.py exactly, including the pregnancy-hypertension
-        # rule (docs/DECISIONS.md §30) — an offline/online divergence here
-        # would mean a critical presentation triages differently with no
-        # connectivity.
-        run: npm run test:safety-net --prefix frontend
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
+      - name: Install workspace deps (no install scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: clinical-core tests
+        run: pnpm --filter @vitalnet/clinical-core test
       - name: Build
-        run: npm run build --prefix frontend
+        run: pnpm --filter @vitalnet/web run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
@@ -164,16 +149,19 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
       - name: Generate backend SBOM (CycloneDX)
         run: |
           python -m pip install --upgrade pip
           pip install --no-cache-dir cyclonedx-bom==7.3.0
           cyclonedx-py requirements backend/requirements.txt -o backend-sbom.json --of json
-      - name: Install frontend deps (needed for an accurate SBOM)
-        run: npm ci --prefix frontend --ignore-scripts
+      - name: Install workspace deps (needed for an accurate SBOM)
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Generate frontend SBOM (CycloneDX)
-        run: npx --yes @cyclonedx/cyclonedx-npm --output-file ../frontend-sbom.json --ignore-npm-errors
-        working-directory: frontend
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file ../../frontend-sbom.json --ignore-npm-errors
+        working-directory: apps/web
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: sbom-${{ github.sha }}

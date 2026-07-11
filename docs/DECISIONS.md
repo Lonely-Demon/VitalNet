@@ -1182,3 +1182,169 @@ long-lived branch is more to keep track of than the previous exactly-three
 model, and it must not become a dumping ground for anything someone would
 rather not put through normal review — it is specifically for reforms of
 this scale, not a general-purpose "experiments" branch.
+
+### 33. Round 6 rebuild — TypeScript migration, rules-first triage, unified outbox, DB discipline: what, why, evidence, rollback
+
+**Context**: four clinical-logic pairs were hand-mirrored across Python
+(the FastAPI backend) and JavaScript (the browser, for offline triage) —
+Pydantic↔Zod validation, `_safety_net_check`↔`safetyNetCheck`,
+`ClinicalFeatureEngineer`↔`buildFeatureMap`, and a contraindications table
+— plus a whole parity-test apparatus (four suites, golden vectors, CI jobs)
+whose only job was catching drift between the copies. Three further
+problems compounded it: the ML model was trained on its own scorer's
+labels (a circular validation of sorts) yet sat in the *authoritative*
+triage path in production, with the deterministic safety net only as a
+backstop around it; the offline layer was a set of feature-specific
+IndexedDB queues rather than one generic outbox with server-side dedup; and
+DB privilege boundaries lived in app-layer discipline (`supabase_admin`
+"narrow exceptions," §29) rather than the database itself. This entry
+records the six-phase rebuild (`experimental` branch, §32) that addressed
+all four, what changed, the evidence it didn't silently change clinical
+behaviour where it shouldn't have, and exactly what's still gated before
+any of it touches production traffic.
+
+**Decision**: build a pnpm workspace monorepo alongside the existing
+`backend/`, strangler-fig style — every phase lands green and shippable,
+the legacy backend stays fully deployable throughout, and nothing is
+deleted until its replacement is validated.
+
+1. **One language for clinical logic.** `packages/clinical-core`
+   (TypeScript) is now the single source of truth: the Zod intake schema
+   (merging `schemas.py`'s bounds with the old `validation.js`), the
+   deterministic rules engine (bands + overrides + citations), 43-feature
+   engineering, an offline tree evaluator with Saabas-style path
+   attribution, and contraindication checks. Both `apps/web` (browser,
+   offline) and `apps/api` (server, online) import it directly — there is
+   no second copy to drift out of sync, and the four apps/web-side parity
+   test suites that used to guard against that drift are deleted (their job
+   is now structurally impossible to fail at, not just tested for).
+2. **Rules-first triage: the model becomes advisory.** The rules engine
+   (promoted from `train_classifier.py`'s v3.1.0 age-aware training-label
+   scorer, previously training-only code) is now the sole authority over
+   `triage_level`. The model's own tier, confidence, and low-confidence
+   flag are persisted and shown as a *suggestion* — it drives queue
+   prioritization and a documented model-promotion gate (comparing
+   `model_tier` against outcomes/overrides), but never the tier itself.
+   Model/rules disagreement (`model_agreed === false`) folds into
+   `needs_review` server-side, so an EMERGENCY(model)→lower(rules)
+   de-escalation can never silently sink out of the priority queue
+   unflagged — the rules engine is never "low confidence" about its own
+   decision the way a probabilistic model can be. Saabas path attribution
+   (`treeEvaluator.ts`) replaces SHAP at inference for the advisory
+   model's `top_factors`; `shap` remains a training-only dependency for
+   artifacts no longer shipped.
+3. **A unified offline outbox.** `apps/web/src/lib/outbox.js` replaces the
+   case-submission-specific `offlineQueue.js` with a generic IndexedDB
+   event queue (`{event_id, type, payload, created_at, attempts, status,
+   last_error}`). `event_id` is the *same* uuid as `case_records.client_id`
+   and the `X-Event-Id` header `apps/api`'s new idempotency middleware
+   dedupes on — one idempotency key end-to-end instead of three
+   independently-generated ones. A permanently-failing (4xx) event is
+   dead-lettered, not silently dropped, and surfaced in `OfflineBanner.jsx`
+   with retry/discard actions. Doctor actions stay online-only for now;
+   the store itself is generic enough that a future offline-capable action
+   doesn't need another IndexedDB version bump.
+4. **DB discipline moves into the database.** `phase28_security_definer_fns.sql`
+   replaces four narrow `supabase_admin` aggregate-query exceptions
+   (§29's "retired narrow aggregate exception") with `SECURITY DEFINER`
+   Postgres functions (`fn_deterioration_count`, `fn_open_case_counts`,
+   `fn_team_metrics`, `fn_outbreak_signal_counts`, `fn_rate_limit`,
+   `fn_schema_fingerprint`) — internal role checks via `auth.uid()`, `REVOKE
+   ALL` + `GRANT EXECUTE TO authenticated`, so service-role usage stays
+   confined to `/api/admin` + audit writes, the invariant §29 already
+   claimed but hadn't fully enforced. `phase29`/`phase31` add `client_events`
+   (outbox dedup) and `fn_client_event_record` (a second `SECURITY DEFINER`
+   function, since `client_events` has no INSERT policy — it derives
+   `submitted_by` from `auth.uid()` internally, so spoofing it is
+   structurally impossible, not just policy-forbidden). A new CI job,
+   `db-schema-drift.yml`, replays every tracked migration against a fresh
+   Postgres on each PR and diffs the result against a committed schema
+   snapshot, plus a weekly live-fingerprint check via
+   `fn_schema_fingerprint()` — catching both "a migration is wrong" and "the
+   live dashboard drifted outside any tracked migration" (the failure mode
+   that caused the ten-migrations-behind incident in §29).
+5. **A new backend, not a rewrite of the old one.** `apps/api` is a single
+   Supabase Edge Function (Deno + Hono) implementing the full route surface
+   in `rules_first` mode, built and tested green in CI
+   (`api-edge-function.yml`) — but **not yet receiving production traffic**.
+   `apps/web/src/api/base.js`'s `ENDPOINT_BACKEND` map resolves every
+   endpoint to `'legacy'` today; flipping one entry to `'edge'` is the
+   entire per-tranche cutover, and reverting it is the entire rollback.
+
+**Conformance evidence** (not trusted by inspection — verified):
+`tools/training/export_conformance_patients.py` generated 10,000 synthetic
+patients and ran Python's pre-migration `predict_triage` (safety net →
+model → NEWS2 floor) against clinical-core's `triage()` in `hybrid` mode
+(the same order, reproducing the legacy semantics exactly) —
+**10,000/10,000 (100.000%) agreement, zero mismatches**
+(`packages/clinical-core/test/conformance/report.md`, asserted by
+`hybrid.conformance.test.ts` in CI). This is the proof the TypeScript port
+changed nothing before `rules_first` ever shipped. The *separate*,
+informational delta — the same 10,000 patients replayed in `rules_first`
+mode instead — shows **88/10,000 (0.88%) changed**: 35 upgraded to a
+higher tier, 53 downgraded. Of the downgrades, **51 are
+EMERGENCY(legacy)→URGENT(rules_first)**. This is not a bug: it is the
+intended, quantified behavioural delta of making the rules engine
+authoritative instead of the model (the model, trained on the same rules
+engine's own historical labels, drifts from them slightly on borderline
+cases, especially where it learned patterns the deterministic scorer's
+exact boundaries don't capture). It is exactly the number a clinician
+reviewer needs before `rules_first` reaches production — see the Phase 7
+sign-off gate (`docs/CLINICAL_REVIEW.md`, `CODEOWNERS` on
+`packages/clinical-core/src/rules/**`). The phase28/29/31 SQL migrations
+were separately verified empirically against a real local Postgres 16
+instance (RLS scoping, idempotent insert, unspoofable `submitted_by`,
+insert-denied-without-the-function), not by inspection alone.
+
+**Rollback map**: per-tranche, one line in `ENDPOINT_BACKEND` — verified
+against a live E2E run before flipping, per §29's methodology, before
+watching audit logs/metrics. `backend/app/` and
+`.github/workflows/backend-keepalive.yml` are **deliberately not deleted**
+as part of this rebuild — deletion is deferred until `apps/api` has
+actually taken production traffic and been verified for real, not on the
+strength of its test suite alone (the JWKS/ES256 auth path and the webpush
+VAPID crypto have zero live-network coverage by design — see
+`apps/api/README.md`'s status section and `test/auth.test.ts`'s header).
+Training rewired last: `tools/training/train_classifier.py` (moved from
+`backend/scripts/`) now pipes synthetic patients through
+`packages/clinical-core/cli.mjs` for both labeling and feature engineering
+instead of maintaining a ~190-line Python port of the same scorer — the
+last hand-mirrored pair, eliminated once the TypeScript rules engine it
+would have mirrored was itself verified against the legacy production path
+above.
+
+**Consequences**: online and offline triage cannot silently diverge any
+more — there is one rules-engine *implementation*, not two kept in sync by
+hand, and the four parity-test suites that existed only to catch that
+class of bug are gone because the bug class is gone. Same implementation
+does not mean same *mode*, though, and that distinction mattered in
+practice — see the correction immediately below. The tradeoff this entry
+exists to make explicit: `rules_first`'s 51 EMERGENCY→URGENT downgrades
+are a real, quantified change in clinical behaviour, not a regression to
+wave through — it does not ship to production until a named clinician has
+reviewed the delta and the rules tables it comes from (Phase 7). Until
+`apps/api` cuts over, `backend/`'s hybrid (model-primary) behaviour
+remains what patients actually experience, and this document,
+`backend/app/ml/README.md`, and `backend/app/ml/MODEL_CARD.md` describe it
+accurately as the live system — not as a legacy curiosity.
+
+**Correction, found in PR review before merge**: the first version of this
+migration's `apps/web` offline triage (`utils/triageClassifier.js`)
+hardcoded `mode: 'rules_first'` unconditionally, with no gate. That meant
+an offline ASHA worker could see a `rules_first`-computed preliminary
+tier — including, in principle, one of the 51 EMERGENCY→URGENT
+cases above — *before* this entry's own sign-off gate had cleared, and
+before the server itself had cut over to `rules_first`. The persisted,
+authoritative record was never at risk (the outbox enqueues the raw form,
+never the locally-computed tier — see Phase 5's outbox design above — so
+`/api/submit` always retriages from scratch on sync), but the preliminary
+*display* could disagree with what the case became once synced, which is
+exactly the kind of quietly-shipped clinical-behaviour change this whole
+entry argues against doing without sign-off. Fixed in the same PR:
+`triageClassifier.js` now calls `triage()` in `hybrid` mode — matching
+`backend/app/`'s actual live semantics — and falls back to an
+override-only safety-net check (never a guessed tier) when the model
+can't be loaded offline, rather than silently computing a `rules_first`
+tier without one. `apps/web` moves to `rules_first` only alongside the
+real `apps/api` cutover, not before it. See `apps/web/README.md`'s
+"Triage logic lives in one place" section for the corrected design.

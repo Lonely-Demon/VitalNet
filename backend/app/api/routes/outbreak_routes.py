@@ -19,9 +19,11 @@ makes day-over-day counts comparable at all.
 This is an informational aid for a human to review, not a validated
 public-health surveillance system — the same honesty standard already
 applied to fairness_audit.py/drift_monitor.py. Output is aggregate counts
-only: no patient names, no individual case content, ever. Uses
-supabase_admin for exactly one aggregate query, the same narrow exception
-pattern as §20/§22/§25 (see the SECURITY NOTE in app/core/database.py).
+only: no patient names, no individual case content, ever. Calls
+fn_outbreak_signal_counts — a SECURITY DEFINER Postgres function (backend/
+supabase/migrations/phase28_security_definer_fns.sql) — through the
+caller's own RLS-scoped client, the same narrow exception pattern as
+§20/§22/§25, now enforced inside the database rather than via supabase_admin.
 """
 import logging
 import statistics
@@ -31,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.core.auth import require_role
-from app.core.database import supabase_admin
+from app.core.database import get_supabase_for_user, extract_bearer_token
 from app.core.scoping import resolve_facility_scope
 from app.api.routes.cases import limiter, _resolved_role, _resolved_facility
 
@@ -120,17 +122,14 @@ async def get_outbreak_signals(
     today = datetime.now(timezone.utc).date().isoformat()
     since = (datetime.now(timezone.utc) - timedelta(days=BASELINE_DAYS + 1)).isoformat()
 
-    query = (
-        supabase_admin.table("case_records")
-        .select("facility_id, symptoms, created_at")
-        .is_("deleted_at", "null")
-        .gte("created_at", since)
-    )
-    if scoped_facility_id:
-        query = query.eq("facility_id", scoped_facility_id)
+    raw_token = extract_bearer_token(authorization)
+    db = get_supabase_for_user(raw_token)
 
     try:
-        res = query.execute()
+        res = db.rpc(
+            "fn_outbreak_signal_counts",
+            {"p_facility_id": scoped_facility_id, "p_since": since},
+        ).execute()
     except Exception as e:
         logger.warning("Outbreak signals query failed: %s", e)
         raise HTTPException(status_code=502, detail="Outbreak signals query failed — try again")

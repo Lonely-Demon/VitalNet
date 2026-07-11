@@ -1,18 +1,30 @@
 #!/usr/bin/env bash
 # VitalNet — one-command local setup.
 #
-# Installs backend + frontend dependencies and walks you through creating
-# backend/.env.local and frontend/.env.local from the .env.example templates.
-# Both files are gitignored — nothing this script writes is ever committed.
-# Safe to re-run: it never overwrites an .env.local that already exists, and
-# skips dependency installs that are already done.
+# Installs the legacy backend + apps/web (the pair serving production
+# traffic today — see the root README's migration note) and walks you
+# through creating backend/.env.local and apps/web/.env.local from the
+# .env.example templates. Both files are gitignored — nothing this script
+# writes is ever committed. Safe to re-run: it never overwrites an
+# .env.local that already exists, and skips dependency installs that are
+# already done. Does not set up apps/api (the new, not-yet-live edge
+# function backend) — see apps/api/README.md for that.
 #
 # Usage: ./setup.sh
-# Requires: bash, python3 (3.11+), node/npm (v20+). On Windows, run this from
-# WSL or Git Bash — a native PowerShell port is not provided.
+# Requires: bash, python3 (3.11+), node/npm (v20+), pnpm (v10+ — this repo
+# is a pnpm workspace; `corepack enable` ships pnpm with Node 16.9+).
+# On Windows, run this from WSL or Git Bash — a native PowerShell port is
+# not provided.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pnpm is required (this repo is a pnpm workspace) but wasn't found on PATH." >&2
+  echo "Install it with: corepack enable   (ships with Node 16.9+)" >&2
+  echo "or see https://pnpm.io/installation" >&2
+  exit 1
+fi
 
 BOLD=$(tput bold 2>/dev/null || echo "")
 RESET=$(tput sgr0 2>/dev/null || echo "")
@@ -92,23 +104,26 @@ cd ..
 
 # ── Frontend ─────────────────────────────────────────────────────────────
 
-say "Setting up frontend (Node)"
-cd frontend
-npm install --silent
+say "Setting up apps/web (pnpm workspace)"
+# From the repo root, not `cd apps/web && npm install` — apps/web depends on
+# @vitalnet/clinical-core via a workspace:* pnpm protocol that plain npm
+# cannot resolve.
+pnpm install --filter @vitalnet/web... --silent
 
+cd apps/web
 if [ ! -f .env.local ]; then
   cp .env.example .env.local
   echo ""
-  say "frontend/.env.local created — let's fill in the required values"
+  say "apps/web/.env.local created — let's fill in the required values"
   prompt_env_var .env.local VITE_SUPABASE_URL "Same Supabase project URL as above"
   prompt_env_var .env.local VITE_SUPABASE_ANON_KEY "Same Supabase anon key as above" true
   sed -i.bak -E "s|^VITE_API_BASE_URL=.*|VITE_API_BASE_URL=http://localhost:8000|" .env.local && rm -f .env.local.bak
-  echo "  VITE_API_BASE_URL set to http://localhost:8000 (change it in frontend/.env.local for a hosted backend)."
+  echo "  VITE_API_BASE_URL set to http://localhost:8000 (change it in apps/web/.env.local for a hosted backend)."
   echo "  VITE_VAPID_PUBLIC_KEY left blank — optional, only needed for Web Push."
 else
-  echo "  frontend/.env.local already exists — leaving it untouched."
+  echo "  apps/web/.env.local already exists — leaving it untouched."
 fi
-cd ..
+cd ../..
 
 echo ""
 say "Setup complete."
@@ -123,7 +138,7 @@ are decisions/resources only you control):
 
 To run it:
   Backend:  cd backend && source venv/bin/activate && python -m uvicorn app.main:app --reload --port 8000
-  Frontend: cd frontend && npm run dev
+  Frontend: pnpm --filter @vitalnet/web dev
 
 See README.md for the full walkthrough, or docs/ONBOARDING.md for a
 narrated first-time setup including your first change and PR.

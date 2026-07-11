@@ -5,7 +5,7 @@ Extracted from main.py as part of Phase 12 architectural modularisation.
 import logging
 import re
 import uuid as uuid_lib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
@@ -14,7 +14,7 @@ from slowapi import Limiter
 from app.core.auth import require_role, verify_sub_for_rate_limit
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
-from app.core.database import get_supabase_for_user, supabase_admin, extract_bearer_token
+from app.core.database import get_supabase_for_user, extract_bearer_token
 from app.core.metrics import record_triage_classification
 from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput, PATIENT_KEY_RE
 from app.ml.classifier import predict_triage
@@ -92,37 +92,36 @@ def _resolved_facility(user: dict) -> str | None:
 # from the same patient within this trailing window is a signal worth a
 # clinician's eyes even if today's reading alone wouldn't trigger review.
 _DETERIORATION_WINDOW_DAYS = 7
-_DETERIORATION_QUALIFYING_TIERS = ("URGENT", "EMERGENCY")
 
 
-def _check_deterioration_pattern(patient_key: str | None, current_triage_level: str) -> tuple[bool, int | None]:
+def _check_deterioration_pattern(db, patient_key: str | None, current_triage_level: str) -> tuple[bool, int | None]:
     """
     Counts prior URGENT/EMERGENCY visits sharing patient_key within the
-    trailing window, using supabase_admin for exactly one count-only
-    query — the same narrow, documented exception as the referral
-    load-balancing aggregate (docs/DECISIONS.md §20, §22): a patient_key
-    carries no PII, and an ASHA worker submitting THIS case is already
-    trusted to reason about whether this same patient has recently had
-    repeated severe visits, regardless of which worker saw them each time
-    (RLS would otherwise silently restrict an asha_worker's own query to
-    only their own past submissions, undercounting cross-worker visits).
+    trailing window via fn_deterioration_count (a SECURITY DEFINER Postgres
+    function, backend/supabase/migrations/phase28_security_definer_fns.sql),
+    called through `db` — the CALLING USER's own RLS-scoped client, not
+    supabase_admin. A patient_key carries no PII (docs/DECISIONS.md §20,
+    §22, §29), and an ASHA worker submitting THIS case is already trusted
+    to reason about whether this same patient has recently had repeated
+    severe visits, regardless of which worker saw them each time (plain
+    RLS would otherwise silently restrict an asha_worker's own query to
+    only their own past submissions, undercounting cross-worker visits) —
+    fn_deterioration_count re-derives that same narrow exception inside
+    the database, next to the table it protects, instead of in Python.
     """
     if not patient_key:
         return False, None
 
-    window_start = (datetime.now(timezone.utc) - timedelta(days=_DETERIORATION_WINDOW_DAYS)).isoformat()
-    result = (
-        supabase_admin.table("case_records")
-        .select("id", count="exact")
-        .eq("patient_key", patient_key)
-        .gte("created_at", window_start)
-        .in_("triage_level", _DETERIORATION_QUALIFYING_TIERS)
-        .is_("deleted_at", "null")
-        .execute()
-    )
-    prior_count = result.count if result.count is not None else len(result.data or [])
-    total = prior_count + (1 if current_triage_level in _DETERIORATION_QUALIFYING_TIERS else 0)
-    return total >= 2, (total if total >= 2 else None)
+    result = db.rpc(
+        "fn_deterioration_count",
+        {
+            "p_patient_key": patient_key,
+            "p_current_triage_level": current_triage_level,
+            "p_window_days": _DETERIORATION_WINDOW_DAYS,
+        },
+    ).execute()
+    row = (result.data or [{}])[0]
+    return bool(row.get("has_pattern")), row.get("visit_count")
 
 
 def _authorize_case_row_access(user: dict, row: dict) -> None:
@@ -200,7 +199,7 @@ async def submit_case(
         db = get_supabase_for_user(raw_token)
 
         deterioration_alert, deterioration_visit_count = _check_deterioration_pattern(
-            form.patient_key, triage_result["triage_level"]
+            db, form.patient_key, triage_result["triage_level"]
         )
 
         record = {

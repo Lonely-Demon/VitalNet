@@ -8,10 +8,16 @@ this document in the same commit**. Stale maps are worse than no map —
 see the "Keeping this document current" section at the bottom for the
 specific rule.
 
-Last verified against the codebase: 2026-07-04 (post round-3 reconciliation —
-merged an independently-developed `dev` branch's security/reliability work
-on top of round-2's hybrid auth, pure-JS offline engine, and ML safety
-layers; see git log for the full change list).
+Last verified against the codebase: 2026-07-11 (post Round 6 rebuild
+Phases 0-6 — the pnpm-workspace TypeScript migration: `packages/
+clinical-core` as the single source of clinical truth, a new Supabase Edge
+Function backend (`apps/api`, not yet live), a unified offline outbox, and
+DB-discipline `SECURITY DEFINER` functions; see `docs/DECISIONS.md` §33 and
+git log for the full change list). Earlier verification note (2026-07-04,
+post round-3 reconciliation of an independently-developed `dev` branch's
+security/reliability work on top of round-2's hybrid auth, pure-JS offline
+engine, and ML safety layers) still applies to everything in `backend/`,
+which this migration has not touched.
 
 ---
 
@@ -95,12 +101,32 @@ graph TB
 
 ## 2. Repository layout
 
+**Mid-migration** (Round 6 rebuild, `docs/DECISIONS.md` §33 — a pnpm
+workspace monorepo replacing the old flat `backend/`+`frontend/` layout).
+`backend/` is unchanged in place and still serves 100% of production
+traffic; everything else below it is new and not yet live.
+
 ```
 VitalNet/
-├── backend/            FastAPI Python app — see §3. Migrations live in
+├── pnpm-workspace.yaml  Declares apps/* and packages/* as the pnpm workspace.
+│                       backend/ and tools/training/ (Python) are NOT part of it.
+├── packages/
+│   └── clinical-core/  THE single source of clinical truth (TypeScript) — see §3a.
+│                       Consumed by both apps/web (browser) and apps/api (server).
+├── apps/
+│   ├── web/             React 19 + Vite PWA — see §4. Was `frontend/` pre-migration.
+│   └── api/              NEW backend: one Supabase Edge Function (Deno + Hono),
+│                       running clinical-core in rules-first mode — see §3b.
+│                       NOT YET LIVE (no production traffic; apps/web's
+│                       ENDPOINT_BACKEND map resolves every endpoint to 'legacy').
+├── backend/            LIVE (legacy) FastAPI Python app — see §3. Migrations live in
 │                       backend/supabase/migrations/ (version-controlled,
-│                       idempotent SQL — the canonical schema source; see §5)
-├── frontend/           React 19 + Vite PWA — see §4
+│                       idempotent SQL — the canonical schema source; see §5),
+│                       shared by both backends. Deployable until apps/api cuts over.
+├── tools/training/     Python ML training pipeline (was backend/scripts/). Generates
+│                       synthetic patients and pipes them through packages/clinical-core
+│                       (a JSONL subprocess, cli.mjs) for labels + features — Python
+│                       only does sklearn training + ONNX→tree-JSON export now.
 ├── docs/
 │   ├── DISASTER_RECOVERY.md   Ops runbook: RTO/RPO targets, restore procedures
 │   ├── INCIDENT_RESPONSE.md   Security incident runbook: severity classification,
@@ -109,6 +135,10 @@ VitalNet/
 │   │                     DISASTER_RECOVERY.md — adversary-involved vs. not)
 │   ├── CLINICAL_GOVERNANCE.md Regulatory posture (CDSCO SaMD), model lifecycle
 │   │                     governance, five-layer guardrail architecture
+│   ├── CLINICAL_REVIEW.md     Sign-off checklist for packages/clinical-core/
+│   │                     src/rules/** changes (Round 6 Phase 7); the
+│   │                     outstanding gate on the rules-first cutover.
+│   │                     .github/CODEOWNERS requires review on that path.
 │   ├── COMPLIANCE_DPDP.md     India DPDP Act 2023 mapping — data-principal
 │   │                     rights, fiduciary obligations, honest gap list
 │   ├── ACCESSIBILITY.md       WCAG 2.1 AA audit — label association, live
@@ -133,17 +163,31 @@ VitalNet/
 │                       removed as fully superseded by this file / FEATURES_ROADMAP.md —
 │                       recoverable from git history if ever needed.
 ├── .github/
-│   ├── workflows/ci.yml  Lint (PR) + pytest/build (push) on main and dev, plus an
-│   │                     SBOM job (push-only, CycloneDX for backend+frontend deps,
-│   │                     uploaded as a build artifact — docs/SECURITY.md)
-│   └── dependabot.yml    Daily pip/npm/actions update PRs, targeting dev
+│   ├── workflows/
+│   │   ├── ci.yml               Lint (PR) + pytest/build (push) on main and dev for
+│   │   │                        backend/ + apps/web, plus an SBOM job (push-only,
+│   │   │                        CycloneDX for backend+frontend deps — docs/SECURITY.md)
+│   │   ├── api-edge-function.yml Deno fmt/lint/check/test for apps/api on every PR/push
+│   │   │                        touching it or packages/clinical-core; a manual-only
+│   │   │                        (workflow_dispatch) `deploy` job — see §3b.
+│   │   ├── training-smoke.yml    Fast smoke test (not a real training run) for
+│   │   │                        tools/training/'s clinical-core cli.mjs wiring.
+│   │   ├── db-schema-drift.yml   PR migration-replay lint + weekly live-fingerprint
+│   │   │                        check — see §5.
+│   │   ├── backend-keepalive.yml Pings the live legacy backend to avoid free-tier
+│   │   │                        cold starts. NOT deleted — backend/ is still live.
+│   │   └── supabase-keepalive.yml Pings Supabase to avoid the 7-day pause.
+│   ├── dependabot.yml    Daily pip/npm/actions update PRs, targeting dev
+│   └── CODEOWNERS        Requires review on packages/clinical-core/src/rules/**
+│                       and the legacy backend's ML equivalents — see
+│                       docs/CLINICAL_REVIEW.md
 ├── README.md           Setup, features, deployment — start here
 ├── AGENTS.md           Conventions for coding agents working in this repo
 ├── CODEBASE_MAP.md     This file
 └── FEATURES_ROADMAP.md Proposed feature backlog with implementation-ready specs
 ```
 
-## 3. Backend (`backend/`)
+## 3. Backend (`backend/`) — legacy, live
 
 FastAPI, Python 3.13 (target; 3.11+ works for local dev), Supabase
 (PostgreSQL + Auth + Realtime) as the only database, Groq/Gemini for LLM
@@ -347,9 +391,13 @@ backend/
 │   │                                 flag a case for review independent of ML tier.
 │   │                                 patient_key (optional, XXXX-XXXX, PATIENT_KEY_RE)
 │   │                                 is the patient continuity key — see
-│   │                                 docs/DECISIONS.md §21. If you add a field here,
-│   │                                 add a matching bound to
-│   │                                 frontend/src/utils/validation.js.
+│   │                                 docs/DECISIONS.md §21. This schema only governs
+│   │                                 the legacy backend's own validation now — it is
+│   │                                 not mirrored anywhere; apps/web/apps/api validate
+│   │                                 against packages/clinical-core/src/schema.ts
+│   │                                 instead (a separate, independently-maintained
+│   │                                 schema — see §3a). If you add a field relevant to
+│   │                                 triage/features, add it there too.
 │   ├── ml/
 │   │   ├── README.md                 ML architecture + clinical grounding — READ
 │   │   │                             before touching classifier.py / clinical_features.py.
@@ -371,18 +419,20 @@ backend/
 │   │   │                             blocker+bradycardia, insulin+altered-consciousness).
 │   │   │                             Advisory, not a drug-interaction database — see
 │   │   │                             docs/DECISIONS.md §17. Never changes triage tier;
-│   │   │                             cases.py folds any flag into needs_review. Mirrored
-│   │   │                             in JS clinicalRules.js::checkContraindications.
+│   │   │                             cases.py folds any flag into needs_review. This is
+│   │   │                             the legacy backend's own copy — no longer mirrored
+│   │   │                             anywhere; packages/clinical-core/src/
+│   │   │                             contraindications.ts is the independent,
+│   │   │                             authoritative version apps/web/apps/api use.
 │   │   ├── clinical_features.py     ClinicalFeatureEngineer — expands ~14 raw intake
-│   │   │                             fields into 43 engineered features. MIRRORED in
-│   │   │                             JS (frontend triageClassifier.js). The safety
-│   │   │                             net + floor + contraindication flags are mirrored
-│   │   │                             in JS clinicalRules.js. Change one side → change
-│   │   │                             the other → retrain → `npm run test:parity`
-│   │   │                             (CI-enforced).
+│   │   │                             fields into 43 engineered features. Legacy-backend-
+│   │   │                             only now — not mirrored anywhere (see §3a's
+│   │   │                             features.ts, the independent authoritative
+│   │   │                             version). tools/training/train_classifier.py
+│   │   │                             doesn't call this either any more.
 │   │   └── models/triage_classifier.pkl
 │   │                                 The trained model + SHAP explainer bundle.
-│   │                                 Regenerate via scripts/train_classifier.py — never
+│   │                                 Regenerate via tools/training/train_classifier.py — never
 │   │                                 hand-edit.
 │   ├── services/
 │   │   ├── llm.py                    4-tier LLM fallback (Groq 70B → Groq 8B → Gemini
@@ -508,11 +558,13 @@ backend/
 │   │                                 ADMIN_ROUTE_MODULES) — is require_role('admin')-
 │   │                                 guarded (the only boundary on the RLS-bypassing
 │   │                                 service-role client). Run in CI.
-│   ├── test_feature_parity.py        Python half of the online/offline ML parity
-│   │                                 guarantee — replays golden_feature_vectors.json
-│   │                                 through ClinicalFeatureEngineer. JS half is
-│   │                                 frontend/tests/featureParity.test.mjs. Both freeze
-│   │                                 the clock (docs/DECISIONS.md §12). Run in CI.
+│   ├── test_feature_parity.py        A Python-internal regression guard now (not a
+│   │                                 cross-language parity check any more, see this
+│   │                                 file's own header) — replays
+│   │                                 backend/tests/fixtures/golden_feature_vectors.json
+│   │                                 through ClinicalFeatureEngineer and asserts no
+│   │                                 drift. Exists only as long as backend/app/ does.
+│   │                                 Freezes the clock (docs/DECISIONS.md §23). Run in CI.
 │   ├── test_bulk_user_import.py      Row-isolation and orphaned-auth-user-rollback
 │   │                                 tests for admin_routes.py's _provision_user() —
 │   │                                 one bad CSV row must not fail the whole batch.
@@ -555,7 +607,7 @@ backend/
 ├── requirements.txt                  Runtime dependencies. scikit-learn and shap are
 │                                     pinned to EXACT versions — see the comments in
 │                                     the file and app/ml/README.md for why.
-├── requirements-train.txt            ONLY needed to run scripts/train_classifier.py
+├── requirements-train.txt            ONLY needed to run tools/training/train_classifier.py
 │                                     (skl2onnx, onnxruntime) — NOT installed in
 │                                     production; keeps the deploy footprint small.
 ├── Procfile / railway.toml / runtime.txt
@@ -616,13 +668,152 @@ sequenceDiagram
 6. Supabase Realtime pushes the INSERT to any subscribed doctor dashboards
    (`useRealtimeCases` on the frontend).
 
-## 4. Frontend (`frontend/`)
+## 3a. clinical-core (`packages/clinical-core/`) — the single source of clinical truth
 
-React 19, Vite 7, Tailwind CSS v4, `vite-plugin-pwa` for offline/installable
-support, no TypeScript (plain `.jsx`/`.js`).
+TypeScript, built with `tsup` to an ESM `dist/` (gitignored — every consumer
+needs `pnpm --filter @vitalnet/clinical-core build` run first). Replaces
+four previously hand-mirrored Python/JS pairs — see `docs/DECISIONS.md`
+§33 for the full migration record and conformance evidence.
 
 ```
-frontend/src/
+packages/clinical-core/
+├── src/
+│   ├── schema.ts          Zod IntakeForm — absorbed backend/app/models/schemas.py's
+│   │                      bounds/validators (bp_dia<bp_sys, symptom allow-list,
+│   │                      patient-key regex) AND frontend's old validation.js. One
+│   │                      schema, `export type IntakeForm = z.infer<...>`.
+│   ├── rules/
+│   │   ├── bands.ts        NEWS2/PALS vital-derangement band tables (adult +
+│   │   │                  age-banded HR/BP/temp/SpO2), each row carrying a citation.
+│   │   ├── rules.ts        Override rules that ALWAYS win: safety-net extreme-
+│   │   │                  presentation escalations (ported from classifier.py's
+│   │   │                  _safety_net_check) + the ACOG preeclampsia rule + the
+│   │   │                  NEWS2-floor concerning-vital check.
+│   │   └── engine.ts        assignTier() — the authoritative tier-assignment engine:
+│   │                      1) checkOverrides() first (unconditional EMERGENCY,
+│   │                      nothing below runs if one fires), 2) the aggregate
+│   │                      NEWS2/qSOFA/PALS scorer (promoted from what was
+│   │                      training-label-only code — backend/scripts/
+│   │                      train_classifier.py::assign_triage_label pre-migration),
+│   │                      3) the NEWS2 floor as a redundant, independently-testable
+│   │                      backstop. The ML model plays NO role in this function.
+│   ├── features.ts         43-feature engineering — port of
+│   │                      ClinicalFeatureEngineer/buildFeatureMap. Feeds ONLY the
+│   │                      advisory ML model's input vector; never the tier decision.
+│   ├── treeEvaluator.ts    Dependency-free tree-JSON walker (port of the old
+│   │                      frontend treeEvaluator.js / tree_export.py's Python
+│   │                      reference) + Saabas-style path attribution — REPLACES SHAP
+│   │                      at inference (`top_factors`: sum of per-feature score
+│   │                      deltas along the decision path). SHAP remains a
+│   │                      training-only dependency for artifacts no longer shipped.
+│   ├── contraindications.ts Keyword-based contraindication table (moved from the
+│   │                      old frontend clinicalRules.js / backend
+│   │                      app/ml/contraindications.py).
+│   ├── patientKey.ts        generatePatientKey()/normalizePatientKey() (moved from
+│   │                      the old frontend patientKey.js).
+│   └── triage.ts            Orchestrator: triage(form, trees?) -> {tier, firedRules,
+│                          contraindications, model?}. Two modes behind one exported
+│                          constant: `hybrid` (safety-net -> model -> NEWS2 floor,
+│                          reproduces the legacy backend's semantics exactly — used
+│                          by the Phase-1 conformance test AND, deliberately, by
+│                          apps/web's offline triage today, since that's what
+│                          matches the live, authoritative backend/app/ — see
+│                          apps/web/README.md) and `rules_first` (the engine above
+│                          is authoritative; model is advisory — the target
+│                          end-state, what apps/api runs, not yet cut over).
+├── cli.mjs                 JSONL subprocess CLI for tools/training/train_classifier.py:
+│                          `label` (assignTier -> 0/1/2) and `engineer-features`
+│                          (buildFeatureMap). The ONE point where Python's synthetic-
+│                          data generator hands patients to this package instead of
+│                          maintaining a second copy of the scoring/feature logic.
+└── test/                   vitest: ported safety+fuzz suites, every rule's embedded
+                           {input, expect} vectors, golden vectors (tree-eval AND
+                           feature-engineering — the latter now generated FROM this
+                           package by the training script, a regression snapshot
+                           rather than a cross-language check), and a conformance
+                           suite (test/conformance/) replaying 10k Python-labelled
+                           patients through triage() in hybrid mode.
+```
+
+**Advisory ML output**: `{model_tier, model_confidence, low_confidence,
+top_factors}` — computed by `triage.ts` alongside (never in place of) the
+rules-engine tier. `model_tier !== tier` folds into `needs_review` server-
+side (`apps/api`'s `_shared/cases.ts::computeNeedsReview`) — a deliberate,
+tested safety property: since the rules engine is never "low confidence"
+about its own decision, an EMERGENCY(model)→lower(rules) de-escalation must
+never silently sink out of the priority queue unflagged.
+
+## 3b. apps/api (`apps/api/`) — new backend, not yet live
+
+Supabase Edge Function (Deno + Hono), one function (`api`) with a Hono
+router inside — the official Supabase pattern (avoids multiplying cold
+starts vs. one function per route). Ports the FastAPI backend's full
+middleware stack and every route tranche, running clinical-core in
+`rules_first` mode. **Has not received production traffic** — see
+`apps/api/README.md` for full status and the cutover mechanics.
+
+```
+apps/api/supabase/functions/api/
+├── index.ts               Hono app entrypoint — middleware wiring + route mounting.
+├── deno.json                Import map (hono, jose, @supabase/supabase-js, zod,
+│                          web-push, @vitalnet/clinical-core via a relative dist/
+│                          import — NOT a published package, and NOT gitignore-safe
+│                          without a build step first — see apps/api/README.md's
+│                          "Running locally" section).
+├── _shared/
+│   ├── config.ts            Deno.env settings, mirrors backend/app/core/config.py.
+│   ├── database.ts           Supabase client factories (anon/user-scoped/admin).
+│   ├── auth.ts                Hybrid JWT verification against Supabase JWKS —
+│   │                        ES256 works NATIVELY here (fixes a dead fast-path the
+│   │                        Python backend has to work around — DECISIONS §29) —
+│   │                        + profile resolution + requireRole().
+│   ├── correlationId.ts, securityHeaders.ts, csrfDeviceGuard.ts, rateLimit.ts
+│   │                        (fn_rate_limit-backed), audit.ts (log_phi_access),
+│   │                        queryTimeout.ts — ports of the FastAPI middleware stack.
+│   ├── cases.ts               Case row-authorization (3-way role check),
+│   │                        sanitization, risk-driver formatting, computeNeedsReview()
+│   │                        (folds model/rules disagreement into needs_review).
+│   ├── model.ts               Bundles the trained advisory tree model for triage().
+│   ├── llm.ts, prompts.ts, voice.ts  4-tier Groq/Gemini fallback, static prompt
+│   │                        text, Groq Whisper -> Sarvam AI transcription fallback.
+│   ├── webpush.ts             VAPID web push send via the "web-push" npm package —
+│   │                        FLAGGED as the riskiest port (crypto); has a send-to-self
+│   │                        integration test but no live-network coverage by design.
+│   └── idempotency.ts          Unified-outbox X-Event-Id replay: a repeated event
+│                              replays the stored response from client_events instead
+│                              of re-running the handler (skips triage + the LLM call
+│                              on a retried drain). Layered on top of, not replacing,
+│                              case_records.client_id's own DB-level idempotency.
+├── routes/                  health, outbreak, supervisor, protocol, referral, metrics,
+│                          analytics, cases (submit/review/override/outcome/list/
+│                          detail/by-key/patient-summary), security, dsr, admin, push,
+│                          voice — full parity with the FastAPI route set.
+└── test/                    Hono app.request() in-memory contract tests, incl. the
+                           ported admin-authz scan. The JWKS/ES256 auth path and the
+                           webpush send both need a live Supabase project to exercise
+                           for real — deliberately not covered by these tests (see
+                           test/auth.test.ts's and test/idempotency.test.ts's headers).
+```
+
+**Cutover mechanics**: `apps/web/src/api/base.js`'s `ENDPOINT_BACKEND` map
+resolves each endpoint to `'legacy'` (backend/) or `'edge'` (apps/api) —
+flipping one entry is the entire per-tranche rollback surface. Every entry
+is `'legacy'` today. `.github/workflows/api-edge-function.yml`'s `deploy`
+job is `workflow_dispatch`-only (never fires on push/PR) so that deploying
+is always a deliberate, auditable action, not something that starts serving
+traffic as a side effect of merging.
+
+## 4. Frontend (`apps/web/`)
+
+React 19, Vite 7, Tailwind CSS v4, `vite-plugin-pwa` for offline/installable
+support, no TypeScript (plain `.jsx`/`.js`). Moved from `frontend/` to
+`apps/web/` in the Round 6 pnpm-workspace migration (`docs/DECISIONS.md`
+§33) — imports `@vitalnet/clinical-core` (`packages/clinical-core`) as a
+`workspace:*` dependency for all clinical logic; nothing below re-implements
+rules, feature engineering, tree evaluation, or contraindications.
+
+```
+apps/web/src/
 ├── main.jsx                  Entry point — mounts <App/>, imports i18n.js (must run
 │                              before render), registers the PWA service worker.
 ├── i18n.js                    react-i18next init (FEATURES_ROADMAP §2.1). Persists the
@@ -654,22 +845,47 @@ frontend/src/
 │   │                          NOT navigator.onLine (which only checks local interface,
 │   │                          not actual backend reachability — critical for rural
 │   │                          satellite-link scenarios).
-│   ├── offlineQueue.js        IndexedDB submission queue (enqueue/dequeue/getAllQueued),
-│   │                          shared DB with useDraftSave.js.
+│   ├── offlineDB.js            Shared idb opener for the whole app (DB_VERSION 3) —
+│   │                          the `outbox` store (below) and the drafts store
+│   │                          (useDraftSave.js) both live here. The v2→v3 upgrade
+│   │                          migrates old `submission_queue` rows into `outbox` as
+│   │                          `type:'case.submit'` events, then drops the old store.
+│   ├── outbox.js               THE unified offline outbox (Round 6 Phase 5,
+│   │                          docs/DECISIONS.md §33) — replaced the case-submission-
+│   │                          specific `offlineQueue.js`. Generic IndexedDB event
+│   │                          queue: `{event_id, type, payload, created_at, attempts,
+│   │                          status(pending|dead), last_error}`. `event_id` is the
+│   │                          SAME uuid as `case_records.client_id` and the
+│   │                          `X-Event-Id` header apps/api's idempotency middleware
+│   │                          dedupes on. A permanently-failing (4xx) event is
+│   │                          dead-lettered, not silently dropped — surfaced by
+│   │                          OfflineBanner.jsx with retry/discard actions. Only
+│   │                          `type:'case.submit'` exists today, but the store isn't
+│   │                          case-specific — a future offline-capable action reuses
+│   │                          it without another IndexedDB version bump.
 │   └── push.js                 Web Push subscription helper — requests Notification
 │                              permission, subscribes via pushManager.subscribe(), POSTs
 │                              to /api/push/subscribe. Never throws; the caller (PushPrompt)
 │                              treats decline/unsupported as a normal, expected outcome.
-├── stores/syncStore.js        submitCase() (online+offline paths) and processQueue()
-│                              (drains the offline queue with a paced delay to stay
-│                              under the backend rate limit).
+├── stores/syncStore.js        submitCase() (online+offline paths, thin client over
+│                              lib/outbox.js) and processQueue() (drains the outbox
+│                              with a paced delay to stay under the backend rate limit;
+│                              a `case.submit` event dispatches through drainCaseSubmit()).
 ├── api/{auth,cases,admin,analytics,referrals,voice}.js
 │                              Stateless fetch wrappers per domain, all via authHeaders().
-│                              voice.js strips Content-Type from authHeaders() before a
-│                              multipart upload so fetch can set its own boundary.
+│                              base.js resolves each endpoint to 'legacy' (backend/,
+│                              live) or 'edge' (apps/api, not yet live) via
+│                              ENDPOINT_BACKEND — the per-tranche cutover switch;
+│                              every entry is currently 'legacy'. voice.js strips
+│                              Content-Type from authHeaders() before a multipart
+│                              upload so fetch can set its own boundary.
 ├── hooks/
 │   ├── useLocalTriage.js      Wires up offline-model warmup (triggered on offline/
-│   │                          unreachable events) and classify().
+│   │                          unreachable events) and classify() — calls
+│   │                          @vitalnet/clinical-core's triage() in "hybrid" mode
+│   │                          (matches the live backend/app/'s model-primary
+│   │                          semantics — NOT "rules_first", deliberately; see
+│   │                          triageClassifier.js below and apps/web/README.md).
 │   ├── useDraftSave.js        Auto-saves IntakeForm state to IndexedDB keyed by
 │   │                          client_id (survives tab eviction on low-RAM devices).
 │   ├── useRealtimeCases.js    Supabase Realtime subscription wrapper (INSERT/UPDATE),
@@ -687,29 +903,28 @@ frontend/src/
 │                              is still gated on navigator.onLine either way
 │                              (docs/DECISIONS.md §15).
 ├── utils/
-│   ├── triageClassifier.js    Offline triage orchestrator (NO onnxruntime). Loads
-│   │                          /models/triage_trees.json + features_config.json;
-│   │                          layered: safetyNetCheck → tree eval → NEWS2 floor →
-│   │                          low_confidence, with a rules-only fallback if the model
-│   │                          can't load (triage never fails). buildFeatureMap()
-│   │                          MIRRORS backend clinical_features.py; feature ORDER is
-│   │                          fetched from features_config.json (never hard-coded).
-│   ├── treeEvaluator.js       ~120-line dependency-free evaluator for the tree JSON —
-│   │                          a 1:1 port of scripts/tree_export.py::evaluate_tree_json.
-│   ├── clinicalRules.js       safetyNetCheck() + news2ConcerningVital() — 1:1 mirror
-│   │                          of the deterministic rules in classifier.py.
-│   ├── validation.js          Zod schema — MUST mirror the bounds in
-│   │                          backend/app/models/schemas.py::IntakeForm.
-│   ├── imageCompression.js    Photo-attachment SCAFFOLDING (FEATURES_ROADMAP §3.2) —
-│   │                          canvas-based resize-to-1024px + JPEG re-encode. Not wired
-│   │                          into any upload flow yet (no live endpoint exists — see
-│   │                          docs/DECISIONS.md §11); vendor-independent and ready.
-│   └── patientKey.js          generatePatientKey() (crypto.getRandomValues, format
-│                              XXXX-XXXX) + normalizePatientKey() — MUST mirror
-│                              backend/app/models/schemas.py::PATIENT_KEY_RE
-│                              (docs/DECISIONS.md §21).
+│   ├── triageClassifier.js    Offline MODEL-LOADING ONLY now (Round 6 Phase 5) — fetches
+│   │                          + caches /models/triage_trees.json and
+│   │                          features_config.json, then calls @vitalnet/clinical-core's
+│   │                          triage() in "hybrid" mode (matches the live backend's
+│   │                          model-primary semantics, not the not-yet-cut-over
+│   │                          "rules_first" — see this file's own header comment
+│   │                          and apps/web/README.md) and maps the result. Without a
+│   │                          loaded model, falls back to an override-only safety-net
+│   │                          check (checkOverrides) rather than a guessed tier. The
+│   │                          rules engine, feature engineering, tree evaluator, and
+│   │                          contraindications this file used to carry directly
+│   │                          (clinicalRules.js, treeEvaluator.js, buildFeatureMap())
+│   │                          are DELETED — that logic lives once, in
+│   │                          packages/clinical-core, not mirrored here.
+│   └── imageCompression.js    Photo-attachment SCAFFOLDING (FEATURES_ROADMAP §3.2) —
+│                              canvas-based resize-to-1024px + JPEG re-encode. Not wired
+│                              into any upload flow yet (no live endpoint exists — see
+│                              docs/DECISIONS.md §11); vendor-independent and ready.
 ├── pages/
-│   ├── LoginPage.jsx, IntakeForm.jsx, Dashboard.jsx
+│   ├── LoginPage.jsx, IntakeForm.jsx, Dashboard.jsx — IntakeForm.jsx's validation and
+│   │   patient-key generation now import validateIntakeForm/generatePatientKey from
+│   │   @vitalnet/clinical-core (was validation.js/patientKey.js, both deleted).
 ├── panels/
 │   ├── ASHAPanel.jsx (New Case / My Submissions / Ask a Question tabs),
 │   │   DoctorPanel.jsx (Pending Review / All Cases / Referrals / Outbreak Signals /
@@ -723,24 +938,25 @@ frontend/src/
 ├── components/                Shared UI: BriefingCard (triage override + outcome-
 │   │                          recording + referral actions + patient-summary on-demand
 │   │                          request live here), TriageBadge,
-│   │                          NavBar (includes the language switcher), OfflineBanner,
-│   │                          ToastProvider, RouteGuard, ErrorBoundary, SkeletonCard,
-│   │                          UpdatePrompt (PWA update-available prompt), PushPrompt
-│   │                          (dismissible Web Push opt-in, shown once via localStorage),
-│   │                          VoiceInputButton (mic button, renders nothing on
-│   │                          unsupported browsers), ReferralsPanel (outgoing/incoming
-│   │                          referral list with live status-advance actions),
-│   │                          AnalyticsDashboard (includes the CSV export control),
-│   │                          EmergencySmsAlert (offline-emergency sms: URI intent —
-│   │                          shown in IntakeForm's queued-result view when the local
-│   │                          triage is EMERGENCY; PHI-free fixed message body, see
-│   │                          docs/DECISIONS.md §14), AmbulanceCallButton (tel:108
-│   │                          intent, shown alongside the EMERGENCY result online AND
-│   │                          offline — docs/DECISIONS.md §16 on why this is a phone
-│   │                          call and not a dispatch integration), PatientKeyCard
-│   │                          (renders a new patient continuity key as a QR code —
-│   │                          `qrcode` npm package, client-side `toDataURL` — plus
-│   │                          plain text; shown once after a NEW patient's first
+│   │                          NavBar (includes the language switcher), OfflineBanner
+│   │                          (now also surfaces outbox dead letters with
+│   │                          retry/discard), ToastProvider, RouteGuard, ErrorBoundary,
+│   │                          SkeletonCard, UpdatePrompt (PWA update-available prompt),
+│   │                          PushPrompt (dismissible Web Push opt-in, shown once via
+│   │                          localStorage), VoiceInputButton (mic button, renders
+│   │                          nothing on unsupported browsers), ReferralsPanel
+│   │                          (outgoing/incoming referral list with live status-advance
+│   │                          actions), AnalyticsDashboard (includes the CSV export
+│   │                          control), EmergencySmsAlert (offline-emergency sms: URI
+│   │                          intent — shown in IntakeForm's queued-result view when
+│   │                          the local triage is EMERGENCY; PHI-free fixed message
+│   │                          body, see docs/DECISIONS.md §14), AmbulanceCallButton
+│   │                          (tel:108 intent, shown alongside the EMERGENCY result
+│   │                          online AND offline — docs/DECISIONS.md §16 on why this is
+│   │                          a phone call and not a dispatch integration),
+│   │                          PatientKeyCard (renders a new patient continuity key as a
+│   │                          QR code — `qrcode` npm package, client-side `toDataURL` —
+│   │                          plus plain text; shown once after a NEW patient's first
 │   │                          submission — docs/DECISIONS.md §21).
 │   └── admin/                 AdminUsers (includes the CSV bulk-import upload/preview
 │                              flow), AdminFacilities, AdminStats, AdminAuditLog.
@@ -751,35 +967,38 @@ public/
 │   └── models/
 │       ├── triage_trees.json    Compact tree ensemble (~1 MB), walked in pure JS.
 │       └── features_config.json Canonical feature-order manifest.
-                                 Both exported by scripts/train_classifier.py.
+                                 Both exported by tools/training/train_classifier.py.
 tests/
-│   ├── treeParity.test.mjs      `npm run test:parity` — asserts the JS evaluator
-│   │                            matches the server model on golden vectors (CI).
-│   ├── featureParity.test.mjs   `npm run test:feature-parity` — asserts buildFeatureMap()
-│   │                            matches ClinicalFeatureEngineer. Freezes the global Date
-│   │                            constructor (see docs/DECISIONS.md §12). CI.
-│   ├── contraindications.test.mjs `npm run test:contraindications` — asserts
-│   │                            checkContraindications() (clinicalRules.js) agrees with
-│   │                            app/ml/contraindications.py on flag count per case. CI.
 │   ├── offline.spec.js          Playwright E2E: login → offline → submit → reconnect →
 │   │                            sync. Needs a running dev server + seeded test users;
 │   │                            not part of the unit-test CI job.
 │   └── fixtures/
-│       ├── golden_vectors.json          py-labelled tree-eval vectors, written by training.
-│       └── golden_feature_vectors.json  py-labelled feature-engineering vectors, written
-│                                        by scripts/export_golden_vectors.py.
+│       ├── golden_vectors.json          py-labelled tree-eval vectors, written by
+│       │                                training — consumed by
+│       │                                packages/clinical-core/test/treeEvaluator.golden.test.ts.
+│       └── golden_feature_vectors.json  feature-engineering golden vectors, written by
+│                                        training FROM clinical-core's own
+│                                        engineer_features_batch — consumed by
+│                                        packages/clinical-core/test/features.golden.test.ts.
 ```
+
+The four suites that used to live in `tests/` here — `treeParity.test.mjs`,
+`featureParity.test.mjs`, `contraindications.test.mjs`, and a safety-net
+suite — are **deleted**. What they checked (JS mirror vs. Python original)
+no longer applies: there is one implementation now
+(`packages/clinical-core`), verified by that package's own `pnpm --filter
+@vitalnet/clinical-core test`, not an apps/web script.
 
 ### Frontend build-size notes (see FEATURES_ROADMAP.md for more)
 
 - **No onnxruntime-web at all.** Offline triage runs in pure JS
-  (`treeEvaluator.js`) over `triage_trees.json`. Round 2 deleted the
-  onnxruntime-web dependency and its ~12 MB WASM binary entirely — the single
-  biggest weak-hardware / low-bandwidth win. The compact tree JSON (~1 MB, gzips
-  far smaller) *is* now precached by the service worker (raised
-  `maximumFileSizeToCacheInBytes` in `vite.config.js`), so offline triage is
-  available instantly rather than being a large on-demand fetch that could fail
-  exactly when connectivity drops.
+  (`packages/clinical-core/src/treeEvaluator.ts`) over `triage_trees.json`.
+  Round 2 deleted the onnxruntime-web dependency and its ~12 MB WASM binary
+  entirely — the single biggest weak-hardware / low-bandwidth win. The
+  compact tree JSON (~1 MB, gzips far smaller) *is* now precached by the
+  service worker (raised `maximumFileSizeToCacheInBytes` in `vite.config.js`),
+  so offline triage is available instantly rather than being a large
+  on-demand fetch that could fail exactly when connectivity drops.
 - Role panels (`ASHAPanel`/`DoctorPanel`/`AdminPanel`) are `React.lazy()`-
   loaded from `App.jsx` — each user downloads only their own role's panel.
 - Typical initial JS bundle ~380 KB (was ~908 KB pre-audit).
@@ -889,12 +1108,42 @@ facility, UPDATE (curation) restricted to doctor/supervisor/admin,
 docs/DECISIONS.md §27; `phase26_role_check_constraint.sql` — makes the
 `profiles.role` CHECK constraint tracked and widens it to all four roles,
 fixing an untracked constraint discovered live-blocking `supervisor`
-(docs/DECISIONS.md §25, §29). Run them in order against the live Supabase
-project's SQL editor (or via the Supabase CLI) — they're written to be
-safe to re-run. **If you're setting up a project for the first time or
-resuming a long-paused one, don't assume it's current — verify the schema
-actually matches this list** (docs/DECISIONS.md §29 has the exact
-column-existence check that caught this project ten migrations behind).
+(docs/DECISIONS.md §25, §29); `phase27_is_pregnant.sql` — `case_records.
+is_pregnant` (nullable boolean), feeds clinical-core's preeclampsia rule;
+`phase28_security_definer_fns.sql` — the Round 6 DB-discipline pass
+(docs/DECISIONS.md §33): `fn_deterioration_count`, `fn_open_case_counts`,
+`fn_team_metrics`, `fn_outbreak_signal_counts`, `fn_rate_limit` (token-
+bucket table), `fn_schema_fingerprint` (admin-only, md5 of an ordered
+information_schema dump) — all `SECURITY DEFINER SET search_path = public`,
+internal role checks via `auth.uid()` → `profiles`, `REVOKE ALL` + `GRANT
+EXECUTE TO authenticated`. These replace several narrow `supabase_admin`
+aggregate-query exceptions called out above (cases.py's
+`_check_deterioration_pattern`, referral open-case counts, supervisor/
+outbreak routes) — apps/api calls them via the user-scoped RPC client, not
+service-role; `phase29_events_and_advisory_model.sql` — `client_events
+(event_id uuid PK, event_type text, submitted_by uuid, processed_at,
+response jsonb)` for outbox/idempotency dedup (RLS: `submitted_by =
+auth.uid() OR admin`, no INSERT policy — see phase31), plus `case_records`
+columns `model_tier`, `rules_fired` (jsonb), `model_agreed` (boolean,
+additive/nullable) for the advisory-ML architecture;
+`phase30_triage_metrics_fn.sql` — `fn_triage_metrics()`, an all-time
+per-tier count of `case_records.triage_level` — the one metric that
+survives an edge isolate's cold starts, since Prometheus'
+`prometheus_client` in-memory counters (the legacy backend's approach)
+don't; `phase31_client_event_record_fn.sql` — `fn_client_event_record`,
+`SECURITY DEFINER`, the one function needed to actually WRITE a
+`client_events` row (RLS default-denies `authenticated` inserts) — derives
+`submitted_by` from `auth.uid()` internally, never a client-supplied value,
+so spoofing is structurally impossible. Run them in order against the live
+Supabase project's SQL editor (or via the Supabase CLI) — they're written to
+be safe to re-run, and are shared by both backends. **If you're setting up
+a project for the first time or resuming a long-paused one, don't assume
+it's current — verify the schema actually matches this list**
+(docs/DECISIONS.md §29 has the exact column-existence check that caught
+this project ten migrations behind). `.github/workflows/db-schema-drift.yml`
+(see §2) now also checks this automatically: a PR-time replay-and-diff
+against a committed schema snapshot, plus a weekly live-fingerprint check
+via `fn_schema_fingerprint()`.
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`
@@ -1005,18 +1254,30 @@ victim's budget.
 - `briefing["triage_level"] = triage_result["triage_level"]` in
   `llm.py::_enforce_schema` — the life-safety guarantee that no LLM output
   can override the ML classifier's triage decision.
-- The three deterministic layers in `classifier.py` — `_safety_net_check`
-  (→ EMERGENCY) and the `_news2_concerning_vital` floor (→ never ROUTINE) — and
-  their exact JS mirrors in `clinicalRules.js`. Independent backstops against ML
-  error on unambiguous/concerning cases; don't remove to "simplify."
+- The deterministic override/floor layers — `_safety_net_check` (→ EMERGENCY)
+  and `_news2_concerning_vital` (→ never ROUTINE) in the legacy
+  `backend/app/ml/classifier.py`, and their re-architected equivalent,
+  `packages/clinical-core/src/rules/rules.ts`'s `checkOverrides`/
+  `news2ConcerningVital` (now authoritative, not just a mirror, in
+  `apps/api`). Independent backstops against ML error on unambiguous/
+  concerning cases; don't remove to "simplify," and don't let the two
+  diverge without an explicit, reviewed decision (see the conformance suite
+  in `packages/clinical-core/test/conformance/`).
 - `require_role('admin')` on every `/api/admin` route — the ONLY access-control
   boundary on the RLS-bypassing service-role client (test_admin_authz enforces).
 - `client_id` as the upsert idempotency key in `cases.py::submit_case` —
   what makes offline-queue retry-safe without creating duplicate cases.
-- The backend `.pkl`, the frontend `triage_trees.json`, `features_config.json`,
-  and `golden_vectors.json` must always be regenerated together from the same
-  `train_classifier.py` run — never independently. The `npm run test:parity` CI
-  check fails if the JS offline path desyncs from the server model.
+- The backend `.pkl`, `triage_trees.json`, `features_config.json`, and both
+  golden-vector fixtures must always be regenerated together from the same
+  `tools/training/train_classifier.py` run — never independently.
+  `packages/clinical-core`'s `pnpm test` (CI-enforced) fails if the offline
+  tree evaluator desyncs from the server model.
+- Don't delete `backend/app/` or `.github/workflows/backend-keepalive.yml`
+  without explicit authorization — deferred deliberately until `apps/api`
+  has actually taken production traffic and been verified (per-tranche
+  cutover via `apps/web/src/api/base.js`'s `ENDPOINT_BACKEND` map), not on
+  the theoretical strength of apps/api's test suite alone. See
+  `apps/api/README.md`'s status section.
 - `generate_protocol_answer` (`llm.py`) must stay a fully separate call path
   from `generate_briefing` — never take patient vitals/symptoms as input,
   never share the triage system prompt. This is what makes it structurally
