@@ -46,13 +46,15 @@ supabase/functions/api/
 ## Status (Phase 3 Tranche A)
 
 Done: middleware stack (CORS, security headers, correlation id, CSRF/device guard, rate
-limiting, hybrid JWT auth with per-isolate profile caching), `/api/health`.
+limiting, hybrid JWT auth with per-isolate profile caching), `/api/health`,
+`GET /api/outbreak/signals` (EARS C1 aberration signals, ported to `_shared/ears.ts` —
+calls `fn_outbreak_signal_counts` via `.rpc()`, facility-scoped via `_shared/scoping.ts`).
 
-Not yet ported: analytics, outbreak, supervisor, protocol, referrals-read, metrics
-(Tranche A); cases/security/dsr/admin/push/voice and the rules-first flip on
-`/api/submit` (Tranche B, Phase 4). The legacy FastAPI backend stays deployable and
-authoritative for all of these until each is cut over — see the frontend's per-endpoint
-base-URL resolver map (Phase 3 plan) for the rollback mechanism.
+Not yet ported: analytics, supervisor, protocol, referrals-read, metrics (Tranche A);
+cases/security/dsr/admin/push/voice and the rules-first flip on `/api/submit` (Tranche
+B, Phase 4). The legacy FastAPI backend stays deployable and authoritative for all of
+these until each is cut over — see the frontend's per-endpoint base-URL resolver map
+(Phase 3 plan) for the rollback mechanism.
 
 ## Running locally
 

@@ -15,8 +15,10 @@ import { securityHeaders } from "./_shared/securityHeaders.ts";
 import { csrfAndDeviceGuard } from "./_shared/csrfDeviceGuard.ts";
 import { HttpError } from "./_shared/database.ts";
 import { health } from "./routes/health.ts";
+import { outbreak } from "./routes/outbreak.ts";
+import type { AppEnv } from "./_shared/types.ts";
 
-const app = new Hono();
+const app = new Hono<AppEnv>();
 
 // Supabase invokes every edge function behind a path prefix
 // (/functions/v1/<function-name>); strip it so route definitions below
@@ -59,6 +61,7 @@ app.onError((err, c) => {
 app.notFound((c) => c.json({ detail: "Not Found" }, 404));
 
 app.route("/", health);
+app.route("/", outbreak);
 
 Deno.serve(app.fetch);
 

@@ -19,6 +19,9 @@ import { createRemoteJWKSet, type JWTPayload, jwtVerify } from "jose";
 import type { Context, Next } from "hono";
 import { getConfig } from "./config.ts";
 import { extractBearerToken, getSupabaseForUser, HttpError } from "./database.ts";
+import type { AppEnv, AuthedUser } from "./types.ts";
+
+export type { AuthedUser } from "./types.ts";
 
 const AUDIENCE = "authenticated";
 
@@ -129,14 +132,6 @@ export async function resolveProfile(
   }
 }
 
-export interface AuthedUser extends JWTPayload {
-  resolvedRole: string;
-  resolvedFacilityId: string | null;
-  /** The raw bearer token — routes need it to build their own
-   * getSupabaseForUser() client for RLS-scoped queries/.rpc() calls. */
-  token: string;
-}
-
 export async function getCurrentUser(authorization: string | null | undefined): Promise<AuthedUser> {
   const token = extractBearerToken(authorization);
   const payload = await verifyToken(token);
@@ -177,7 +172,7 @@ export async function verifiedSubForRateLimit(token: string): Promise<string | n
  * roles, setting c.set("user", ...) for downstream handlers. Usage:
  * app.get("/api/x", requireRole("doctor", "admin"), handler) */
 export function requireRole(...roles: string[]) {
-  return async (c: Context, next: Next) => {
+  return async (c: Context<AppEnv>, next: Next) => {
     const user = await getCurrentUser(c.req.header("authorization"));
     if (!roles.includes(user.resolvedRole)) {
       throw new HttpError(403, `Role '${user.resolvedRole}' is not permitted for this endpoint.`);
