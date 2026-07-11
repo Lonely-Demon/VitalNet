@@ -3,12 +3,11 @@
  */
 import { authHeaders } from '@/api/auth'
 import { getWithRetry } from '@/api/retry'
-
-const BASE = import.meta.env.VITE_API_BASE_URL
+import { apiBase } from '@/api/base'
 
 export async function getTeamMetrics({ days, facilityId } = {}) {
   const headers = await authHeaders()
-  const url = new URL(`${BASE}/api/supervisor/team-metrics`)
+  const url = new URL(`${apiBase('supervisor.teamMetrics')}/api/supervisor/team-metrics`)
   if (days) url.searchParams.set('days', days)
   if (facilityId) url.searchParams.set('facility_id', facilityId)
   const res = await getWithRetry(url.toString(), headers)

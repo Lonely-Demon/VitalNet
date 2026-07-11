@@ -11,6 +11,7 @@
 // SECURITY DEFINER function.
 import { Hono } from "hono";
 import { requireRole } from "../_shared/auth.ts";
+import { rateLimit } from "../_shared/rateLimit.ts";
 import { getSupabaseForUser, HttpError } from "../_shared/database.ts";
 import type { AppEnv } from "../_shared/types.ts";
 
@@ -19,7 +20,7 @@ export const protocol = new Hono<AppEnv>();
 const ALL_ROLES = ["asha_worker", "doctor", "supervisor", "admin"];
 const VALID_STATUSES = new Set(["answered", "pending_curation", "curated"]);
 
-protocol.get("/api/protocol/questions", requireRole(...ALL_ROLES), async (c) => {
+protocol.get("/api/protocol/questions", rateLimit(60, 60), requireRole(...ALL_ROLES), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
 

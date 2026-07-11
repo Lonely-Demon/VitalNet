@@ -2,17 +2,23 @@
 // Tranche A). One Hono app, deployed as the single "api" Supabase Edge
 // Function (the official Supabase pattern — one function, Hono router
 // inside — rather than one function per route, which would multiply cold
-// starts). Middleware order mirrors app/main.py's registration order
-// exactly, since Starlette/Hono both apply middleware in registration
-// order and several of these depend on running before/after specific
-// others (CORS must wrap everything; security headers/correlation id
-// should apply to error responses too, so they wrap the router).
+// starts).
+//
+// Middleware ordering note: Hono runs app.use() middleware in registration
+// order (first registered = outermost). Starlette's add_middleware PREPENDS
+// (last added = outermost), so app/main.py's *effective* order is the
+// reverse of its source order. The registration order below reproduces the
+// Python backend's effective order: CORS outermost, then response-header
+// middleware (security headers / correlation id, order between them
+// immaterial — they set disjoint headers), then the CSRF/device guard,
+// then routes.
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { allowedOrigins, getConfig } from "./_shared/config.ts";
 import { correlationId } from "./_shared/correlationId.ts";
 import { securityHeaders } from "./_shared/securityHeaders.ts";
 import { csrfAndDeviceGuard } from "./_shared/csrfDeviceGuard.ts";
+import { stripFunctionPrefix } from "./_shared/functionPrefix.ts";
 import { HttpError } from "./_shared/database.ts";
 import { health } from "./routes/health.ts";
 import { outbreak } from "./routes/outbreak.ts";
@@ -24,19 +30,6 @@ import { analytics } from "./routes/analytics.ts";
 import type { AppEnv } from "./_shared/types.ts";
 
 const app = new Hono<AppEnv>();
-
-// Supabase invokes every edge function behind a path prefix
-// (/functions/v1/<function-name>); strip it so route definitions below
-// can use the same /api/... paths the legacy backend and the frontend
-// already agree on.
-app.use("*", async (c, next) => {
-  const url = new URL(c.req.url);
-  const stripped = url.pathname.replace(/^\/functions\/v1\/api/, "") || "/";
-  if (stripped !== url.pathname) {
-    c.req.raw = new Request(new URL(stripped + url.search, url), c.req.raw);
-  }
-  await next();
-});
 
 app.use(
   "*",
@@ -73,6 +66,10 @@ app.route("/", metrics);
 app.route("/", protocol);
 app.route("/", analytics);
 
-Deno.serve(app.fetch);
+// The /functions/v1/api prefix must be stripped BEFORE Hono sees the
+// request — Hono resolves the handler chain from the path before any
+// middleware runs, so a rewrite inside app.use() is too late (the router
+// has already 404'd). See _shared/functionPrefix.ts.
+Deno.serve((req) => app.fetch(stripFunctionPrefix(req)));
 
 export default app;

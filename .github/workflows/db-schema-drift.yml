@@ -94,11 +94,15 @@ jobs:
             | grep -v '^--' | grep -v '^$' > /tmp/schema_dump.sql
 
       - name: Diff against the committed snapshot
+        id: diff
         if: steps.baseline.outputs.present == 'true'
         run: |
           if [ ! -f backend/supabase/schema_snapshot.sql ]; then
             echo "::warning::backend/supabase/schema_snapshot.sql does not exist yet — uploading the freshly replayed schema as a build artifact instead of failing. Review it and commit it as the initial snapshot to turn this into a real drift check."
-            cp /tmp/schema_dump.sql /tmp/schema_snapshot_proposed.sql
+            # Copied into the workspace (not /tmp): upload-artifact and the
+            # step-output gate below both operate workspace-relative.
+            cp /tmp/schema_dump.sql schema_snapshot_proposed.sql
+            echo "proposed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! diff -u backend/supabase/schema_snapshot.sql /tmp/schema_dump.sql; then
@@ -108,11 +112,14 @@ jobs:
           echo "Schema matches the committed snapshot."
 
       - name: Upload proposed snapshot (bootstrap only)
-        if: steps.baseline.outputs.present == 'true' && hashFiles('/tmp/schema_snapshot_proposed.sql') != ''
+        # A step output, not hashFiles(): hashFiles only matches paths under
+        # GITHUB_WORKSPACE, so a /tmp path can never satisfy it and the
+        # original condition was permanently false.
+        if: steps.baseline.outputs.present == 'true' && steps.diff.outputs.proposed == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: schema_snapshot_proposed
-          path: /tmp/schema_snapshot_proposed.sql
+          path: schema_snapshot_proposed.sql
 
   live-schema-fingerprint:
     if: github.event_name != 'pull_request'

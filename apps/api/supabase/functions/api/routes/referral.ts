@@ -3,6 +3,7 @@
 // referral POST, advance-status PATCH) are Tranche B (Phase 4).
 import { Hono } from "hono";
 import { requireRole } from "../_shared/auth.ts";
+import { rateLimit } from "../_shared/rateLimit.ts";
 import { getSupabaseForUser, HttpError } from "../_shared/database.ts";
 import { type Facility, mergeOpenCaseCounts, type OpenCaseCountRow } from "../_shared/facilities.ts";
 import type { AppEnv } from "../_shared/types.ts";
@@ -17,7 +18,7 @@ const REFERRAL_SELECT_COLUMNS = "id, case_id, referred_by, referring_facility_id
 
 // ── Facility picker (for the referral target dropdown) ─────────────────────
 
-referral.get("/api/facilities", requireRole("doctor", "admin"), async (c) => {
+referral.get("/api/facilities", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
 
@@ -53,7 +54,7 @@ referral.get("/api/facilities", requireRole("doctor", "admin"), async (c) => {
 
 type Direction = "outgoing" | "incoming" | "all";
 
-referral.get("/api/referrals", requireRole("doctor", "admin"), async (c) => {
+referral.get("/api/referrals", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
   const user = c.get("user");
   const directionParam = c.req.query("direction") ?? "all";
   const direction: Direction = directionParam === "outgoing" || directionParam === "incoming" ? directionParam : "all";

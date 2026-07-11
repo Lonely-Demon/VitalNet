@@ -7,6 +7,7 @@
 // path, not just a read).
 import { Hono } from "hono";
 import { requireRole } from "../_shared/auth.ts";
+import { rateLimit } from "../_shared/rateLimit.ts";
 import { getSupabaseForUser, HttpError } from "../_shared/database.ts";
 import { type CounterSample, PROMETHEUS_CONTENT_TYPE, renderCounter } from "../_shared/prometheus.ts";
 import type { AppEnv } from "../_shared/types.ts";
@@ -18,7 +19,7 @@ interface TriageMetricsRow {
   count: number;
 }
 
-metrics.get("/api/metrics", requireRole("admin"), async (c) => {
+metrics.get("/api/metrics", rateLimit(60, 60), requireRole("admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
 

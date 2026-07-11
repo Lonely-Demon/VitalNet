@@ -20,12 +20,14 @@ supabase/functions/api/
     config.ts            # Deno.env settings, mirrors backend/app/core/config.py's field names
     database.ts           # Supabase client factories (anon/user-scoped/admin) + extractBearerToken
     auth.ts               # hybrid JWT verification + profile resolution + requireRole()
+    functionPrefix.ts     # strips /functions/v1/api BEFORE Hono routes (cannot be middleware — see its header)
     correlationId.ts      # X-Request-ID propagation
     securityHeaders.ts    # hardening headers
     csrfDeviceGuard.ts     # CSRF token + X-Device-Id guard on state-changing /api requests
-    rateLimit.ts           # fn_rate_limit-backed rate limiting (phase28 migration)
-  routes/
-    health.ts             # /api/health
+    rateLimit.ts           # fn_rate_limit-backed rate limiting, applied per-route with the FastAPI budgets
+    audit.ts               # logPhiAccess/getClientIp (phi_audit_log, service-role, best-effort)
+    queryTimeout.ts        # per-query timeout + graceful-degradation helper for analytics
+  routes/                  # health, outbreak, supervisor, referral, metrics, protocol, analytics
   test/                    # deno test — see below
 ```
 

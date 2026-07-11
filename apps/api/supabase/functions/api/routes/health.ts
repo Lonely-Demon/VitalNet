@@ -10,13 +10,14 @@
 // plainly instead of a loaded flag.
 import { Hono } from "hono";
 import { getCurrentUser } from "../_shared/auth.ts";
+import { rateLimit } from "../_shared/rateLimit.ts";
 import { getSupabaseAnon } from "../_shared/database.ts";
 
 export const health = new Hono();
 
 const VERSION = "0.4.0"; // apps/api — tracks the Tranche A/B port, independent of the legacy backend's version.
 
-health.get("/api/health", async (c) => {
+health.get("/api/health", rateLimit(120, 60), async (c) => {
   let dbStatus: "connected" | "error" = "connected";
   try {
     const { error } = await getSupabaseAnon().from("facilities").select("id").limit(1);

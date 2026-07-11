@@ -3,12 +3,11 @@
  */
 import { authHeaders } from '@/api/auth'
 import { getWithRetry } from '@/api/retry'
-
-const BASE = import.meta.env.VITE_API_BASE_URL
+import { apiBase } from '@/api/base'
 
 export async function getOutbreakSignals({ facilityId } = {}) {
   const headers = await authHeaders()
-  const url = new URL(`${BASE}/api/outbreak/signals`)
+  const url = new URL(`${apiBase('outbreak.signals')}/api/outbreak/signals`)
   if (facilityId) url.searchParams.set('facility_id', facilityId)
   const res = await getWithRetry(url.toString(), headers)
   if (!res.ok) throw new Error(await res.text())

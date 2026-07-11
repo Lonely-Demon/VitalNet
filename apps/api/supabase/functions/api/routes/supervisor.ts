@@ -3,6 +3,7 @@
 // through the caller's own RLS-scoped client instead of supabase_admin.
 import { Hono } from "hono";
 import { requireRole } from "../_shared/auth.ts";
+import { rateLimit } from "../_shared/rateLimit.ts";
 import { getSupabaseForUser, HttpError } from "../_shared/database.ts";
 import { resolveFacilityScope } from "../_shared/scoping.ts";
 import { aggregateTeamMetrics, type TeamMetricsRow } from "../_shared/teamMetrics.ts";
@@ -13,7 +14,7 @@ export const supervisor = new Hono<AppEnv>();
 const DEFAULT_WINDOW_DAYS = 30;
 const MAX_WINDOW_DAYS = 366;
 
-supervisor.get("/api/supervisor/team-metrics", requireRole("supervisor", "admin"), async (c) => {
+supervisor.get("/api/supervisor/team-metrics", rateLimit(60, 60), requireRole("supervisor", "admin"), async (c) => {
   const user = c.get("user");
 
   const daysParam = c.req.query("days");

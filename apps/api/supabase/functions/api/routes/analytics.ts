@@ -9,6 +9,7 @@
 // asyncio.gather + _run_query pattern via runQuery()/Promise.allSettled.
 import { Hono } from "hono";
 import { requireRole } from "../_shared/auth.ts";
+import { rateLimit } from "../_shared/rateLimit.ts";
 import { getSupabaseForUser, HttpError } from "../_shared/database.ts";
 import { runQuery } from "../_shared/queryTimeout.ts";
 import { AuditEventType, getClientIp, logPhiAccess } from "../_shared/audit.ts";
@@ -37,7 +38,7 @@ function resolveScope(user: { resolvedRole: string; resolvedFacilityId: string |
 
 // ── /summary ──────────────────────────────────────────────────────────────────
 
-analytics.get("/api/analytics/summary", requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/summary", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
   const { facilityId, scoped } = resolveScope(user);
@@ -51,7 +52,14 @@ analytics.get("/api/analytics/summary", requireRole("doctor", "admin"), async (c
       async () => {
         let q = db.from("case_records").select("id", { count: "exact" }).is("deleted_at", null);
         if (scoped) q = q.eq("facility_id", facilityId);
-        return await q;
+        // supabase-js returns PostgREST errors as { data: null, error }
+        // WITHOUT throwing (unlike supabase-py, which raises) — throw
+        // explicitly so runQuery records the failure and the endpoint
+        // degrades with a _degraded flag instead of silently serving
+        // zeros as if they were real data.
+        const res = await q;
+        if (res.error) throw res.error;
+        return res;
       },
       "total",
       failures,
@@ -60,7 +68,14 @@ analytics.get("/api/analytics/summary", requireRole("doctor", "admin"), async (c
       async () => {
         let q = db.from("case_records").select("triage_level").is("deleted_at", null);
         if (scoped) q = q.eq("facility_id", facilityId);
-        return await q;
+        // supabase-js returns PostgREST errors as { data: null, error }
+        // WITHOUT throwing (unlike supabase-py, which raises) — throw
+        // explicitly so runQuery records the failure and the endpoint
+        // degrades with a _degraded flag instead of silently serving
+        // zeros as if they were real data.
+        const res = await q;
+        if (res.error) throw res.error;
+        return res;
       },
       "triage_dist",
       failures,
@@ -69,7 +84,14 @@ analytics.get("/api/analytics/summary", requireRole("doctor", "admin"), async (c
       async () => {
         let q = db.from("case_records").select("created_at").is("deleted_at", null).gte("created_at", since);
         if (scoped) q = q.eq("facility_id", facilityId);
-        return await q;
+        // supabase-js returns PostgREST errors as { data: null, error }
+        // WITHOUT throwing (unlike supabase-py, which raises) — throw
+        // explicitly so runQuery records the failure and the endpoint
+        // degrades with a _degraded flag instead of silently serving
+        // zeros as if they were real data.
+        const res = await q;
+        if (res.error) throw res.error;
+        return res;
       },
       "week_cases",
       failures,
@@ -82,7 +104,14 @@ analytics.get("/api/analytics/summary", requireRole("doctor", "admin"), async (c
           null,
         );
         if (scoped) q = q.eq("facility_id", facilityId);
-        return await q;
+        // supabase-js returns PostgREST errors as { data: null, error }
+        // WITHOUT throwing (unlike supabase-py, which raises) — throw
+        // explicitly so runQuery records the failure and the endpoint
+        // degrades with a _degraded flag instead of silently serving
+        // zeros as if they were real data.
+        const res = await q;
+        if (res.error) throw res.error;
+        return res;
       },
       "reviewed",
       failures,
@@ -94,7 +123,14 @@ analytics.get("/api/analytics/summary", requireRole("doctor", "admin"), async (c
           null,
         ).gte("created_at", monthSince);
         if (scoped) q = q.eq("facility_id", facilityId);
-        return await q;
+        // supabase-js returns PostgREST errors as { data: null, error }
+        // WITHOUT throwing (unlike supabase-py, which raises) — throw
+        // explicitly so runQuery records the failure and the endpoint
+        // degrades with a _degraded flag instead of silently serving
+        // zeros as if they were real data.
+        const res = await q;
+        if (res.error) throw res.error;
+        return res;
       },
       "asha_workers",
       failures,
@@ -128,7 +164,7 @@ analytics.get("/api/analytics/summary", requireRole("doctor", "admin"), async (c
 
 // ── /emergency-rate ───────────────────────────────────────────────────────────
 
-analytics.get("/api/analytics/emergency-rate", requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/emergency-rate", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
   const { facilityId, scoped } = resolveScope(user);
@@ -143,7 +179,10 @@ analytics.get("/api/analytics/emergency-rate", requireRole("doctor", "admin"), a
         since,
       );
       if (scoped) q = q.eq("facility_id", facilityId);
-      return await q;
+      // Same as /summary: supabase-js does NOT throw on PostgREST errors.
+      const res = await q;
+      if (res.error) throw res.error;
+      return res;
     },
     "emergency_rate",
     failures,
@@ -159,7 +198,7 @@ analytics.get("/api/analytics/emergency-rate", requireRole("doctor", "admin"), a
 
 // ── /response-times ───────────────────────────────────────────────────────────
 
-analytics.get("/api/analytics/response-times", requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/response-times", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
   const { facilityId, scoped } = resolveScope(user);
@@ -174,7 +213,10 @@ analytics.get("/api/analytics/response-times", requireRole("doctor", "admin"), a
         since,
       );
       if (scoped) q = q.eq("facility_id", facilityId);
-      return await q;
+      // Same as /summary: supabase-js does NOT throw on PostgREST errors.
+      const res = await q;
+      if (res.error) throw res.error;
+      return res;
     },
     "response_times",
     failures,
@@ -190,7 +232,7 @@ analytics.get("/api/analytics/response-times", requireRole("doctor", "admin"), a
 
 // ── /ml-agreement ─────────────────────────────────────────────────────────────
 
-analytics.get("/api/analytics/ml-agreement", requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/ml-agreement", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
   const { facilityId, scoped } = resolveScope(user);
@@ -200,7 +242,10 @@ analytics.get("/api/analytics/ml-agreement", requireRole("doctor", "admin"), asy
     async () => {
       let q = db.from("case_outcomes").select("actual_severity, case_records!inner(triage_level, facility_id)");
       if (scoped) q = q.eq("case_records.facility_id", facilityId);
-      return await q;
+      // Same as /summary: supabase-js does NOT throw on PostgREST errors.
+      const res = await q;
+      if (res.error) throw res.error;
+      return res;
     },
     "ml_agreement",
     failures,
@@ -237,7 +282,7 @@ const EXPORT_COLUMNS = [
   "triage_model_version",
 ];
 
-analytics.get("/api/analytics/export", requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/export", rateLimit(10, 60), requireRole("doctor", "admin"), async (c) => {
   const user = c.get("user");
   const dateFrom = c.req.query("date_from");
   const dateTo = c.req.query("date_to");
@@ -268,7 +313,10 @@ analytics.get("/api/analytics/export", requireRole("doctor", "admin"), async (c)
         parsedFrom.toISOString(),
       ).lte("created_at", parsedTo.toISOString()).order("created_at", { ascending: true });
       if (scoped) q = q.eq("facility_id", facilityId);
-      return await q;
+      // Same as /summary: supabase-js does NOT throw on PostgREST errors.
+      const res = await q;
+      if (res.error) throw res.error;
+      return res;
     },
     "export",
     failures,
@@ -292,7 +340,10 @@ analytics.get("/api/analytics/export", requireRole("doctor", "admin"), async (c)
     details: { row_count: rows.length, date_from: dateFrom, date_to: dateTo },
   });
 
-  const filename = `vitalnet_cases_${dateFrom}_${dateTo}.csv`;
+  // Built from the PARSED dates (like the Python original's
+  // parsed_from.date()), never the raw query strings — keeps
+  // attacker-influenced text out of the Content-Disposition header.
+  const filename = `vitalnet_cases_${parsedFrom.toISOString().slice(0, 10)}_${parsedTo.toISOString().slice(0, 10)}.csv`;
   return c.body(csv, 200, {
     "Content-Type": "text/csv",
     "Content-Disposition": `attachment; filename="${filename}"`,
