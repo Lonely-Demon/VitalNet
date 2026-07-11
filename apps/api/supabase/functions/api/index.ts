@@ -16,6 +16,7 @@ import { csrfAndDeviceGuard } from "./_shared/csrfDeviceGuard.ts";
 import { HttpError } from "./_shared/database.ts";
 import { health } from "./routes/health.ts";
 import { outbreak } from "./routes/outbreak.ts";
+import { supervisor } from "./routes/supervisor.ts";
 import type { AppEnv } from "./_shared/types.ts";
 
 const app = new Hono<AppEnv>();
@@ -62,6 +63,7 @@ app.notFound((c) => c.json({ detail: "Not Found" }, 404));
 
 app.route("/", health);
 app.route("/", outbreak);
+app.route("/", supervisor);
 
 Deno.serve(app.fetch);
 
