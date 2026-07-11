@@ -18,6 +18,7 @@ import { health } from "./routes/health.ts";
 import { outbreak } from "./routes/outbreak.ts";
 import { supervisor } from "./routes/supervisor.ts";
 import { referral } from "./routes/referral.ts";
+import { metrics } from "./routes/metrics.ts";
 import type { AppEnv } from "./_shared/types.ts";
 
 const app = new Hono<AppEnv>();
@@ -66,6 +67,7 @@ app.route("/", health);
 app.route("/", outbreak);
 app.route("/", supervisor);
 app.route("/", referral);
+app.route("/", metrics);
 
 Deno.serve(app.fetch);
 
