@@ -62,9 +62,29 @@ dependency resolved via `workspace:*`) is the single source of clinical
 truth: the deterministic rules engine, 43-feature engineering, the offline
 tree evaluator, contraindication checks, and the `IntakeForm` Zod schema.
 `useLocalTriage`/`utils/triageClassifier.js` call the SAME `triage()`
-function (in `rules_first` mode) that `apps/api`'s `POST /api/submit`
-calls server-side — offline and online triage cannot silently diverge
-because there is only one implementation, not two kept in sync by hand.
+function that `apps/api`'s `POST /api/submit` will eventually call
+server-side — there is only one implementation, not two kept in sync by
+hand, so the two paths can never silently drift apart the way the old
+hand-mirrored files could.
+
+**Mode: `hybrid`, not `rules_first`.** This deliberately does NOT match
+`apps/api` (which runs `rules_first`) — it matches the backend that's
+actually live today, `backend/app/` (FastAPI), which is still
+model-primary. The two modes disagree on 0.88% of cases
+(`packages/clinical-core/test/conformance/report.md`), and the
+AUTHORITATIVE, persisted tier always comes from whichever backend
+`POST /api/submit` currently resolves to — the raw form is what's queued
+offline, not the locally-computed tier (see "Offline: the unified outbox"
+below). Showing a `rules_first` preliminary offline, before
+`docs/CLINICAL_REVIEW.md`'s sign-off and before the server itself cuts
+over, would let a preliminary tier disagree with what the case becomes on
+sync. `runTriage()` switches to `hybrid` alongside the real server cutover,
+not before it. When the model can't be loaded offline, `hybrid` mode has
+no rules-only fallback (the model is authoritative for the non-override
+band) — `runTriage()` falls back to the override-only safety net (identical
+in both modes) and reports `triageLevel: null` ("pending — will be
+triaged on sync") rather than guessing.
+
 `utils/triageClassifier.js` itself owns only what's genuinely
 browser-specific: fetching + caching `/models/triage_trees.json` and
 `/models/features_config.json`.

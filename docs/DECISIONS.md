@@ -1314,14 +1314,37 @@ would have mirrored was itself verified against the legacy production path
 above.
 
 **Consequences**: online and offline triage cannot silently diverge any
-more — there is one rules-engine implementation, not two kept in sync by
+more — there is one rules-engine *implementation*, not two kept in sync by
 hand, and the four parity-test suites that existed only to catch that
-class of bug are gone because the bug class is gone. The tradeoff this
-entry exists to make explicit: `rules_first`'s 51 EMERGENCY→URGENT
-downgrades are a real, quantified change in clinical behaviour, not a
-regression to wave through — it does not ship to production until a named
-clinician has reviewed the delta and the rules tables it comes from (Phase
-7). Until `apps/api` cuts over, `backend/`'s hybrid (model-primary)
-behaviour remains what patients actually experience, and this document,
+class of bug are gone because the bug class is gone. Same implementation
+does not mean same *mode*, though, and that distinction mattered in
+practice — see the correction immediately below. The tradeoff this entry
+exists to make explicit: `rules_first`'s 51 EMERGENCY→URGENT downgrades
+are a real, quantified change in clinical behaviour, not a regression to
+wave through — it does not ship to production until a named clinician has
+reviewed the delta and the rules tables it comes from (Phase 7). Until
+`apps/api` cuts over, `backend/`'s hybrid (model-primary) behaviour
+remains what patients actually experience, and this document,
 `backend/app/ml/README.md`, and `backend/app/ml/MODEL_CARD.md` describe it
 accurately as the live system — not as a legacy curiosity.
+
+**Correction, found in PR review before merge**: the first version of this
+migration's `apps/web` offline triage (`utils/triageClassifier.js`)
+hardcoded `mode: 'rules_first'` unconditionally, with no gate. That meant
+an offline ASHA worker could see a `rules_first`-computed preliminary
+tier — including, in principle, one of the 51 EMERGENCY→URGENT
+cases above — *before* this entry's own sign-off gate had cleared, and
+before the server itself had cut over to `rules_first`. The persisted,
+authoritative record was never at risk (the outbox enqueues the raw form,
+never the locally-computed tier — see Phase 5's outbox design above — so
+`/api/submit` always retriages from scratch on sync), but the preliminary
+*display* could disagree with what the case became once synced, which is
+exactly the kind of quietly-shipped clinical-behaviour change this whole
+entry argues against doing without sign-off. Fixed in the same PR:
+`triageClassifier.js` now calls `triage()` in `hybrid` mode — matching
+`backend/app/`'s actual live semantics — and falls back to an
+override-only safety-net check (never a guessed tier) when the model
+can't be loaded offline, rather than silently computing a `rules_first`
+tier without one. `apps/web` moves to `rules_first` only alongside the
+real `apps/api` cutover, not before it. See `apps/web/README.md`'s
+"Triage logic lives in one place" section for the corrected design.

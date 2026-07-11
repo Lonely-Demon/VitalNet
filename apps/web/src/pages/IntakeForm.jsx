@@ -97,12 +97,16 @@ const BADGE_COLORS = {
 
 // Preliminary-result card styling — container (border + faint bg) and badge
 // (bg + text, no border) classes per tier, keyed the same way as BADGE_COLORS
-// but distinct shapes, so not reused from it. Unrecognized tiers fall back to
-// ROUTINE styling (matches the previous ternary chains' behavior).
+// but distinct shapes, so not reused from it. PENDING (no tree model
+// available offline, and no safety-net override fired — see
+// triageClassifier.js's runTriage()) is deliberately NEUTRAL, not ROUTINE —
+// unlike a real ROUTINE result, this means "unknown," not "checked and
+// low-risk," and must not visually imply the latter.
 const PRELIM_RESULT_STYLES = {
   EMERGENCY: { container: "border-emergency/30 bg-emergency/5", badge: "bg-emergency/10 text-emergency" },
   URGENT: { container: "border-urgent/30 bg-urgent/5", badge: "bg-urgent/10 text-urgent" },
   ROUTINE: { container: "border-routine/30 bg-routine/5", badge: "bg-routine/10 text-routine" },
+  PENDING: { container: "border-text3/30 bg-text3/5", badge: "bg-text3/10 text-text3" },
 }
 
 const emptyForm = {
@@ -321,9 +325,15 @@ export default function IntakeForm() {
             <>
               {offlineTriage && (
                 <div className="mb-4">
-                  <span className={`inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono ${BADGE_COLORS[offlineTriage.triageLevel]}`}>
-                    {offlineTriage.triageLevel}
-                  </span>
+                  {offlineTriage.triageLevel ? (
+                    <span className={`inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono ${BADGE_COLORS[offlineTriage.triageLevel]}`}>
+                      {offlineTriage.triageLevel}
+                    </span>
+                  ) : (
+                    <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono bg-text3/10 text-text3">
+                      {t('intakeForm.preliminary.pendingBadge')}
+                    </span>
+                  )}
                   {offlineTriage.lowConfidence && (
                     <p className="text-xs text-urgent mt-2 font-mono">{t('intakeForm.result.lowConfidenceShort')}</p>
                   )}
@@ -350,7 +360,7 @@ export default function IntakeForm() {
               </div>
               <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">{t('intakeForm.result.savedLocallyTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">
-                {offlineTriage
+                {offlineTriage?.triageLevel
                   ? t('intakeForm.result.savedLocallyWithTriage')
                   : t('intakeForm.result.savedLocallyNoTriage')}
               </p>
@@ -389,7 +399,7 @@ export default function IntakeForm() {
   }
 
   const prelimStyle = localResult
-    ? (PRELIM_RESULT_STYLES[localResult.triageLevel] || PRELIM_RESULT_STYLES.ROUTINE)
+    ? (PRELIM_RESULT_STYLES[localResult.triageLevel] || PRELIM_RESULT_STYLES.PENDING)
     : null
 
   return (
@@ -688,10 +698,10 @@ export default function IntakeForm() {
         <div className={`mt-4 rounded-lg border p-4 animate-fade-up ${prelimStyle.container}`}>
           <div className="flex items-center gap-3">
             <span className={`inline-flex items-center rounded-pill px-3 py-1 text-xs font-bold tracking-widest uppercase font-mono ${prelimStyle.badge}`}>
-              {localResult.triageLevel}
+              {localResult.triageLevel || t('intakeForm.preliminary.pendingBadge')}
             </span>
             <span className="text-sm font-medium text-text2">
-              {t('intakeForm.preliminary.label')}
+              {localResult.triageLevel ? t('intakeForm.preliminary.label') : t('intakeForm.preliminary.pendingLabel')}
             </span>
           </div>
           {localResult.lowConfidence && (

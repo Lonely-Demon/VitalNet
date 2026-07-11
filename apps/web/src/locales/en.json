@@ -142,6 +142,8 @@
     },
     "preliminary": {
       "label": "Preliminary triage",
+      "pendingBadge": "PENDING",
+      "pendingLabel": "Local check unavailable — will be triaged on sync",
       "lowConfidence": "⚠ Model uncertain on this case — please have a clinician review carefully.",
       "sendingOnline": "Sending to server for full analysis…",
       "sendingOffline": "Offline — queued for sync. Full briefing will appear for the doctor when connectivity returns."

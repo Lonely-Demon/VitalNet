@@ -66,7 +66,14 @@ This is the specific, current, blocking item — read in full before
 enabling `rules_first` mode for any production traffic (i.e. before
 flipping any entry in `apps/web/src/api/base.js`'s `ENDPOINT_BACKEND` map
 from `'legacy'` to `'edge'`, or standing up `apps/api` as a production
-destination by any other route).
+destination by any other route). This also covers `apps/web`'s own offline
+triage (`utils/triageClassifier.js`) — it runs `hybrid` mode, matching the
+live backend, specifically *because* this gate hasn't cleared. A PR-review
+finding caught an earlier version that ran `rules_first` unconditionally
+offline with no gate at all (see `docs/DECISIONS.md` §33's "Correction"
+addendum) — checking that `triageClassifier.js` still says `mode: 'hybrid'`
+is part of what a reviewer confirms before signing off below, not a
+one-time fix to forget about.
 
 **What changed**: `docs/DECISIONS.md` §33 made the deterministic rules
 engine authoritative over `triage_level`, replacing the current live

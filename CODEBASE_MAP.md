@@ -714,10 +714,13 @@ packages/clinical-core/
 │   └── triage.ts            Orchestrator: triage(form, trees?) -> {tier, firedRules,
 │                          contraindications, model?}. Two modes behind one exported
 │                          constant: `hybrid` (safety-net -> model -> NEWS2 floor,
-│                          reproduces the legacy backend's semantics exactly, used
-│                          only by the Phase-1 conformance test) and `rules_first`
-│                          (the engine above is authoritative; model is advisory —
-│                          what apps/web and apps/api both actually run).
+│                          reproduces the legacy backend's semantics exactly — used
+│                          by the Phase-1 conformance test AND, deliberately, by
+│                          apps/web's offline triage today, since that's what
+│                          matches the live, authoritative backend/app/ — see
+│                          apps/web/README.md) and `rules_first` (the engine above
+│                          is authoritative; model is advisory — the target
+│                          end-state, what apps/api runs, not yet cut over).
 ├── cli.mjs                 JSONL subprocess CLI for tools/training/train_classifier.py:
 │                          `label` (assignTier -> 0/1/2) and `engineer-features`
 │                          (buildFeatureMap). The ONE point where Python's synthetic-
@@ -879,7 +882,10 @@ apps/web/src/
 ├── hooks/
 │   ├── useLocalTriage.js      Wires up offline-model warmup (triggered on offline/
 │   │                          unreachable events) and classify() — calls
-│   │                          @vitalnet/clinical-core's triage() in rules_first mode.
+│   │                          @vitalnet/clinical-core's triage() in "hybrid" mode
+│   │                          (matches the live backend/app/'s model-primary
+│   │                          semantics — NOT "rules_first", deliberately; see
+│   │                          triageClassifier.js below and apps/web/README.md).
 │   ├── useDraftSave.js        Auto-saves IntakeForm state to IndexedDB keyed by
 │   │                          client_id (survives tab eviction on low-RAM devices).
 │   ├── useRealtimeCases.js    Supabase Realtime subscription wrapper (INSERT/UPDATE),
@@ -900,7 +906,12 @@ apps/web/src/
 │   ├── triageClassifier.js    Offline MODEL-LOADING ONLY now (Round 6 Phase 5) — fetches
 │   │                          + caches /models/triage_trees.json and
 │   │                          features_config.json, then calls @vitalnet/clinical-core's
-│   │                          triage() in rules_first mode and maps the result. The
+│   │                          triage() in "hybrid" mode (matches the live backend's
+│   │                          model-primary semantics, not the not-yet-cut-over
+│   │                          "rules_first" — see this file's own header comment
+│   │                          and apps/web/README.md) and maps the result. Without a
+│   │                          loaded model, falls back to an override-only safety-net
+│   │                          check (checkOverrides) rather than a guessed tier. The
 │   │                          rules engine, feature engineering, tree evaluator, and
 │   │                          contraindications this file used to carry directly
 │   │                          (clinicalRules.js, treeEvaluator.js, buildFeatureMap())
