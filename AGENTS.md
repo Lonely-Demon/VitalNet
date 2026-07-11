@@ -13,13 +13,21 @@ For deeper context beyond conventions: **[CODEBASE_MAP.md](./CODEBASE_MAP.md)** 
 
 ## 🌿 Git Branch Workflow — read before your first commit
 
-Exactly three long-lived branches: **`dev`** (active development — work here), **`main`** (periodically synced to match `dev` once verified-good), **`test`** (pre-production staging). See `docs/DECISIONS.md` §9 for the full rationale.
+Exactly three long-lived branches for building, testing, and deploying what's
+already shipped: **`dev`** (active development — work here), **`main`** (periodically synced to match `dev` once verified-good), **`test`** (pre-production staging). See `docs/DECISIONS.md` §9 for the full rationale.
 
 - **Do your work on `dev`** (or a short-lived feature branch merged into `dev` via PR). Do not develop directly on `main`.
 - Both `main` and `dev` have branch protection rejecting plain merge commits via the GitHub API/UI — PRs merge via **squash or rebase only**. GitHub auto-deletes the head branch on merge.
 - `pull_request`-triggered CI workflows run using the workflow file from the **base** branch, not the PR's head branch (a GitHub security feature) — a CI config change in a PR only takes effect for *future* PRs once merged into the base branch itself.
 - `.github/dependabot.yml` targets `dev`.
 - If `main` needs to catch up to `dev` (e.g. because Dependabot/security scanning watches the configured default branch): merge `dev` into `main` favoring `dev`'s content, push to a branch, open a PR, squash-merge — do not re-do work independently on `main`.
+
+**Fourth branch, `experimental`, is a separate track for major reforms** —
+multi-phase architectural rewrites expected to leave the repo in an
+intermediate/broken state across many commits (e.g. a language migration).
+It is NOT branched from and does not merge into `dev`/`main`/`test` as part
+of routine work; those three stay reserved for building, testing, and
+deploying already-shipped functionality. See `docs/DECISIONS.md` §32.
 
 ---
 

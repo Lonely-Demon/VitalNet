@@ -7,7 +7,8 @@ built the way they are, see `docs/DECISIONS.md`.
 
 ## Branch strategy
 
-Three long-lived branches:
+Three long-lived branches for building, testing, and deploying what's
+already shipped:
 
 | Branch | Purpose | How it's updated |
 |---|---|---|
@@ -22,6 +23,16 @@ procedure if `main` and `dev` have drifted.
 Both `main` and `dev` reject plain merge commits at the GitHub level —
 PRs merge via **squash or rebase only**. GitHub auto-deletes feature
 branches on merge; don't bother deleting them yourself.
+
+**Plus one long-lived branch for major reforms**: `experimental` — large,
+multi-phase architectural rewrites (the kind that leave the repo in an
+intermediate, sometimes-broken state across many commits, e.g. a language
+migration or a rearchitecture of the triage pipeline). This work does NOT
+develop on `dev` and is not merged back automatically — `dev`/`main`/`test`
+stay solely for building, testing, and deploying what's already shipped and
+verified. See `docs/DECISIONS.md` §32 for the rationale and the promotion
+path (a reviewed PR against `dev`, only once a reform phase is complete and
+independently verified — never a silent merge).
 
 ## Opening a PR
 
