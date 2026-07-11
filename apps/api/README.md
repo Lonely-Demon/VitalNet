@@ -49,9 +49,11 @@ Done: middleware stack (CORS, security headers, correlation id, CSRF/device guar
 limiting, hybrid JWT auth with per-isolate profile caching), `/api/health`,
 `GET /api/outbreak/signals` (EARS C1 aberration signals, ported to `_shared/ears.ts` —
 calls `fn_outbreak_signal_counts` via `.rpc()`, facility-scoped via `_shared/scoping.ts`),
-`GET /api/supervisor/team-metrics` (`_shared/teamMetrics.ts` — calls `fn_team_metrics`).
+`GET /api/supervisor/team-metrics` (`_shared/teamMetrics.ts` — calls `fn_team_metrics`),
+`GET /api/facilities` (referral target picker, `_shared/facilities.ts` — calls
+`fn_open_case_counts`), `GET /api/referrals` (RLS-scoped list, no RPC needed).
 
-Not yet ported: analytics, protocol, referrals-read, metrics (Tranche A);
+Not yet ported: analytics, protocol, metrics (Tranche A);
 cases/security/dsr/admin/push/voice and the rules-first flip on `/api/submit` (Tranche
 B, Phase 4). The legacy FastAPI backend stays deployable and authoritative for all of
 these until each is cut over — see the frontend's per-endpoint base-URL resolver map
