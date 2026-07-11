@@ -1141,3 +1141,44 @@ over-triage limitation is unresolvable without it, and treating isolated
 SpO2 88 as concerning is the safe default); age-in-months intake capture
 (specced as FEATURES_ROADMAP §4.1 — the model now understands fractional
 infant age, but the integer-year intake field can't yet supply it precisely).
+
+### 32. A fourth branch, `experimental`, for major reforms — kept out of the `dev`/`main`/`test` pipeline entirely
+
+**Context**: a full TypeScript migration + rules-first triage rearchitecture
+began (a multi-week, multi-phase rewrite: a new `clinical-core` package
+replacing four hand-mirrored Python/JS clinical-logic pairs, `SECURITY
+DEFINER` Postgres functions replacing app-layer `supabase_admin` discipline,
+and a new Deno/Hono edge-function backend alongside the existing FastAPI
+one). The first several phases were built on a short-lived branch off `dev`
+(`feature/ts-clinical-core`), following this repo's normal feature-branch
+convention (§9) — but that convention assumes a feature branch merges back
+into `dev` in days, not weeks, and §9's three-branch model exists
+specifically to keep `main`/`dev`/`test` reliable for building, testing, and
+deploying *already-shipped* functionality. A multi-week rewrite left
+mid-flight in an intermediate, sometimes-broken state doesn't belong
+anywhere near that pipeline, even temporarily.
+
+**Decision**: `experimental` is a fourth long-lived branch, independent of
+`main`/`dev`/`test`, reserved for this class of work — large architectural
+reforms expected to span many commits with an intermediate broken state,
+not incremental features. It is not created off `dev` as a short-lived
+branch and is not merged back automatically; `dev`/`main`/`test` remain
+solely for the existing, shipped codebase. Promotion happens deliberately:
+once a reform phase (or the whole reform) is complete and independently
+verified, it's proposed to `dev` via a normal reviewed PR — the same bar as
+any other change, not a fast-tracked merge just because the branch is
+long-lived. `feature/ts-clinical-core`'s six phase commits (Phase 0–3
+foundation: monorepo scaffolding, `clinical-core`, DB `SECURITY DEFINER`
+functions + CI drift detection, and the first Tranche-A edge-function
+endpoints) moved to `experimental` unchanged — the branch was recreated
+pointing at the same history, not rebuilt.
+
+**Consequences**: `dev` stays exactly what §9 intended it to be — the
+active-development line for everything already shipped — even while a
+large rewrite is in progress elsewhere. CI on `experimental` (the new
+`db-schema-drift.yml` and `api-edge-function.yml` workflows) runs
+independently and never gates `dev`/`main`/`test`. The tradeoff: a second
+long-lived branch is more to keep track of than the previous exactly-three
+model, and it must not become a dumping ground for anything someone would
+rather not put through normal review — it is specifically for reforms of
+this scale, not a general-purpose "experiments" branch.
