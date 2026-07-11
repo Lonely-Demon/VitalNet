@@ -60,12 +60,12 @@ Usage:
 
 Outputs:
     backend/app/ml/models/triage_classifier.pkl   (backend: classifier + SHAP explainer)
-    frontend/public/models/triage_trees.json       (browser: compact tree ensemble,
+    apps/web/public/models/triage_trees.json       (browser: compact tree ensemble,
         evaluated in pure JS by treeEvaluator.js — NO onnxruntime-web WASM)
-    frontend/public/models/features_config.json    (canonical feature order —
+    apps/web/public/models/features_config.json    (canonical feature order —
         the frontend fetches this at runtime instead of hard-coding feature
         order, eliminating an entire class of silent Python/JS drift bugs)
-    frontend/tests/fixtures/golden_vectors.json     (py-labelled vectors for the
+    apps/web/tests/fixtures/golden_vectors.json     (py-labelled vectors for the
         frontend JS parity test — proves JS == server on a held-out sample)
 
 ONNX is still produced in memory (skl2onnx) as the intermediate the tree JSON is
@@ -98,13 +98,13 @@ from tree_export import onnx_to_tree_json, evaluate_tree_json  # noqa: E402
 
 MODELS_DIR = os.path.join(BACKEND_DIR, "app", "ml", "models")
 PKL_PATH = os.path.join(MODELS_DIR, "triage_classifier.pkl")
-FRONTEND_MODELS_DIR = os.path.join(PROJECT_ROOT, "frontend", "public", "models")
+FRONTEND_MODELS_DIR = os.path.join(PROJECT_ROOT, "apps", "web", "public", "models")
 FEATURES_CONFIG_PATH = os.path.join(FRONTEND_MODELS_DIR, "features_config.json")
 # Offline inference (Option 6): the browser loads this compact tree JSON and
 # evaluates it in pure JS — no onnxruntime-web WASM. See scripts/tree_export.py.
 TREE_JSON_PATH = os.path.join(FRONTEND_MODELS_DIR, "triage_trees.json")
 # Golden fixture for the frontend py/JS parity test (not shipped to users).
-GOLDEN_DIR = os.path.join(PROJECT_ROOT, "frontend", "tests", "fixtures")
+GOLDEN_DIR = os.path.join(PROJECT_ROOT, "apps", "web", "tests", "fixtures")
 GOLDEN_PATH = os.path.join(GOLDEN_DIR, "golden_vectors.json")
 
 RANDOM_SEED = 42

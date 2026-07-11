@@ -4,7 +4,7 @@ to backend/tests/fixtures/golden_feature_vectors.json.
 
 This is the ground truth for the Python/JS feature-engineering parity test
 (FEATURES_ROADMAP.md §1.2): backend/tests/test_feature_parity.py replays the
-Python side, frontend/tests/featureParity.test.mjs replays the JS side
+Python side, apps/web/tests/featureParity.test.mjs replays the JS side
 (triageClassifier.js::buildFeatureMap), and both must match this fixture
 exactly. If you change clinical_features.py, regenerate this fixture AND
 port the equivalent change to triageClassifier.js in the same commit.
