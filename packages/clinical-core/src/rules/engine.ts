@@ -4,7 +4,7 @@
 // v3.1.0 age-aware) to inference time, and merges it with the always-wins
 // override layer (rules.ts, ported from classifier.py::_safety_net_check).
 //
-// Design (see DECISIONS §32 for the full rationale):
+// Design (see DECISIONS §33 for the full rationale):
 //   1. Override rules (rules.ts::checkOverrides) — unconditional EMERGENCY.
 //      Always checked first; if any fires, nothing below runs.
 //   2. Aggregate NEWS2/qSOFA/PALS scorer — the nuanced, age-aware tier

@@ -1,6 +1,6 @@
 """
 One-time (+ re-runnable) conformance export for the TypeScript migration
-(DECISIONS.md §32 / the Round 6 rebuild plan, Phase 1): generates N
+(DECISIONS.md §33 / the Round 6 rebuild plan, Phase 1): generates N
 synthetic patients, runs the CURRENT PRODUCTION Python inference path
 (app.ml.classifier.predict_triage — safety net -> trained model -> NEWS2
 floor) on every one, and writes the patient + Python's verdict to
@@ -19,10 +19,11 @@ _reference_month is set on every patient (as in export_golden_vectors.py)
 so seasonal_risk is reproducible read on both sides; FROZEN_REFERENCE_TIME
 is the defensive datetime.now() fallback, matching that script.
 
-Run: cd backend && python scripts/export_conformance_patients.py [N]
+Run: cd tools/training && python export_conformance_patients.py [N]
 (default N=10000)
 """
 import json
+import os
 import sys
 from datetime import datetime as _real_datetime
 from pathlib import Path
@@ -30,10 +31,13 @@ from unittest.mock import patch
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
+sys.path.insert(0, BACKEND_DIR)
+sys.path.insert(0, os.path.dirname(__file__))
 
 from app.ml.classifier import load_classifier, predict_triage  # noqa: E402
-from scripts.train_classifier import generate_patient  # noqa: E402
+from train_classifier import generate_patient  # noqa: E402
 
 OUTPUT_PATH = (
     Path(__file__).parent.parent.parent

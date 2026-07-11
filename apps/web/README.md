@@ -35,7 +35,7 @@ src/
 │                                    /models/*.json) — the clinical logic itself
 │                                    (rules, features, tree eval, contraindications)
 │                                    is @vitalnet/clinical-core, not mirrored here
-│                                    (see ../docs/DECISIONS.md §32)
+│                                    (see ../docs/DECISIONS.md §33)
 ├── pages/, panels/, components/     UI — role-specific panels are React.lazy()-loaded
 public/
 ├── sw-push.js                       Web Push service-worker handlers
@@ -74,7 +74,7 @@ This replaced four previously hand-mirrored files (`clinicalRules.js`,
 `validation.js`, `patientKey.js`) and the four apps/web-side parity test
 suites that existed solely to catch drift between the JS mirror and the
 Python original — see `packages/clinical-core/README.md` and
-`../docs/DECISIONS.md` §32 for the full migration rationale and
+`../docs/DECISIONS.md` §33 for the full migration rationale and
 conformance evidence. Clinical-rule changes now happen in
 `packages/clinical-core/src/` and are verified with
 `pnpm --filter @vitalnet/clinical-core test`, not an apps/web script.

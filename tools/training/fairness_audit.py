@@ -36,7 +36,7 @@ BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
 sys.path.insert(0, BACKEND_DIR)
 sys.path.insert(0, os.path.dirname(__file__))
 
-from train_classifier import generate_patient, assign_triage_label, LABEL_MAP  # noqa: E402
+from train_classifier import generate_patient, assign_triage_labels, LABEL_MAP  # noqa: E402
 from app.ml.classifier import load_classifier, predict_triage  # noqa: E402
 
 SEED = 20260704  # deliberately different from train_classifier.py's RANDOM_SEED
@@ -64,19 +64,22 @@ def run_audit(n_total: int, flag_gap: float):
     print("Loading triage classifier bundle ...")
     load_classifier()
 
-    np.random.seed(SEED)  # generate_patient/assign_triage_label use the global np.random state
+    np.random.seed(SEED)  # generate_patient uses the global np.random state
 
     print(f"Generating {n_total} synthetic evaluation patients ...")
+    patients = [generate_patient(np.random.choice(SEVERITIES, p=SEVERITY_WEIGHTS)) for _ in range(n_total)]
+
+    print("Labeling via clinical-core cli.mjs ...")
+    labels = assign_triage_labels(patients)
+
+    print("Running the full deployed triage pipeline on each patient ...")
     rows = []
-    for _ in range(n_total):
-        severity = np.random.choice(SEVERITIES, p=SEVERITY_WEIGHTS)
-        patient = generate_patient(severity)
-        true_label = LABEL_MAP[assign_triage_label(patient)]
+    for patient, label in zip(patients, labels):
         predicted = predict_triage(patient)["triage_level"]
         rows.append({
             "age_band": age_band(patient["patient_age"]),
             "sex": patient["patient_sex"],
-            "true": true_label,
+            "true": LABEL_MAP[label],
             "predicted": predicted,
         })
 

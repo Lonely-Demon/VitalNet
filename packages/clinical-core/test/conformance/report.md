@@ -20,7 +20,7 @@ the same order as the Python path).
 
 ---
 
-# rules_first vs. current-production delta (informational, DECISIONS §32 input)
+# rules_first vs. current-production delta (informational, DECISIONS §33 input)
 
 Same 10000 patients, replayed through `triage()` in `rules_first` mode (the target end-state:
 rules engine 100% authoritative, model advisory-only) instead of `hybrid` mode above.

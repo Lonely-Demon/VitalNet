@@ -1,10 +1,11 @@
-// Golden-vector parity: buildFeatureMap (this package) must match the
-// EXACT same 240 vectors the pre-migration featureParity.test.mjs checked
-// against ClinicalFeatureEngineer / triageClassifier.js — proof this port
-// changed nothing. Reads the fixture committed at
-// apps/web/tests/fixtures/golden_feature_vectors.json (unchanged by this
-// migration; still the single source of golden data until the CLI, once
-// wired into tools/training/, regenerates it from this package instead).
+// Golden-vector regression snapshot for buildFeatureMap. Historically this
+// fixture was Python-generated (ClinicalFeatureEngineer) and proved the JS
+// port matched it; tools/training/train_classifier.py now regenerates
+// apps/web/tests/fixtures/golden_feature_vectors.json from THIS package's
+// own engineer_features_batch (via cli.mjs) on every training run, so this
+// is a snapshot/regression guard, not a cross-language parity check — an
+// unreviewed change to features.ts that isn't paired with a fixture
+// regeneration + review will fail this test.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

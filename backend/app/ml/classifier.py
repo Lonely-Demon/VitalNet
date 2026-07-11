@@ -2,7 +2,7 @@
 VitalNet Classifier Interface.
 
 Loads the single unified HistGradientBoostingClassifier (see
-backend/scripts/train_classifier.py for training + the clinical rationale)
+tools/training/train_classifier.py for training + the clinical rationale)
 and exposes:
   - predict_triage() — main prediction entry point
   - get_classifier_info() — startup/health-check introspection
@@ -149,7 +149,7 @@ def load_classifier() -> bool:
     if not PKL_PATH.exists():
         raise RuntimeError(
             f"Triage classifier not found at {PKL_PATH}. "
-            "Run backend/scripts/train_classifier.py to generate it."
+            "Run tools/training/train_classifier.py to generate it."
         )
 
     try:

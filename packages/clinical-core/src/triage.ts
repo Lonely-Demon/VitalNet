@@ -26,7 +26,7 @@ export type TriageMode = "rules_first" | "hybrid";
 
 /** The mode every new caller should use. Flip this one constant (and its
  * one remaining "hybrid" caller, the conformance harness) once the
- * migration's conformance report is signed off — see DECISIONS §32. */
+ * migration's conformance report is signed off — see DECISIONS §33. */
 export const DEFAULT_TRIAGE_MODE: TriageMode = "rules_first";
 
 const TRIAGE_LABELS: readonly Tier[] = ["ROUTINE", "URGENT", "EMERGENCY"];
@@ -56,7 +56,7 @@ export interface TriageResult {
   model?: ModelOpinion;
   /** True when the model's own opinion matches the authoritative tier.
    * Undefined if no model was run. Feeds needs_review + the ML-agreement
-   * analytics (the model-promotion gate, DECISIONS §32). */
+   * analytics (the model-promotion gate, DECISIONS §33). */
   modelAgreed?: boolean;
   mode: TriageMode;
 }

@@ -1,5 +1,5 @@
 // The one-time (+ re-runnable) conformance gate for the TypeScript
-// migration (Round 6 rebuild plan, Phase 1 / DECISIONS.md §32): replays
+// migration (Round 6 rebuild plan, Phase 1 / DECISIONS.md §33): replays
 // the 10,000 patients in patients_with_python_tier.jsonl — each already
 // labeled by the CURRENT PRODUCTION Python path
 // (app.ml.classifier.predict_triage, via
@@ -108,7 +108,7 @@ describe.skipIf(!existsSync(patientsPath))(
     // architecture (rules_first — rules engine 100% authoritative, model
     // advisory-only) would have triaged the same 10k patients differently
     // from today's production (Python predict_triage, replayed above as the
-    // hybrid-mode baseline). This is the delta DECISIONS §32 must record
+    // hybrid-mode baseline). This is the delta DECISIONS §33 must record
     // when rules_first ships (Phase 4) — generated here because the same
     // conformance set and harness make it nearly free.
     it("quantifies the rules_first vs. current-production delta (informational)", async () => {
@@ -140,7 +140,7 @@ describe.skipIf(!existsSync(patientsPath))(
         "",
         "---",
         "",
-        "# rules_first vs. current-production delta (informational, DECISIONS §32 input)",
+        "# rules_first vs. current-production delta (informational, DECISIONS §33 input)",
         "",
         `Same ${n} patients, replayed through \`triage()\` in \`rules_first\` mode (the target end-state:`,
         "rules engine 100% authoritative, model advisory-only) instead of `hybrid` mode above.",

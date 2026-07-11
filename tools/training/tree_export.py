@@ -3,8 +3,8 @@ Tree-ensemble → compact JSON exporter + a reference evaluator.
 
 Used only at TRAINING time (not by the running API). Converts the ONNX
 TreeEnsembleClassifier produced by skl2onnx for the HistGradientBoosting model
-into a small JSON structure that a ~120-line dependency-free JavaScript
-evaluator (apps/web/src/utils/treeEvaluator.js) can walk directly — so the PWA
+into a small JSON structure that a dependency-free JavaScript evaluator
+(packages/clinical-core/src/treeEvaluator.ts) can walk directly — so the PWA
 does offline triage with NO onnxruntime-web WASM (see FEATURES_ROADMAP /
 CODEBASE_MAP for the rationale: ~12 MB of precached WASM removed, far lighter on
 2 GB-class devices and metered rural links).

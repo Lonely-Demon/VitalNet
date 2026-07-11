@@ -2,25 +2,27 @@
 Exports a fixed set of synthetic patients + their engineered feature vectors
 to backend/tests/fixtures/golden_feature_vectors.json.
 
-This is the ground truth for the Python/JS feature-engineering parity test
-(FEATURES_ROADMAP.md §1.2): backend/tests/test_feature_parity.py replays the
-Python side, apps/web/tests/featureParity.test.mjs replays the JS side
-(triageClassifier.js::buildFeatureMap), and both must match this fixture
-exactly. If you change clinical_features.py, regenerate this fixture AND
-port the equivalent change to triageClassifier.js in the same commit.
+This is a regression snapshot for the legacy FastAPI backend's OWN
+ClinicalFeatureEngineer (backend/tests/test_feature_parity.py replays it
+against this fixture). It is no longer a cross-language parity check —
+since the Round 6 TypeScript migration (docs/DECISIONS.md §33),
+ClinicalFeatureEngineer is not mirrored anywhere else; the authoritative
+feature engineering is packages/clinical-core/src/features.ts, which has
+its own, independently-sourced golden fixture (see
+tools/training/train_classifier.py's FEATURE_GOLDEN_PATH step). This
+script and the fixture it produces exist only as long as backend/app/ does
+— they are slated for removal together at the deferred FastAPI cutover.
 
 generate_patient() sets an explicit _reference_month on every synthetic
 patient (docs/DECISIONS.md §23), so seasonal_risk no longer depends on real
-wall-clock time for these vectors — the JS mirror (triageClassifier.js)
-reads the same _reference_month when present, falling back to the real
-current month only for genuine (non-fixture) submissions. FROZEN_REFERENCE_TIME
-below is kept as a defensive fallback for any other contextual feature that
-might read datetime.now() directly, matching test_feature_parity.py /
-featureParity.test.mjs.
+wall-clock time for these vectors. FROZEN_REFERENCE_TIME below is kept as a
+defensive fallback for any other contextual feature that might read
+datetime.now() directly, matching test_feature_parity.py.
 
-Run: cd backend && python scripts/export_golden_vectors.py
+Run: cd tools/training && python export_golden_vectors.py
 """
 import json
+import os
 import sys
 from datetime import datetime as _real_datetime
 from pathlib import Path
@@ -28,19 +30,21 @@ from unittest.mock import patch
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
+sys.path.insert(0, BACKEND_DIR)
+sys.path.insert(0, os.path.dirname(__file__))
 
 from app.ml.clinical_features import ClinicalFeatureEngineer  # noqa: E402
-from scripts.train_classifier import generate_patient  # noqa: E402
+from train_classifier import generate_patient  # noqa: E402
 
 N_PER_SEVERITY = 60
 SEVERITIES = ["mild", "moderate", "severe", "critical"]
-OUTPUT_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "golden_feature_vectors.json"
+OUTPUT_PATH = Path(BACKEND_DIR) / "tests" / "fixtures" / "golden_feature_vectors.json"
 
 # Arbitrary fixed instant — kept only as the defensive datetime.now() fallback
 # described above; every generated patient's _reference_month takes priority
-# over it. Must match FROZEN_REFERENCE_TIME in test_feature_parity.py and the
-# frozen reference in featureParity.test.mjs.
+# over it. Must match FROZEN_REFERENCE_TIME in test_feature_parity.py.
 FROZEN_REFERENCE_TIME = _real_datetime(2026, 7, 4, 12, 0, 0)
 
 

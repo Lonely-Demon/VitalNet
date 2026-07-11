@@ -217,7 +217,7 @@ export function buildResponseTimes(
 // model, which currently has zero say in triage_level, accurate enough that
 // promoting it back to (partial) authority would ever be worth considering.
 // That promotion decision is exactly what this endpoint exists to inform —
-// see DECISIONS §32.
+// see DECISIONS §33.
 //
 // Ground truth is case_outcomes.actual_severity only (a doctor's triage
 // override, case_records.overridden_triage, is a second real-world-signal

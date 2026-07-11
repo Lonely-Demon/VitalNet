@@ -84,7 +84,7 @@ identical to production.
 
 ### 1.2 Golden-vector Python/JS feature-engineering parity test (CI-enforced) — ✅ DONE
 
-**Status**: Implemented. `backend/scripts/export_golden_vectors.py` generates
+**Status**: Implemented. `tools/training/export_golden_vectors.py` generates
 240 synthetic patients across all four severities and writes
 `tests/fixtures/golden_feature_vectors.json` (mirrored into
 `frontend/tests/fixtures/`); `backend/tests/test_feature_parity.py` and
@@ -113,7 +113,7 @@ one feature at a time.
 **Effort**: Small.
 
 **Implementation**:
-1. Create `backend/scripts/export_golden_vectors.py`: generates ~200
+1. Create `tools/training/export_golden_vectors.py`: generates ~200
    diverse synthetic patients (reuse `generate_patient()` from
    `train_classifier.py`), runs each through
    `ClinicalFeatureEngineer.engineer_features()`, and writes
@@ -203,7 +203,7 @@ periodic — not real-time — retraining job).
    new `recordCaseOutcome()` wrapper in `frontend/src/api/cases.js`.
 4. **Retraining pipeline** (NOT real-time, NOT automatic — a human-gated
    periodic job, given the safety stakes): a new script
-   `backend/scripts/retrain_from_outcomes.py` that:
+   `tools/training/retrain_from_outcomes.py` that:
    - Pulls all `case_outcomes` joined with their `case_records` (need
      `bp_systolic`, `spo2`, etc. — the original submitted vitals).
    - Where `actual_severity` disagrees with the original `triage_level`,

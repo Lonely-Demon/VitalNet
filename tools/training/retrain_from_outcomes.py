@@ -48,13 +48,14 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import accuracy_score, recall_score
 from sklearn.model_selection import train_test_split
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
+sys.path.insert(0, BACKEND_DIR)
+sys.path.insert(0, os.path.dirname(__file__))
 
-from app.ml.clinical_features import ClinicalFeatureEngineer  # noqa: E402
 from train_classifier import (  # noqa: E402
     FEATURE_NAMES, LABEL_MAP, RANDOM_SEED, TEST_SIZE,
-    MODELS_DIR, PKL_PATH, build_dataset,
+    MODELS_DIR, PKL_PATH, build_dataset, engineer_features_batch,
 )
 
 _rng = np.random.default_rng(RANDOM_SEED)
@@ -64,7 +65,6 @@ MIN_EMERGENCY_DISAGREEMENTS = 50
 CANDIDATE_PATH = os.path.join(MODELS_DIR, "candidate_triage_classifier.pkl")
 
 LABEL_TO_INDEX = {v: k for k, v in LABEL_MAP.items()}
-_engineer = ClinicalFeatureEngineer()
 
 
 def load_outcomes_from_fixture(path: str) -> list[dict]:
@@ -91,16 +91,19 @@ def load_outcomes_from_supabase() -> list[dict]:
     ]
 
 
-def _featurize(case_input: dict) -> np.ndarray:
-    features = _engineer.engineer_features(case_input)
-    return np.array([features[name] for name in FEATURE_NAMES], dtype=np.float32)
+def _featurize_batch(case_inputs: list[dict]) -> np.ndarray:
+    feature_maps = engineer_features_batch(case_inputs)
+    return np.array(
+        [[fm[name] for name in FEATURE_NAMES] for fm in feature_maps],
+        dtype=np.float32,
+    )
 
 
 def build_blended_dataset(outcomes: list[dict]):
     """Real-outcome labels + a shrinking proportion of synthetic data.
     More real data -> proportionally less synthetic padding, so the real
     signal dominates as outcome volume grows."""
-    real_X = np.array([_featurize(o["case_input"]) for o in outcomes], dtype=np.float32)
+    real_X = _featurize_batch([o["case_input"] for o in outcomes])
     real_y = np.array([LABEL_TO_INDEX[o["actual_severity"]] for o in outcomes])
 
     # Synthetic padding shrinks (relative to the fixed pool below) as real
@@ -117,10 +120,7 @@ def build_blended_dataset(outcomes: list[dict]):
         idx = _rng.choice(pool_size, size=n_synthetic, replace=False)
         synth_patients = [synth_patients[i] for i in idx]
         synth_y = synth_y[idx]
-    synth_X = np.array(
-        [[_engineer.engineer_features(p)[name] for name in FEATURE_NAMES] for p in synth_patients],
-        dtype=np.float32,
-    )
+    synth_X = _featurize_batch(synth_patients)
 
     X = np.concatenate([real_X, synth_X])
     y = np.concatenate([real_y, synth_y])
@@ -149,7 +149,7 @@ def _train_candidate(X, y):
 def _agreement_rate(clf, outcomes: list[dict]) -> float:
     if not outcomes:
         return 0.0
-    X = np.array([_featurize(o["case_input"]) for o in outcomes], dtype=np.float32)
+    X = _featurize_batch([o["case_input"] for o in outcomes])
     y_true = np.array([LABEL_TO_INDEX[o["actual_severity"]] for o in outcomes])
     y_pred = clf.predict(X)
     return float(accuracy_score(y_true, y_pred))

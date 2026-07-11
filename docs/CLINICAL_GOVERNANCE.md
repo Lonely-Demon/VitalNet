@@ -120,8 +120,8 @@ be audited, not just inferred from source.
   with synthetic data but does not auto-deploy; a human reviews the new
   model's metrics against the committed model card before it replaces the
   running model.
-- **Fairness and drift monitoring:** `backend/scripts/fairness_audit.py` and
-  `backend/scripts/drift_monitor.py` (operator-run, see `app/ml/README.md`)
+- **Fairness and drift monitoring:** `tools/training/fairness_audit.py` and
+  `tools/training/drift_monitor.py` (operator-run, see `app/ml/README.md`)
   give an auditor a repeatable way to check for subgroup performance gaps
   and live-data drift against the training distribution ahead of any
   retraining decision.

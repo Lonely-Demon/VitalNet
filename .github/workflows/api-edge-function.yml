@@ -10,6 +10,10 @@ name: apps/api (Edge Function)
 # below are load-bearing, not incidental: without them every Deno step
 # fails to resolve @vitalnet/clinical-core (verified locally by moving
 # packages/clinical-core/dist/ aside and re-running `deno check`).
+#
+# Two jobs: `test` runs on every PR/push touching this app; `deploy`
+# (Phase 6) is workflow_dispatch-only — see its own header comment for why
+# this is not wired to fire automatically yet.
 
 on:
   pull_request:
@@ -21,6 +25,7 @@ on:
     paths:
       - "apps/api/**"
       - "packages/clinical-core/**"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -68,3 +73,61 @@ jobs:
       - name: Test
         working-directory: apps/api/supabase/functions/api
         run: deno test --allow-net --allow-env
+
+  deploy:
+    # Manual-only (workflow_dispatch), never on push/PR: apps/api has not
+    # received production traffic yet — every entry in apps/web's
+    # ENDPOINT_BACKEND map is still 'legacy' (backend/app/, the FastAPI
+    # backend), and the riskiest ports (webpush VAPID crypto, JWKS/ES256
+    # auth) have no live-network test coverage by design (see test/
+    # auth.test.ts and test/idempotency.test.ts's headers). This job exists
+    # so deploying is a deliberate, auditable action once cutover actually
+    # starts (Round 6 rebuild plan Phase 3, verification item 3:
+    # "flip one endpoint in the base map -> run E2E -> watch audit/metrics"),
+    # not something that fires on every merge to main. Requires the test
+    # job's checks to have already been green on the commit being deployed.
+    needs: test
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
+      - name: Install workspace deps (no install scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build @vitalnet/clinical-core
+        # supabase functions deploy bundles whatever's on disk at deploy
+        # time, including this relative dependency — see apps/api/README.md.
+        run: pnpm --filter @vitalnet/clinical-core build
+
+      - name: Check deploy credentials are configured
+        id: creds
+        run: |
+          if [ -z "${{ secrets.SUPABASE_ACCESS_TOKEN }}" ] || [ -z "${{ secrets.SUPABASE_PROJECT_REF }}" ]; then
+            echo "::warning::SUPABASE_ACCESS_TOKEN and/or SUPABASE_PROJECT_REF repo secrets are not set — nothing to deploy to yet. This is expected before cutover; skipping without failing the run."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: supabase/setup-cli@v1  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        if: steps.creds.outputs.configured == 'true'
+        with:
+          version: latest
+
+      - name: Deploy edge function
+        if: steps.creds.outputs.configured == 'true'
+        working-directory: apps/api
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase functions deploy api --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"

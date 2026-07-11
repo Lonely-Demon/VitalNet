@@ -4,7 +4,13 @@ _Model version: 3.0.0. This card documents what the model is, how it was built,
 what its metrics do and do not mean, and its limitations. Read it before relying
 on, extending, or citing the model. For the architecture and training rationale,
 see `README.md` in this directory; for regeneration, see
-`backend/scripts/train_classifier.py`._
+`tools/training/train_classifier.py`._
+
+_**This describes the legacy FastAPI backend** (`backend/app/`), still the
+live-serving system today. A parallel advisory-only architecture (rules
+engine authoritative, model advisory, Saabas attribution instead of SHAP)
+runs in `apps/api` but has not yet received production traffic — see
+`README.md`'s note in this directory and `docs/DECISIONS.md` §33._
 
 ## Intended use
 
@@ -28,9 +34,10 @@ clearance (CDSCO/CE/FDA) and has not undergone clinical trial validation.
 - **One model, two runtimes:** the same trained model runs server-side (Python,
   from `triage_classifier.pkl`, with a bundled SHAP `TreeExplainer` for
   per-patient explanations) and in the browser for offline triage (as
-  `frontend/public/models/triage_trees.json`, evaluated by a dependency-free JS
-  tree walker — no onnxruntime). A golden-vector parity test enforces that the
-  two produce identical classifications.
+  `apps/web/public/models/triage_trees.json`, evaluated by a dependency-free JS
+  tree walker — no onnxruntime). A golden-vector test
+  (`packages/clinical-core/test/treeEvaluator.golden.test.ts`) enforces that
+  the two produce identical classifications.
 - **Deterministic safety layers wrap the model** (see `app/ml/classifier.py`):
   a **safety net** force-escalates unambiguous extreme presentations (SpO2 < 85,
   HR < 35 / > 170, systolic BP < 70 / > 220, temp > 41.5 / < 33, neonatal fever,
@@ -51,7 +58,7 @@ clearance (CDSCO/CE/FDA) and has not undergone clinical trial validation.
   influence on any prediction despite being computed on every request.
   `time_of_day_risk`/`epidemic_alert_level` were removed outright (43
   features, down from 45); `seasonal_risk`/`geographic_risk` were rebuilt as
-  real signals — `scripts/train_classifier.py` now samples a
+  real signals — `tools/training/train_classifier.py` now samples a
   `_reference_month` per synthetic patient and correlates monsoon-season
   (June–September) + rural/tribal location with a real dengue/malaria-like
   symptom-probability bump, so the model has genuine training-time variance
@@ -69,7 +76,7 @@ vital-sign reference ranges, with a deliberate hypertensive-crisis extension.
 The generator also simulates the rural reality of **missing vitals** (no BP
 cuff / pulse-ox on ~6–28% of samples per vital) and a few edge syndromes (silent
 MI / atypical presentation, sepsis-without-fever). Full details and the exact
-thresholds: `app/ml/README.md` and `scripts/train_classifier.py`.
+thresholds: `app/ml/README.md` and `tools/training/train_classifier.py`.
 
 > **What the metrics below mean — and don't.** Accuracy is measured against the
 > synthetic label generator. It quantifies *how faithfully the model learned the
@@ -119,7 +126,7 @@ the shipped uncertainty mechanism.
 
 **Realistic-prevalence validation (new):** the class-balanced ECE above measures
 calibration against an even 33/33/33 class split, which is *not* the distribution
-VitalNet sees in the field (mostly ROUTINE). `scripts/train_classifier.py`
+VitalNet sees in the field (mostly ROUTINE). `tools/training/train_classifier.py`
 separately subsamples the same held-out test set down to a **~85% ROUTINE / 12%
 URGENT / 3% EMERGENCY** realistic prevalence (n=2,117: 1,800 ROUTINE / 254 URGENT
 / 63 EMERGENCY) and re-measures ECE and the `low_confidence` abstention rate
@@ -196,20 +203,22 @@ proportionally more of).
   drug-drug interaction checking (no structured drug database exists here).
 - **No PII in logs:** validation errors are scrubbed of input values
   (`app/main.py`).
-- **Fairness and drift monitoring:** `scripts/fairness_audit.py` (subgroup
-  accuracy/EMERGENCY-recall by age band and sex) and `scripts/drift_monitor.py`
-  (feature-distribution drift, live data vs. training distribution) are
-  operator-run diagnostics — see `README.md`'s "Fairness audit and drift
-  monitoring" section. Both are synthetic-data checks, same caveat as the
-  metrics above; neither is a substitute for real-world validation.
+- **Fairness and drift monitoring:** `tools/training/fairness_audit.py`
+  (subgroup accuracy/EMERGENCY-recall by age band and sex) and
+  `tools/training/drift_monitor.py` (feature-distribution drift, live data
+  vs. training distribution) are operator-run diagnostics — see `README.md`'s
+  "Fairness audit and drift monitoring" section. Both are synthetic-data
+  checks, same caveat as the metrics above; neither is a substitute for
+  real-world validation.
 
 ## Regenerating / changing the model
 
-`cd backend && pip install -r requirements.txt -r requirements-train.txt &&
-python scripts/train_classifier.py`. This retrains and re-exports the `.pkl`,
-`triage_trees.json`, `features_config.json`, and the golden-vector fixture from
-one run, and asserts py-pkl == onnx == tree-JSON parity. If you change
-`clinical_features.py`, mirror it in `frontend/src/utils/triageClassifier.js` and
-re-run — the frontend parity test (`npm run test:parity`) will fail otherwise.
-Never bump `scikit-learn` without retraining in the same change (see
-`app/ml/README.md`).
+`cd tools/training && pip install -r ../../backend/requirements.txt -r
+../../backend/requirements-train.txt && python train_classifier.py` (after
+`pnpm --filter @vitalnet/clinical-core build`). This retrains and re-exports
+the `.pkl`, `triage_trees.json`, `features_config.json`, and the golden-vector
+fixtures from one run, and asserts py-pkl == onnx == tree-JSON parity. Labels
+and features both come from `packages/clinical-core` (via `cli.mjs`) — change
+`packages/clinical-core/src/rules/` or `features.ts` and re-run; there is
+nothing else to keep in sync. Never bump `scikit-learn` without retraining in
+the same change (see `app/ml/README.md`).

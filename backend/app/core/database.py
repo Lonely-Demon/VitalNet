@@ -19,7 +19,7 @@ Supabase database clients.
    no RLS backstop. tests/test_admin_authz.py enforces this for exactly those
    modules (see ADMIN_ROUTE_MODULES there).
 
-   RETIRED NARROW AGGREGATE EXCEPTION (DECISIONS.md §29, §32): non-admin
+   RETIRED NARROW AGGREGATE EXCEPTION (DECISIONS.md §29, §33): non-admin
    endpoints used to reach past their own RLS-scoped token via supabase_admin
    for exactly one aggregate each (a doctor's referral picker needing another
    facility's open-case *count*; a supervisor's team dashboard needing a

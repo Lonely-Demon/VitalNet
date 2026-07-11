@@ -2,7 +2,7 @@
 // 2016) / PALS (Pediatric Advanced Life Support, APLS/PALS reference ranges)
 // -informed vital-sign scoring. Promoted from what was previously a
 // training-label-only scorer (backend/scripts/train_classifier.py) into the
-// PRIMARY, inference-time triage decision — see engine.ts and DECISIONS §32.
+// PRIMARY, inference-time triage decision — see engine.ts and DECISIONS §33.
 //
 // Every scoring function here is deterministic and pure. A missing (None)
 // vital scores 0 — you cannot penalise a measurement that was never taken;

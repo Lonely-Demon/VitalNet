@@ -3,9 +3,22 @@
 VitalNet is an offline-first clinical triage and briefing platform for rural
 health workers (ASHAs) and PHC doctors in India. A local machine-learning
 classifier triages patients into EMERGENCY / URGENT / ROUTINE instantly —
-online or fully offline — and an LLM generates a structured clinical
-briefing (differential diagnoses, red flags, recommended actions) for the
-reviewing doctor. The ML triage level is never overridable by the LLM.
+online or fully offline — wrapped by a deterministic safety net and NEWS2
+floor that force-escalate unambiguous critical presentations independent of
+the model, and an LLM generates a structured clinical briefing (differential
+diagnoses, red flags, recommended actions) for the reviewing doctor. The
+triage level is never overridable by the LLM.
+
+> **Mid-migration:** this repo is partway through a TypeScript rebuild
+> (`docs/DECISIONS.md` §33). `packages/clinical-core` now holds a
+> re-architected version of this logic — a deterministic rules engine
+> that's *authoritative* (the model becomes advisory-only, prioritization
+> signal) — running in a new Supabase Edge Function backend (`apps/api`).
+> **`apps/api` has not received production traffic yet.** Every endpoint is
+> still served by the legacy FastAPI backend (`backend/app/`) with the
+> model-primary design described above, and that's what the rest of this
+> README documents unless stated otherwise. See "Architecture at a glance"
+> below.
 
 ## 📚 Documentation map
 
@@ -30,7 +43,10 @@ docs — start with whichever matches what you're trying to do:
 | **[docs/COMPLIANCE_DPDP.md](./docs/COMPLIANCE_DPDP.md)** | India DPDP Act 2023 mapping — data-principal rights, fiduciary obligations, gaps |
 | **[docs/ACCESSIBILITY.md](./docs/ACCESSIBILITY.md)** | WCAG 2.1 AA audit — what's fixed, what's verified, what's an honest known gap |
 | **[docs/SLO.md](./docs/SLO.md)** | Service level objectives, SLIs, and the `/api/metrics` Prometheus endpoint |
-| **[backend/app/ml/README.md](./backend/app/ml/README.md)** + **[MODEL_CARD.md](./backend/app/ml/MODEL_CARD.md)** | ML architecture, clinical grounding, intended use/limitations |
+| **[backend/app/ml/README.md](./backend/app/ml/README.md)** + **[MODEL_CARD.md](./backend/app/ml/MODEL_CARD.md)** | ML architecture, clinical grounding, intended use/limitations (legacy backend; still accurate for what's live today) |
+| **[packages/clinical-core/README.md](./packages/clinical-core/README.md)** | The single source of clinical truth (TypeScript) — rules engine, features, offline tree evaluator |
+| **[apps/api/README.md](./apps/api/README.md)** | The new Supabase Edge Function backend — not yet receiving production traffic |
+| **[apps/web/README.md](./apps/web/README.md)** | The frontend PWA — layout, offline outbox, local dev |
 | **[CHANGELOG.md](./CHANGELOG.md)** | Version history |
 | **[AGENTS.md](./AGENTS.md)** | Conventions specifically for AI coding agents working in this repo |
 
@@ -108,16 +124,37 @@ docs — start with whichever matches what you're trying to do:
 
 ## 🏗️ Architecture at a glance
 
+A pnpm workspace monorepo, mid strangler-fig migration:
+
 ```
-frontend/   React 19 + Vite + Tailwind v4 PWA (offline-first, role-based panels)
-backend/    FastAPI (Python) — app/api (routes), app/core (config/auth/db),
-            app/ml (classifier + feature engineering), app/services (LLM, push, SMS scaffold)
+packages/clinical-core/   THE single source of clinical truth (TypeScript): Zod intake
+                           schema, deterministic rules engine (bands/overrides/citations),
+                           43-feature engineering, offline tree evaluator + Saabas
+                           attribution, contraindications. Consumed by both apps/web
+                           (offline, in the browser) and apps/api (online) — one
+                           implementation, not two kept in sync by hand.
+apps/web/                 React 19 + Vite + Tailwind v4 PWA (offline-first, role-based
+                           panels). Imports @vitalnet/clinical-core directly.
+apps/api/                 NEW backend: one Supabase Edge Function (Deno + Hono) running
+                           clinical-core in rules-first mode. NOT YET LIVE — every
+                           endpoint in apps/web's ENDPOINT_BACKEND map still resolves
+                           to 'legacy' below.
+backend/                  LIVE (legacy) backend: FastAPI (Python) — app/api (routes),
+                           app/core (config/auth/db), app/ml (classifier + feature
+                           engineering, model-primary + safety net), app/services (LLM,
+                           push, SMS scaffold). Deployable and serving all production
+                           traffic until apps/api is cut over.
+tools/training/            Python ML training pipeline (train_classifier.py and friends).
+                           Labels and features come from packages/clinical-core via a
+                           JSONL subprocess (cli.mjs) — Python only does sklearn
+                           training + ONNX→tree-JSON export now.
 ```
 
 Supabase (PostgreSQL + Auth + Realtime) is the only datastore — schema is
-version-controlled in `backend/supabase/migrations/`. See
-[CODEBASE_MAP.md](./CODEBASE_MAP.md) for the full file-by-file map and
-architecture/sequence/entity-relationship diagrams.
+version-controlled in `backend/supabase/migrations/`, shared by both
+backends. See [CODEBASE_MAP.md](./CODEBASE_MAP.md) for the full
+file-by-file map and architecture/sequence/entity-relationship diagrams,
+and each subdirectory's own README for that piece's specifics.
 
 ---
 
@@ -125,13 +162,16 @@ architecture/sequence/entity-relationship diagrams.
 
 **Quick start:** `./setup.sh` installs both the backend and frontend
 dependencies and walks you through creating `backend/.env.local` and
-`frontend/.env.local` from the `.env.example` templates (prompting once for
+`apps/web/.env.local` from the `.env.example` templates (prompting once for
 each key — anything left blank stays as the template placeholder and can be
 filled in later). Both `.env.local` files are gitignored; nothing this
 script writes is ever committed, and it's safe to re-run — it never
 overwrites an `.env.local` that already has real values. It still can't
 create a Supabase project for you or run its migrations — see step 1 below
-for what's left.
+for what's left. It sets up the legacy FastAPI backend + the frontend — the
+pair that actually serves production traffic today (see the migration note
+above). `apps/api` (the new edge function) is a separate, optional local
+setup — see `apps/api/README.md`.
 
 For a fully-narrated first-time walkthrough (including making a trivial
 change and opening your first PR), see **[docs/ONBOARDING.md](./docs/ONBOARDING.md)**.
@@ -185,11 +225,10 @@ classifier both loaded successfully.
 
 ### 3. Frontend Setup
 ```bash
-cd frontend
-npm install
+pnpm install --filter @vitalnet/web...   # from the repo root — pnpm workspace
 ```
 
-Create `frontend/.env.local` (see `frontend/.env.example`):
+Create `apps/web/.env.local` (see `apps/web/.env.example`):
 ```env
 VITE_SUPABASE_URL=https://your-ref.supabase.co
 VITE_SUPABASE_ANON_KEY=your_anon_key_here
@@ -199,7 +238,7 @@ VITE_VAPID_PUBLIC_KEY=                      # optional — omit to disable Web P
 
 Run the dev server:
 ```bash
-npm run dev
+pnpm --filter @vitalnet/web dev
 ```
 The app is available at http://localhost:5173.
 
@@ -212,19 +251,23 @@ at the top of the file before running it.
 
 ### 5. Regenerating the ML classifier
 The classifier is trained and committed, not built at deploy time. Only
-regenerate it if you change `app/ml/clinical_features.py` or
-`scripts/train_classifier.py`:
+regenerate it if you change `app/ml/clinical_features.py`,
+`packages/clinical-core/src/rules/` or `features.ts`:
 ```bash
-cd backend
-pip install -r requirements-train.txt
-python scripts/train_classifier.py
+pnpm --filter @vitalnet/clinical-core build
+cd tools/training
+pip install -r ../../backend/requirements-train.txt
+python train_classifier.py
 ```
 This is the single source of truth for the backend `.pkl`, the frontend
-`triage_trees.json`/`features_config.json`, and the tree-level golden-vector
-fixture — never hand-edit any of them. See `backend/app/ml/README.md` for
-the full architecture and clinical grounding, `backend/CLASSIFIER_CHANGELOG.md`
-for version history, and `docs/DECISIONS.md` §12 if you touch anything
-time-of-day/seasonally dependent in the feature engineering.
+`triage_trees.json`/`features_config.json`, and the golden-vector
+fixtures — never hand-edit any of them. Labels and features both come from
+`packages/clinical-core` via a subprocess CLI, so there's no longer a
+separate Python scoring function to keep in sync. See
+`backend/app/ml/README.md` for the full architecture and clinical
+grounding, `backend/CLASSIFIER_CHANGELOG.md` for version history, and
+`docs/DECISIONS.md` §23 if you touch anything time-of-day/seasonally
+dependent in the feature engineering.
 
 ---
 
@@ -234,8 +277,9 @@ See **[docs/TESTING_STRATEGY.md](./docs/TESTING_STRATEGY.md)** for the full
 philosophy and coverage map. Quick reference:
 
 ```bash
-# Backend — pytest suite (safety properties, admin authz, ML parity, bulk-import
-# isolation, SMS parser) — offline, no server/DB required, runs in CI
+# Backend (legacy, live) — pytest suite (safety properties, admin authz, ML
+# parity, bulk-import isolation, SMS parser) — offline, no server/DB
+# required, runs in CI
 cd backend && pytest tests/ --ignore=tests/test_e2e.py -v
 
 # Backend — classifier-only smoke test (fastest feedback loop for ML changes)
@@ -247,28 +291,44 @@ cd backend && python tests/test_e2e.py
 # Backend — lint
 cd backend && ruff check .
 
-# Frontend — online/offline ML parity (both run in CI)
-cd frontend && npm run test:parity           # tree-evaluator parity
-cd frontend && npm run test:feature-parity   # feature-engineering parity
+# clinical-core — the authoritative rules-engine/feature-engineering suite:
+# embedded per-rule vectors, safety/fuzz suites, golden vectors (this is
+# what the old frontend-side parity suites were replaced by, see apps/web/README.md)
+pnpm --filter @vitalnet/clinical-core test
 
-# Frontend — build (catches import errors, bundle-size regressions)
-cd frontend && npm run build
+# apps/api (new backend, not yet live) — Deno test suite
+cd apps/api/supabase/functions/api && deno test --allow-net --allow-env
 
-# Frontend — Playwright offline-flow E2E (needs a running dev server + seeded users)
-cd frontend && npx playwright test tests/offline.spec.js
+# apps/web — build (catches import errors, bundle-size regressions)
+pnpm --filter @vitalnet/web run build
+
+# apps/web — Playwright offline-flow E2E (needs a running dev server + seeded users)
+cd apps/web && npx playwright test tests/offline.spec.js
 ```
 
 ---
 
 ## 🚢 Deployment
 
-### Railway (Backend)
+### Railway (Backend — legacy, live)
 - Pre-configured with `Procfile`, `railway.toml`, and `runtime.txt`.
 - Set the required env vars (see §2 above) in the Railway dashboard.
 
 ### Vercel (Frontend)
-- Includes `vercel.json` for SPA routing.
+- `apps/web/vercel.json` for SPA routing.
 - Set the required `VITE_*` env vars (see §3 above) in the Vercel dashboard.
+
+### Supabase Edge Functions (apps/api — new backend, not yet live)
+- `supabase functions deploy api` from `apps/api/`, after `pnpm --filter
+  @vitalnet/clinical-core build` (bundles the relative dist/ dependency —
+  see `apps/api/README.md`).
+- CI has a manual (`workflow_dispatch`-only) deploy job:
+  `.github/workflows/api-edge-function.yml`'s `deploy` job. It does not fire
+  on push/PR — deploying is a deliberate action, gated on the
+  `SUPABASE_ACCESS_TOKEN`/`SUPABASE_PROJECT_REF` repo secrets being set.
+  Deploying does not, by itself, send it any production traffic — that's a
+  separate step (flipping an entry in `apps/web/src/api/base.js`'s
+  `ENDPOINT_BACKEND` map).
 
 ### Branching for deployment
 Three long-lived branches: `main`, `dev` (active development — see
