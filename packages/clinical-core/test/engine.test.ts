@@ -132,3 +132,37 @@ describe("paediatric fix (v3.1.0/DECISIONS §31) — normal infants are not over
     expect(r.tier).toBe("EMERGENCY");
   });
 });
+
+describe("hypertensive_neuro_emergency_aggregate is unreachable (redundant with checkOverrides)", () => {
+  // engine.ts's own header comment on this branch claims a test asserts
+  // the invariant; this is that test. checkOverrides (rules.ts) checks the
+  // identical BP>=180 + neuro-symptom condition and returns EARLY —
+  // assignTier never reaches its own aggregate-scorer copy of the same
+  // check. If this ever fires, either checkOverrides regressed or the two
+  // conditions have drifted out of sync.
+  //
+  // altered_consciousness is excluded here even though it's also in
+  // HYPERTENSIVE_NEURO: it's checked earlier still, in checkOverrides'
+  // CRITICAL_SYMPTOMS_OVERRIDE clause, so it fires "critical_symptom_override"
+  // rather than "hypertensive_neuro_emergency" — a different override, but
+  // the same point (assignTier's own copy is still never reached).
+  for (const symptom of ["severe_headache", "weakness_one_side", "difficulty_speaking"]) {
+    it(`BP 185 + ${symptom} fires via the override, not the aggregate-scorer's own copy`, () => {
+      const r = assignTier(withCase({ bp_systolic: 185, symptoms: [symptom] }));
+      expect(r.tier).toBe("EMERGENCY");
+      const firedIds = r.firedRules.map((f) => f.id);
+      expect(firedIds).toContain("hypertensive_neuro_emergency");
+      expect(firedIds).not.toContain("hypertensive_neuro_emergency_aggregate");
+      // The override short-circuits assignTier entirely — exactly one rule fires.
+      expect(r.firedRules.length).toBe(1);
+    });
+  }
+
+  it("BP 185 + altered_consciousness fires the earlier critical-symptom override instead", () => {
+    const r = assignTier(withCase({ bp_systolic: 185, symptoms: ["altered_consciousness"] }));
+    expect(r.tier).toBe("EMERGENCY");
+    const firedIds = r.firedRules.map((f) => f.id);
+    expect(firedIds).toContain("critical_symptom_override");
+    expect(firedIds).not.toContain("hypertensive_neuro_emergency_aggregate");
+  });
+});
