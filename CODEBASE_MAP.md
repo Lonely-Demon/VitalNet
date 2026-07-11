@@ -128,6 +128,13 @@ VitalNet/
 │                       (a JSONL subprocess, cli.mjs) for labels + features — Python
 │                       only does sklearn training + ONNX→tree-JSON export now.
 ├── docs/
+│   ├── LESSONS_LEARNED.md     Living notes for future agents (human or AI) — NOT
+│   │                     an architecture doc (see CODEBASE_MAP/DECISIONS for
+│   │                     that). Empirical-verification norms, dead ends actually
+│   │                     tried and reverted, and — importantly — a register of
+│   │                     substantive unmerged work sitting on stale origin
+│   │                     branches that `git log dev` alone won't surface.
+│   │                     Append to it; don't let it go stale.
 │   ├── DISASTER_RECOVERY.md   Ops runbook: RTO/RPO targets, restore procedures
 │   ├── INCIDENT_RESPONSE.md   Security incident runbook: severity classification,
 │   │                     detection → containment → eradication → post-incident

@@ -4,6 +4,32 @@ This document provides essential instructions, commands, and code style guidelin
 
 For deeper context beyond conventions: **[CODEBASE_MAP.md](./CODEBASE_MAP.md)** (architecture + diagrams), **[docs/API_REFERENCE.md](./docs/API_REFERENCE.md)** (every endpoint), **[docs/DECISIONS.md](./docs/DECISIONS.md)** (why things are built this way — read before "simplifying" anything that looks odd), **[CONTRIBUTING.md](./CONTRIBUTING.md)** (branch/PR workflow).
 
+## 📍 Where to start (read in this order)
+
+This repo has a lot of documentation — that's deliberate (see "Keeping
+documentation current" below), but it means a fresh agent can drown before
+doing anything useful. In order:
+
+1. **This file**, in full — conventions, commands, the current
+   mid-migration architecture split (next section).
+2. **[CODEBASE_MAP.md](./CODEBASE_MAP.md) §1** — the one-paragraph summary
+   + system diagram. Skim the rest; you'll come back to specific sections
+   as needed.
+3. **[docs/LESSONS_LEARNED.md](./docs/LESSONS_LEARNED.md)** — dead ends
+   already walked, and — importantly — a list of substantive unmerged work
+   sitting on stale branches that's easy to miss with `git log` alone.
+   Check this before starting any clinical-safety or ML-architecture work
+   specifically; there is real prior work there that hasn't been reconciled
+   with `dev` yet.
+4. **[docs/DECISIONS.md](./docs/DECISIONS.md)** — not cover-to-cover, but
+   check it before touching anything that looks like it could have a
+   non-obvious reason (it usually does). §29, §32, §33 are the most
+   consequential recent entries.
+5. Whatever domain doc matches your actual task — `docs/TESTING_STRATEGY.md`,
+   `docs/SECURITY.md`, `docs/CLINICAL_GOVERNANCE.md` +
+   `docs/CLINICAL_REVIEW.md` (required reading before touching
+   `packages/clinical-core/src/rules/**`), `FEATURES_ROADMAP.md`, etc.
+
 ## 🏗️ Project Architecture Overview
 
 **Mid-migration** (`docs/DECISIONS.md` §33) — read this before assuming which
