@@ -150,17 +150,27 @@ Deno.test("buildResponseTimes: unreviewed case within threshold is neither count
 
 // ── buildMlAgreement ──────────────────────────────────────────────────────────
 
-Deno.test("buildMlAgreement: computes per-tier and overall agreement rate", () => {
+Deno.test("buildMlAgreement: computes per-tier and overall agreement rate against model_tier", () => {
   const result = buildMlAgreement([
-    { actual_severity: "EMERGENCY", case_records: { triage_level: "EMERGENCY", facility_id: "f1" } },
-    { actual_severity: "URGENT", case_records: { triage_level: "EMERGENCY", facility_id: "f1" } },
-    { actual_severity: "ROUTINE", case_records: { triage_level: "ROUTINE", facility_id: "f1" } },
+    { actual_severity: "EMERGENCY", case_records: { model_tier: "EMERGENCY", facility_id: "f1" } },
+    { actual_severity: "URGENT", case_records: { model_tier: "EMERGENCY", facility_id: "f1" } },
+    { actual_severity: "ROUTINE", case_records: { model_tier: "ROUTINE", facility_id: "f1" } },
   ]);
   assertEquals(result.overall_count, 3);
   assertEquals(result.overall_agreement_rate, 0.667);
   assertEquals(result.by_tier.EMERGENCY, { agreement_rate: 0.5, count: 2 });
   assertEquals(result.by_tier.ROUTINE, { agreement_rate: 1, count: 1 });
   assertEquals(result.by_tier.URGENT, { agreement_rate: null, count: 0 });
+});
+
+Deno.test("buildMlAgreement: rows with no model opinion (model_tier null) are excluded, not counted as disagreement", () => {
+  const result = buildMlAgreement([
+    { actual_severity: "EMERGENCY", case_records: { model_tier: "EMERGENCY", facility_id: "f1" } },
+    { actual_severity: "URGENT", case_records: { model_tier: null, facility_id: "f1" } },
+    { actual_severity: "ROUTINE", case_records: null },
+  ]);
+  assertEquals(result.overall_count, 1);
+  assertEquals(result.overall_agreement_rate, 1);
 });
 
 Deno.test("buildMlAgreement: no rows returns null rates, zero counts", () => {

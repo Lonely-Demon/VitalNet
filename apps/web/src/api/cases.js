@@ -3,12 +3,11 @@
  */
 import { authHeaders } from '@/api/auth'
 import { getWithRetry } from '@/api/retry'
-
-const BASE = import.meta.env.VITE_API_BASE_URL
+import { apiBase } from '@/api/base'
 
 export async function getCases({ before_time, before_priority, before_id } = {}) {
   const headers = await authHeaders()
-  const url = new URL(`${BASE}/api/cases`)
+  const url = new URL(`${apiBase('cases.list')}/api/cases`)
   if (before_time) url.searchParams.set('before_time', before_time)
   if (before_priority !== undefined && before_priority !== null) {
     url.searchParams.set('before_priority', String(before_priority))
@@ -22,7 +21,7 @@ export async function getCases({ before_time, before_priority, before_id } = {})
 
 export async function reviewCase(caseId) {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/cases/${caseId}/review`, {
+  const res = await fetch(`${apiBase('cases.review')}/api/cases/${caseId}/review`, {
     method: 'PATCH', headers,
   })
   if (!res.ok) throw new Error(await res.text())
@@ -31,7 +30,7 @@ export async function reviewCase(caseId) {
 
 export async function overrideTriage(caseId, { overridden_triage, override_reason }) {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/cases/${caseId}/triage-override`, {
+  const res = await fetch(`${apiBase('cases.triageOverride')}/api/cases/${caseId}/triage-override`, {
     method: 'PATCH', headers,
     body: JSON.stringify({ overridden_triage, override_reason }),
   })
@@ -41,7 +40,7 @@ export async function overrideTriage(caseId, { overridden_triage, override_reaso
 
 export async function recordCaseOutcome(caseId, { actual_severity, patient_disposition, outcome_notes }) {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/cases/${caseId}/outcome`, {
+  const res = await fetch(`${apiBase('cases.outcome')}/api/cases/${caseId}/outcome`, {
     method: 'PATCH', headers,
     body: JSON.stringify({ actual_severity, patient_disposition, outcome_notes }),
   })
@@ -51,7 +50,7 @@ export async function recordCaseOutcome(caseId, { actual_severity, patient_dispo
 
 export async function getPatientSummary(caseId, language) {
   const headers = await authHeaders()
-  const url = new URL(`${BASE}/api/cases/${caseId}/patient-summary`)
+  const url = new URL(`${apiBase('cases.patientSummary')}/api/cases/${caseId}/patient-summary`)
   if (language) url.searchParams.set('language', language)
   const res = await fetch(url.toString(), { method: 'POST', headers })
   if (!res.ok) throw new Error(await res.text())
@@ -60,14 +59,17 @@ export async function getPatientSummary(caseId, language) {
 
 export async function getCaseHistoryByPatientKey(patientKey) {
   const headers = await authHeaders()
-  const res = await getWithRetry(`${BASE}/api/cases/by-patient-key/${encodeURIComponent(patientKey)}`, headers)
+  const res = await getWithRetry(
+    `${apiBase('cases.byPatientKey')}/api/cases/by-patient-key/${encodeURIComponent(patientKey)}`,
+    headers,
+  )
   if (!res.ok) throw new Error(await res.text())
   return res.json()   // Returns { cases }
 }
 
 export async function getMySubmissions({ before, before_id } = {}) {
   const headers = await authHeaders()
-  const url = new URL(`${BASE}/api/cases/mine`)
+  const url = new URL(`${apiBase('cases.mine')}/api/cases/mine`)
   if (before) url.searchParams.set('before', before)
   if (before_id) url.searchParams.set('before_id', before_id)
   url.searchParams.set('limit', '25')

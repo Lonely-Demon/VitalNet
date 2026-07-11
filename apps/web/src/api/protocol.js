@@ -5,13 +5,9 @@ import { authHeaders } from '@/api/auth'
 import { getWithRetry } from '@/api/retry'
 import { apiBase } from '@/api/base'
 
-// BASE is only for ask/curate, still served exclusively by the legacy
-// backend (Tranche B); the ported list endpoint resolves via apiBase().
-const BASE = import.meta.env.VITE_API_BASE_URL
-
 export async function askProtocolQuestion({ questionText, language = 'en' }) {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/protocol/ask`, {
+  const res = await fetch(`${apiBase('protocol.ask')}/api/protocol/ask`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ question_text: questionText, language }),
@@ -31,7 +27,7 @@ export async function listProtocolQuestions({ status } = {}) {
 
 export async function curateProtocolAnswer(questionId, curatorAnswerText) {
   const headers = await authHeaders()
-  const res = await fetch(`${BASE}/api/protocol/questions/${questionId}/curate`, {
+  const res = await fetch(`${apiBase('protocol.curate')}/api/protocol/questions/${questionId}/curate`, {
     method: 'PATCH',
     headers,
     body: JSON.stringify({ curator_answer_text: curatorAnswerText }),

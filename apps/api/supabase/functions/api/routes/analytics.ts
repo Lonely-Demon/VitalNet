@@ -240,7 +240,10 @@ analytics.get("/api/analytics/ml-agreement", rateLimit(60, 60), requireRole("doc
   const failures: string[] = [];
   const res = await runQuery(
     async () => {
-      let q = db.from("case_outcomes").select("actual_severity, case_records!inner(triage_level, facility_id)");
+      // model_tier, not triage_level — see analyticsStats.ts's buildMlAgreement
+      // header for why this endpoint grades the advisory model's opinion, not
+      // the (now rules-authoritative) triage decision.
+      let q = db.from("case_outcomes").select("actual_severity, case_records!inner(model_tier, facility_id)");
       if (scoped) q = q.eq("case_records.facility_id", facilityId);
       // Same as /summary: supabase-js does NOT throw on PostgREST errors.
       const res = await q;

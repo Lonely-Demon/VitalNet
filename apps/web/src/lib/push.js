@@ -5,8 +5,8 @@
  * trigger a push even when the app isn't open.
  */
 import { authHeaders } from '@/api/auth'
+import { apiBase } from '@/api/base'
 
-const BASE = import.meta.env.VITE_API_BASE_URL
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY
 
 function urlBase64ToUint8Array(base64String) {
@@ -45,7 +45,7 @@ export async function subscribeToPush() {
 
     const { endpoint, keys } = subscription.toJSON()
     const headers = await authHeaders()
-    const res = await fetch(`${BASE}/api/push/subscribe`, {
+    const res = await fetch(`${apiBase('push.subscribe')}/api/push/subscribe`, {
       method: 'POST',
       headers,
       body: JSON.stringify({

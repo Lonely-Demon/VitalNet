@@ -25,6 +25,13 @@ function testConfig(overrides: Partial<Config> = {}): Config {
     jwtLocalVerification: true,
     revocationRecheckSeconds: 300,
     csrfToken: "vitalnet-spa",
+    groqApiKey: "",
+    geminiApiKey: "",
+    sarvamApiKey: "",
+    vapidPublicKey: "",
+    vapidPrivateKey: "",
+    vapidSubject: "mailto:admin@example.com",
+    dataRetentionDays: 0,
     ...overrides,
   };
 }

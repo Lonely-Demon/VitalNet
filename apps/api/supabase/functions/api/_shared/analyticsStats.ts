@@ -207,10 +207,33 @@ export function buildResponseTimes(
 }
 
 // ── /ml-agreement ────────────────────────────────────────────────────────
+// Round 6 rebuild plan, Phase 4: repointed from triage_level (the ORIGINAL
+// triage decision, ML-authoritative pre-migration) to model_tier (the
+// advisory model's own opinion, populated only once rules_first submissions
+// exist — phase29_events_and_advisory_model.sql). Now that triage_level is
+// the deterministic rules engine's decision, comparing IT against outcomes
+// would measure "are the rules correct", a different and separately
+// important question from this endpoint's actual purpose: is the advisory
+// model, which currently has zero say in triage_level, accurate enough that
+// promoting it back to (partial) authority would ever be worth considering.
+// That promotion decision is exactly what this endpoint exists to inform —
+// see DECISIONS §32.
+//
+// Ground truth is case_outcomes.actual_severity only (a doctor's triage
+// override, case_records.overridden_triage, is a second real-world-signal
+// source the plan flags as a future input to this same gate — not folded in
+// here; it needs a UNION against cases with an override but no recorded
+// outcome yet, which needs live-DB verification before shipping, not a
+// blind merge).
+//
+// Cases with no advisory model opinion (model_tier IS NULL — no tree bundle
+// was supplied, or the case predates this migration) are excluded rather
+// than counted as disagreement: null means "no opinion to grade", not "the
+// model was wrong".
 
 export interface MlAgreementRow {
   actual_severity: string | null;
-  case_records: { triage_level: string | null; facility_id: string | null } | null;
+  case_records: { model_tier: string | null; facility_id: string | null } | null;
 }
 
 export interface MlAgreementResult {
@@ -234,13 +257,13 @@ export function buildMlAgreement(rows: MlAgreementRow[]): MlAgreementResult {
   let overallAgree = 0;
 
   for (const row of rows) {
-    const originalTier = row.case_records?.triage_level ?? null;
+    const modelTier = row.case_records?.model_tier ?? null;
     const actual = row.actual_severity;
-    if (originalTier !== "ROUTINE" && originalTier !== "URGENT" && originalTier !== "EMERGENCY") continue;
-    byTier[originalTier]!.total += 1;
+    if (modelTier !== "ROUTINE" && modelTier !== "URGENT" && modelTier !== "EMERGENCY") continue;
+    byTier[modelTier]!.total += 1;
     overallTotal += 1;
-    if (actual === originalTier) {
-      byTier[originalTier]!.agree += 1;
+    if (actual === modelTier) {
+      byTier[modelTier]!.agree += 1;
       overallAgree += 1;
     }
   }

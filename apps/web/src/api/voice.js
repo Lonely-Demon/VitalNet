@@ -4,8 +4,7 @@
  * SpeechRecognition path.
  */
 import { authHeaders } from '@/api/auth'
-
-const BASE = import.meta.env.VITE_API_BASE_URL
+import { apiBase } from '@/api/base'
 
 export async function transcribeAudio(blob, language) {
   const headers = await authHeaders()
@@ -14,7 +13,7 @@ export async function transcribeAudio(blob, language) {
   const formData = new FormData()
   formData.append('file', blob, 'clip.webm')
 
-  const url = new URL(`${BASE}/api/voice/transcribe`)
+  const url = new URL(`${apiBase('voice.transcribe')}/api/voice/transcribe`)
   if (language) url.searchParams.set('language', language)
 
   const res = await fetch(url.toString(), { method: 'POST', headers, body: formData })

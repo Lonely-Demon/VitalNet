@@ -16,6 +16,14 @@ export interface Config {
   jwtLocalVerification: boolean;
   revocationRecheckSeconds: number;
   csrfToken: string;
+  // ── Phase 4 (Tranche B) additions ──────────────────────────────────────
+  groqApiKey: string;
+  geminiApiKey: string;
+  sarvamApiKey: string;
+  vapidPublicKey: string;
+  vapidPrivateKey: string;
+  vapidSubject: string;
+  dataRetentionDays: number;
 }
 
 function env(name: string): string {
@@ -53,6 +61,13 @@ export function getConfig(): Config {
     jwtLocalVerification: envBool("JWT_LOCAL_VERIFICATION", true),
     revocationRecheckSeconds: envInt("REVOCATION_RECHECK_SECONDS", 300),
     csrfToken: env("CSRF_TOKEN") || "vitalnet-spa",
+    groqApiKey: env("GROQ_API_KEY"),
+    geminiApiKey: env("GEMINI_API_KEY"),
+    sarvamApiKey: env("SARVAM_API_KEY"),
+    vapidPublicKey: env("VAPID_PUBLIC_KEY"),
+    vapidPrivateKey: env("VAPID_PRIVATE_KEY"),
+    vapidSubject: env("VAPID_SUBJECT") || "mailto:admin@example.com",
+    dataRetentionDays: envInt("DATA_RETENTION_DAYS", 0),
   };
   return cached;
 }

@@ -27,6 +27,12 @@ import { referral } from "./routes/referral.ts";
 import { metrics } from "./routes/metrics.ts";
 import { protocol } from "./routes/protocol.ts";
 import { analytics } from "./routes/analytics.ts";
+import { cases } from "./routes/cases.ts";
+import { security } from "./routes/security.ts";
+import { dsr } from "./routes/dsr.ts";
+import { admin } from "./routes/admin.ts";
+import { push } from "./routes/push.ts";
+import { voice } from "./routes/voice.ts";
 import type { AppEnv } from "./_shared/types.ts";
 
 const app = new Hono<AppEnv>();
@@ -65,6 +71,13 @@ app.route("/", referral);
 app.route("/", metrics);
 app.route("/", protocol);
 app.route("/", analytics);
+// Tranche B (Phase 4, Round 6 rebuild plan) — writes + the rules-first flip.
+app.route("/", cases);
+app.route("/", security);
+app.route("/", dsr);
+app.route("/", admin);
+app.route("/", push);
+app.route("/", voice);
 
 // The /functions/v1/api prefix must be stripped BEFORE Hono sees the
 // request — Hono resolves the handler chain from the path before any

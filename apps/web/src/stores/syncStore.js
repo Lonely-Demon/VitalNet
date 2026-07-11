@@ -13,9 +13,8 @@ import { supabase } from '@/lib/supabase'
 import { enqueue, dequeue, getAllQueued } from '@/lib/offlineQueue'
 import { isServerReachable } from '@/lib/connectivity'
 import { buildAuthHeaders } from '@/api/auth'
+import { apiBase } from '@/api/base'
 import { v4 as uuidv4 } from 'uuid'
-
-const BASE = import.meta.env.VITE_API_BASE_URL
 
 /**
  * submitCase — Handles online and offline submission paths.
@@ -44,7 +43,7 @@ export async function submitCase(formData) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     const headers = buildAuthHeaders(session.access_token)
-    const res = await fetch(`${BASE}/api/submit`, {
+    const res = await fetch(`${apiBase('cases.submit')}/api/submit`, {
       method: 'POST', headers, body: JSON.stringify(payload),
     })
 
@@ -92,7 +91,7 @@ export async function processQueue() {
 
   for (const item of queued) {
     try {
-      const res = await fetch(`${BASE}/api/submit`, {
+      const res = await fetch(`${apiBase('cases.submit')}/api/submit`, {
         method: 'POST',
         headers: buildAuthHeaders(freshToken),
         body: JSON.stringify(item.payload),
