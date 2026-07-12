@@ -96,6 +96,14 @@ jobs:
           version: '10'
       - name: Install workspace deps (no install scripts)
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build clinical-core (workspace dependency, not auto-built by --ignore-scripts)
+        # apps/web imports @vitalnet/clinical-core's compiled dist/ (its
+        # package.json "exports" point there), but nothing triggers that
+        # build automatically here — build-frontend-pr only gets it as a
+        # side effect of its "clinical-core tests" step's pretest hook.
+        # The dev server this job's Playwright tests run against needs it
+        # built explicitly, or every page importing it 404s on import.
+        run: pnpm --filter @vitalnet/clinical-core run build
       - name: Install Playwright's Chromium
         run: pnpm --filter @vitalnet/web exec playwright install --with-deps chromium
       - name: Run axe-core accessibility suite

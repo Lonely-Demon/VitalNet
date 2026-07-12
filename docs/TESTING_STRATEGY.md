@@ -134,7 +134,14 @@ entrance animations — Playwright's "visible" state doesn't wait for
 `opacity: 1`, so scanning immediately catches elements mid-fade and axe
 reports a false-positive contrast violation on the blended color; if you
 add a new `animate-fade-up`/staggered-delay element to a scanned page and
-this suite starts flaking, that's almost certainly why.
+this suite starts flaking, that's almost certainly why. It also needs
+`packages/clinical-core` built first (`pnpm --filter @vitalnet/clinical-core
+run build`) — `apps/web` imports its compiled `dist/`, which is gitignored
+and only gets produced by an explicit build, not by `pnpm install
+--ignore-scripts`; the CI job runs this as its own step since it's the only
+PR-triggered job whose dev server actually needs the built package (
+`build-frontend-pr` gets it for free as a side effect of its "clinical-core
+tests" step's `pretest` hook).
 
 ### Ad hoc live-browser E2E in a sandbox with no direct internet access
 
