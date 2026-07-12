@@ -37,12 +37,16 @@ GRANT EXECUTE ON FUNCTION auth.uid() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION auth.jwt() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION auth.role() TO PUBLIC;
 
--- authenticated/anon: the two PostgREST-facing roles every real Supabase
--- project has. Needed so a CI check can SET ROLE authenticated the same
--- way PostgREST does per-request, instead of running every query as the
--- postgres superuser — RLS does not apply to superusers or table owners,
--- so a check that never leaves that role would pass regardless of whether
--- any policy actually restricts anything.
+-- authenticated/anon/service_role: the three PostgREST-facing roles every
+-- real Supabase project has. authenticated/anon are needed so a CI check
+-- can SET ROLE authenticated the same way PostgREST does per-request,
+-- instead of running every query as the postgres superuser — RLS does not
+-- apply to superusers or table owners, so a check that never leaves that
+-- role would pass regardless of whether any policy actually restricts
+-- anything. service_role is never SET ROLE'd to in CI (it bypasses RLS by
+-- design, same as postgres here) but several tracked migrations GRANT
+-- EXECUTE to it (e.g. phase28's fn_schema_fingerprint), so it must exist
+-- for those GRANT statements to apply at all.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
@@ -50,6 +54,9 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
     CREATE ROLE anon NOLOGIN;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
+    CREATE ROLE service_role NOLOGIN;
   END IF;
 END
 $$;
