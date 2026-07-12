@@ -359,7 +359,7 @@ export default function IntakeForm() {
                   {t('intakeForm.result.savedOfflineBadge')}
                 </span>
               </div>
-              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display font-bold">{t('intakeForm.result.savedLocallyTitle')}</h2>
+              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display">{t('intakeForm.result.savedLocallyTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">
                 {offlineTriage?.triageLevel
                   ? t('intakeForm.result.savedLocallyWithTriage')
@@ -383,7 +383,7 @@ export default function IntakeForm() {
                 </div>
               )}
               {result.triage_level === 'EMERGENCY' && <AmbulanceCallButton />}
-              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display font-bold">{t('intakeForm.result.successTitle')}</h2>
+              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display">{t('intakeForm.result.successTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">{result.risk_driver}</p>
               <PatientKeyCard patientKey={newPatientKey} />
             </>

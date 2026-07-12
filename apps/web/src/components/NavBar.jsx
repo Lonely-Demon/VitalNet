@@ -79,7 +79,7 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
             onClick={signOut}
             title="Sign out"
             aria-label="Sign out"
-            className="flex items-center justify-center w-8 h-8 min-w-[44px] sm:min-w-8 rounded-md border border-leaf/40 text-text3 hover:text-terra hover:border-terra/40 transition-colors cursor-pointer"
+            className="flex items-center justify-center w-8 h-8 min-w-[44px] min-h-[44px] sm:min-w-8 sm:min-h-8 rounded-md border border-leaf/40 text-text3 hover:text-terra hover:border-terra/40 transition-colors cursor-pointer"
           >
             <LogOut size={15} aria-hidden="true" />
           </button>
