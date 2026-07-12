@@ -1562,12 +1562,28 @@ story for `profiles_select_policy_hardened` — its name says what it was
 supposed to replace, but `profile_select` (unsafe) was still active
 alongside it.
 
-A fourth location — three policies on `case_referrals` — uses the
-identical pattern but was left untouched: that table has zero references
-anywhere in the codebase (confirmed by grep), superseded by the separate
-`referrals` table from `phase19_referrals.sql`. Patching policies nothing
-queries isn't worth touching a table pending its own removal decision;
-recorded here as a follow-up, not fixed.
+A fourth location — three policies on `case_referrals` — used the
+identical pattern. Initially recorded here as a deferred follow-up on the
+reasoning that the table had zero references anywhere in the codebase
+(confirmed by grep) and so wasn't worth the risk of touching pending its
+own removal decision. That reasoning was wrong: Supabase exposes every
+`public`-schema table through its auto-generated PostgREST API regardless
+of whether an app's own code ever queries it, so "nothing in this
+codebase references it" did not mean "unreachable" — any authenticated
+user could hit `case_referrals` directly and exploit the same
+privilege-escalation path being fixed everywhere else in this entry. Once
+that was pointed out, a whole-repo grep (every `.py`/`.js`/`.jsx`/`.ts`/
+`.tsx` file, not just the two directories originally checked) confirmed
+zero references anywhere, and the table — fully superseded by the
+separate `referrals` table from `phase19_referrals.sql` — was dropped
+outright (`phase34_drop_case_referrals.sql`) rather than patched: with no
+code path reading or writing it, keeping dead schema (and any
+PHI-adjacent referral rows already stored in it) around indefinitely once
+its vulnerable policies were noticed served no purpose. No `FOREIGN KEY`
+anywhere in the schema referenced it, so the drop had no cascading
+effect; verified locally against a full phase28–34 rebuild before being
+applied live and re-verified via `SELECT to_regclass('public.case_referrals')`
+returning `NULL`.
 
 **What was fixed** (`phase32_fix_jwt_metadata_rls_vulnerability.sql`):
 dropped `doctor_update` outright (redundant with
@@ -1621,8 +1637,8 @@ active, unpatched privilege-escalation vulnerability in a system handling
 PHI — so the fix was applied live first (via the same SQL-Editor handoff
 pattern as §35), re-verified, and only then documented and committed.
 
-**Consequences**: the `case_referrals` dead-table policies remain a
-documented, unaddressed follow-up (same PHI-access-control caveat as §35 —
-not resolved by inference). Everything else §35 flagged as "overlapping"
-on `profiles`/`case_records` is now closed; `facilities`' policy situation
-was not part of this pass and remains open.
+**Consequences**: every JWT-metadata privilege-escalation path §35's
+"overlapping policies" finding turned out to contain is now closed —
+`case_records`, `profiles`, and `case_referrals` (dropped entirely) all
+resolved. `facilities`' policy situation was not part of this pass and
+remains open.
