@@ -1,45 +1,112 @@
 @import "tailwindcss";
 
+/* ── Self-hosted type — IBM Plex (SIL OFL 1.1, see public/fonts/LICENSE.txt).
+   Chosen over a Google Fonts link deliberately: this app is offline-first,
+   so its own chrome shouldn't depend on a CDN being reachable. IBM Plex also
+   ships matching Devanagari and Tamil weights, which the Latin-only fonts it
+   replaces did not — relevant since hi/ta are real target languages here. ── */
+@font-face {
+  font-family: 'Plex Sans';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/plex-sans-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plex Sans';
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/plex-sans-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plex Sans';
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/plex-sans-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plex Sans';
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/plex-sans-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plex Cond';
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/plex-sans-condensed-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plex Cond';
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/plex-sans-condensed-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plex Mono';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/plex-mono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plex Mono';
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/plex-mono-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Plex Mono';
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/plex-mono-600.woff2') format('woff2');
+}
+
 @theme {
-  /* ── Parsley Health Design Tokens ── */
+  /* ── VitalNet Design Tokens ──
+     Brand chroma (forest/sage/mint/leaf) is teal, deliberately outside the
+     red/amber/green used for triage tiers below — the app's own color never
+     competes with the one signal that must never be ambiguous. See
+     docs/DECISIONS.md for the full rationale. */
 
-  /* Backgrounds */
-  --color-bg: #F7F4EE;
+  /* Backgrounds — cool, not cream */
+  --color-bg: #F3F5F3;
   --color-surface: #FFFFFF;
-  --color-surface2: #F2EFE8;
-  --color-surface3: #EAE6DC;
+  --color-surface2: #E9EDEC;
+  --color-surface3: #DDE3E1;
 
-  /* Greens */
-  --color-forest: #1F4D34;
-  --color-sage: #4A7B60;
-  --color-mint: #7AAF8A;
-  --color-leaf: #D0E8D8;
+  /* Brand (teal) */
+  --color-forest: #0E5B66;
+  --color-sage: #3D8089;
+  --color-mint: #6FAEB6;
+  --color-leaf: #D3E8E9;
 
-  /* Warm accents */
+  /* Warm accents — used sparingly (sign-out/destructive hints, a couple of badges) */
   --color-terra: #B85C3A;
-  --color-sand: #E8D9C8;
+  --color-sand: #E4DED0;
   --color-honey: #D4A96A;
 
-  /* Clinical status */
-  --color-emergency: #C0392B;
-  /* Darkened from #C17240 — the original only hit 3.33:1 against --color-bg,
-     failing WCAG AA (4.5:1) for normal-size text; this hits ~4.9:1. Same
-     hue family as --color-terra, kept for palette consistency. */
-  --color-urgent: #9C5A2B;
-  --color-routine: #2E7D52;
+  /* Clinical status — a separate system from brand color on purpose */
+  --color-emergency: #C22B23;
+  --color-urgent: #A85A0C;
+  --color-routine: #1D7A4C;
 
   /* Text */
-  --color-text: #1C2E20;
-  --color-text2: #5A6E5A;
-  /* Darkened from #9DB09D — the original only hit ~2.1:1 against
-     --color-bg/--color-surface2, failing WCAG AA even for large text
-     (needs 3:1) let alone normal text (needs 4.5:1). This hits ~5:1. */
-  --color-text3: #556B58;
+  --color-text: #12181A;
+  --color-text2: #4F5F5B;
+  --color-text3: #5A6B67;
 
   /* Fonts */
-  --font-display: 'DM Serif Display', Georgia, serif;
-  --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-display: 'Plex Cond', system-ui, -apple-system, sans-serif;
+  --font-body: 'Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Plex Mono', ui-monospace, monospace;
 
   /* Radius */
   --radius-sm: 8px;
@@ -48,10 +115,10 @@
   --radius-xl: 28px;
   --radius-pill: 100px;
 
-  /* Shadows (green-tinted) */
-  --shadow-card: 0 1px 3px rgba(31, 77, 52, 0.06), 0 1px 2px rgba(31, 77, 52, 0.04);
-  --shadow-card-hover: 0 8px 25px rgba(31, 77, 52, 0.10), 0 3px 8px rgba(31, 77, 52, 0.06);
-  --shadow-btn: 0 2px 8px rgba(31, 77, 52, 0.18);
+  /* Shadows (teal-tinted) */
+  --shadow-card: 0 1px 3px rgba(14, 91, 102, 0.06), 0 1px 2px rgba(14, 91, 102, 0.04);
+  --shadow-card-hover: 0 8px 25px rgba(14, 91, 102, 0.10), 0 3px 8px rgba(14, 91, 102, 0.06);
+  --shadow-btn: 0 2px 8px rgba(14, 91, 102, 0.18);
 
   /* Animations */
   --animate-fade-up: fade-up 0.5s ease-out both;
@@ -72,9 +139,9 @@
 }
 
 @keyframes pulse-ring {
-  0%   { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.35); }
-  70%  { box-shadow: 0 0 0 8px rgba(192, 57, 43, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0); }
+  0%   { box-shadow: 0 0 0 0 rgba(194, 43, 35, 0.35); }
+  70%  { box-shadow: 0 0 0 8px rgba(194, 43, 35, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(194, 43, 35, 0); }
 }
 
 @keyframes shimmer {
@@ -107,4 +174,18 @@ body {
 ::selection {
   background: var(--color-leaf);
   color: var(--color-forest);
+}
+
+/* ── Triage-tag signature: a perforated severity edge, not a flat color bar.
+   A real mass-casualty triage tag is perforated cardstock, torn along a
+   dotted line to whichever tier applies — this punch-hole mask is that
+   object, literally, on every case card's severity edge. Apply alongside
+   a solid background color (bg-emergency / bg-urgent / bg-routine). ── */
+.tag-perforated {
+  -webkit-mask-image: radial-gradient(circle at 3.5px 7px, transparent 2.2px, black 2.4px);
+  -webkit-mask-size: 7px 14px;
+  -webkit-mask-repeat: repeat-y;
+  mask-image: radial-gradient(circle at 3.5px 7px, transparent 2.2px, black 2.4px);
+  mask-size: 7px 14px;
+  mask-repeat: repeat-y;
 }

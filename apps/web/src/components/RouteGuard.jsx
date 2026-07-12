@@ -1,3 +1,4 @@
+import { ShieldOff } from 'lucide-react'
 import { useAuth } from '../store/authStore'
 import LoginPage from '../pages/LoginPage'
 
@@ -21,7 +22,9 @@ export function RouteGuard({ children, requiredRole = null }) {
     return (
       <div className="min-h-screen bg-bg flex items-center justify-center px-4">
         <div className="bg-surface rounded-xl shadow-card border border-leaf/40 p-8 text-center max-w-sm">
-          <div className="text-4xl mb-3">🚫</div>
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-emergency/10 text-emergency mb-3">
+            <ShieldOff size={24} aria-hidden="true" />
+          </div>
           <h2 className="text-xl font-bold text-text tracking-tight mb-2 font-display">Access Denied</h2>
           <p className="text-sm text-text2">Your account role does not have access to this view.</p>
         </div>

@@ -42,7 +42,7 @@ export default function AdminStats() {
 
   return (
     <div>
-      <h2 className="text-base font-semibold text-text mb-4 font-display italic">System</h2>
+      <h2 className="text-base font-semibold text-text mb-4 font-display font-bold">System</h2>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
 
         <StatCard

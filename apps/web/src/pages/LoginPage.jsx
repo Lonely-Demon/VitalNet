@@ -27,8 +27,13 @@ export default function LoginPage() {
       <div className="w-full max-w-sm animate-fade-up">
         {/* Brand */}
         <div className="text-center mb-8">
-          <h1 className="font-display italic text-4xl text-forest tracking-tight animate-shimmer">VitalNet</h1>
-          <p className="text-sm text-text2 mt-2 font-body">Clinical Triage Platform</p>
+          <div className="flex items-center justify-center gap-2 animate-shimmer">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="text-forest" aria-hidden="true">
+              <path d="M2 12h4l2-7 3 14 2.5-9 2 6h6.5" />
+            </svg>
+            <h1 className="font-display font-bold text-4xl text-text tracking-tight">VitalNet</h1>
+          </div>
+          <p className="text-sm text-text2 mt-2 font-mono text-xs uppercase tracking-widest">Clinical Triage Platform</p>
         </div>
 
         {/* Login Card */}

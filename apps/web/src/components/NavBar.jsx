@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { LogOut } from 'lucide-react'
 import { useAuth } from '../store/authStore'
 
 const ROLE_LABELS = {
@@ -25,22 +26,28 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
     <nav className="sticky top-0 z-10 bg-surface/80 backdrop-blur-md border-b border-leaf/60 shadow-card">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-3 sm:gap-6">
 
-        {/* Wordmark */}
-        <span className="font-display italic text-forest text-lg tracking-tight shrink-0">
-          VitalNet
+        {/* Wordmark — a pulse line, not decoration: the app's actual subject */}
+        <span className="flex items-center gap-2 shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="text-forest" aria-hidden="true">
+            <path d="M2 12h4l2-7 3 14 2.5-9 2 6h6.5" />
+          </svg>
+          <span className="font-display font-bold text-text text-lg tracking-tight">
+            VitalNet
+          </span>
         </span>
 
-        {/* Tab pills — horizontally scrollable so it never pushes "Sign out"
-            off-screen on narrow viewports or panels with many tabs. */}
-        <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {/* Tabs — underline indicator, horizontally scrollable so it never
+            pushes "Sign out" off-screen on narrow viewports or panels with
+            many tabs. */}
+        <div className="flex items-stretch gap-1 flex-1 min-w-0 h-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className={`px-3 py-1.5 rounded-pill text-sm font-medium whitespace-nowrap transition-all duration-200 ${
+              className={`px-3 text-sm font-medium whitespace-nowrap transition-colors duration-200 border-b-[2.5px] ${
                 activeTab === tab.id
-                  ? 'bg-forest text-white shadow-btn'
-                  : 'text-text2 hover:text-forest hover:bg-leaf/40'
+                  ? 'text-text border-forest font-semibold'
+                  : 'text-text2 border-transparent hover:text-forest'
               }`}
             >
               {tab.label}
@@ -70,9 +77,11 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
           </span>
           <button
             onClick={signOut}
-            className="text-sm text-text3 hover:text-terra transition-colors"
+            title="Sign out"
+            aria-label="Sign out"
+            className="flex items-center justify-center w-8 h-8 min-w-[44px] sm:min-w-8 rounded-md border border-leaf/40 text-text3 hover:text-terra hover:border-terra/40 transition-colors cursor-pointer"
           >
-            Sign out
+            <LogOut size={15} aria-hidden="true" />
           </button>
         </div>
 

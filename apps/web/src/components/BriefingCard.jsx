@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ChevronUp, ChevronDown, ArrowRight, Check, Flag, TriangleAlert } from 'lucide-react'
 import { reviewCase, overrideTriage, recordCaseOutcome, listActiveFacilities, createReferral, getPatientSummary } from '../lib/api'
 import TriageBadge from './TriageBadge'
 
@@ -148,18 +149,22 @@ export default function BriefingCard({ caseData, onReviewed }) {
     hour: '2-digit', minute: '2-digit'
   })
 
-  const borderColor = caseData.triage_level === 'EMERGENCY'
-    ? 'border-l-emergency'
+  const tierBg = caseData.triage_level === 'EMERGENCY'
+    ? 'bg-emergency'
     : caseData.triage_level === 'URGENT'
-    ? 'border-l-urgent'
-    : 'border-l-routine'
+    ? 'bg-urgent'
+    : 'bg-routine'
 
   return (
-    <div className={`bg-surface rounded-xl shadow-card hover:shadow-card-hover transition-all duration-200 border border-leaf/40 border-l-4 mb-5 overflow-hidden animate-fade-up
-      ${borderColor}
+    <div className={`flex bg-surface rounded-xl shadow-card hover:shadow-card-hover transition-all duration-200 border border-leaf/40 mb-5 overflow-hidden animate-fade-up
       ${reviewed ? 'opacity-60 saturate-50' : ''}
       ${caseData.triage_level === 'EMERGENCY' ? 'animate-pulse-ring' : ''}
     `}>
+      {/* Triage-tag signature: a perforated severity edge, echoing a real
+          mass-casualty tag torn along a dotted line to the tier that
+          applies — see docs/DECISIONS.md. */}
+      <div className={`w-[7px] shrink-0 tag-perforated ${tierBg}`} aria-hidden="true"></div>
+      <div className="flex-1 min-w-0">
       {/* Header — always visible */}
       <div
         className="p-4 cursor-pointer flex items-start justify-between"
@@ -169,8 +174,8 @@ export default function BriefingCard({ caseData, onReviewed }) {
           <div className="flex items-center gap-2 mb-1">
             <TriageBadge level={caseData.triage_level} />
             {overrideState.triage && overrideState.triage !== caseData.triage_level && (
-              <span className="text-xs text-forest bg-leaf/40 px-2 py-0.5 rounded font-mono">
-                → {overrideState.triage} (adjusted)
+              <span className="text-xs text-forest bg-leaf/40 px-2 py-0.5 rounded font-mono inline-flex items-center gap-1">
+                <ArrowRight size={12} aria-hidden="true" />{overrideState.triage} (adjusted)
               </span>
             )}
             {reviewed && (
@@ -191,18 +196,21 @@ export default function BriefingCard({ caseData, onReviewed }) {
             {caseData.triage_model_version && <> · model v{caseData.triage_model_version}</>}
           </p>
           {(caseData.needs_review || caseData.low_confidence || caseData.human_review_requested || caseData.deterioration_alert) && (
-            <p className="text-xs text-urgent font-bold mt-1">
+            <p className="text-xs text-urgent font-bold mt-1 flex items-start gap-1.5">
+              {caseData.human_review_requested || caseData.contraindication_flags?.length > 0 || caseData.deterioration_alert
+                ? <Flag size={13} className="shrink-0 mt-0.5" aria-hidden="true" />
+                : <TriangleAlert size={13} className="shrink-0 mt-0.5" aria-hidden="true" />}
               {caseData.human_review_requested
-                ? '⚑ Review requested by submitter'
+                ? 'Review requested by submitter'
                 : caseData.contraindication_flags?.length > 0
-                ? '⚑ Possible contraindication flagged — see below'
+                ? 'Possible contraindication flagged — see below'
                 : caseData.deterioration_alert
-                ? '⚑ Repeated severe visits — see below'
-                : '⚠ Model uncertain — clinician review recommended'}
+                ? 'Repeated severe visits — see below'
+                : 'Model uncertain — clinician review recommended'}
             </p>
           )}
         </div>
-        <span className="text-text3 ml-2">{expanded ? "▲" : "▼"}</span>
+        <span className="text-text3 ml-2">{expanded ? <ChevronUp size={18} aria-hidden="true" /> : <ChevronDown size={18} aria-hidden="true" />}</span>
       </div>
 
       {/* Expanded briefing */}
@@ -255,7 +263,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
             <ul className="text-sm text-text2 space-y-1">
               {(b.recommended_immediate_actions || []).map((a, i) => (
                 <li key={i} className="flex gap-2">
-                  <span className="text-routine">→</span> {a}
+                  <ArrowRight size={14} className="text-routine shrink-0 mt-0.5" aria-hidden="true" /> {a}
                 </li>
               ))}
             </ul>
@@ -370,7 +378,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
             ) : (
               <button
                 onClick={() => setShowOverride(true)}
-                className="text-xs text-text3 hover:text-forest underline cursor-pointer"
+                className="block text-xs text-text3 hover:text-forest underline cursor-pointer"
               >
                 Correct the triage tier
               </button>
@@ -428,19 +436,23 @@ export default function BriefingCard({ caseData, onReviewed }) {
             ) : (
               <button
                 onClick={() => setShowOutcome(true)}
-                className="text-xs text-text3 hover:text-forest underline cursor-pointer"
+                className="block text-xs text-text3 hover:text-forest underline cursor-pointer"
               >
                 Record patient outcome
               </button>
             )
           )}
           {outcomeRecorded && (
-            <p className="text-xs text-forest font-medium">✓ Outcome recorded</p>
+            <p className="text-xs text-forest font-medium inline-flex items-center gap-1">
+              <Check size={13} aria-hidden="true" />Outcome recorded
+            </p>
           )}
 
           {/* Inter-facility referral (FEATURES_ROADMAP §2.3) */}
           {referred ? (
-            <p className="text-xs text-forest font-medium">✓ Referred to {referred.facilityName}</p>
+            <p className="text-xs text-forest font-medium inline-flex items-center gap-1">
+              <Check size={13} aria-hidden="true" />Referred to {referred.facilityName}
+            </p>
           ) : (
             showReferral ? (
               <fieldset className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
@@ -502,7 +514,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
             ) : (
               <button
                 onClick={handleOpenReferral}
-                className="text-xs text-text3 hover:text-forest underline cursor-pointer"
+                className="block text-xs text-text3 hover:text-forest underline cursor-pointer"
               >
                 Refer to another facility
               </button>
@@ -521,6 +533,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
           )}
         </div>
       )}
+      </div>
     </div>
   )
 }

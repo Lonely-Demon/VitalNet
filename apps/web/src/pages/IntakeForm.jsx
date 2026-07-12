@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { v4 as uuidv4 } from 'uuid'
+import { TriangleAlert } from 'lucide-react'
 import { submitCase } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
 import { useAuth } from '../store/authStore'
@@ -103,10 +104,10 @@ const BADGE_COLORS = {
 // unlike a real ROUTINE result, this means "unknown," not "checked and
 // low-risk," and must not visually imply the latter.
 const PRELIM_RESULT_STYLES = {
-  EMERGENCY: { container: "border-emergency/30 bg-emergency/5", badge: "bg-emergency/10 text-emergency" },
-  URGENT: { container: "border-urgent/30 bg-urgent/5", badge: "bg-urgent/10 text-urgent" },
-  ROUTINE: { container: "border-routine/30 bg-routine/5", badge: "bg-routine/10 text-routine" },
-  PENDING: { container: "border-text3/30 bg-text3/5", badge: "bg-text3/10 text-text3" },
+  EMERGENCY: { stripe: "bg-emergency", badge: "bg-emergency text-white" },
+  URGENT: { stripe: "bg-urgent", badge: "bg-urgent text-white" },
+  ROUTINE: { stripe: "bg-routine", badge: "bg-routine text-white" },
+  PENDING: { stripe: "bg-text3", badge: "bg-text3 text-white" },
 }
 
 const emptyForm = {
@@ -358,7 +359,7 @@ export default function IntakeForm() {
                   {t('intakeForm.result.savedOfflineBadge')}
                 </span>
               </div>
-              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">{t('intakeForm.result.savedLocallyTitle')}</h2>
+              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display font-bold">{t('intakeForm.result.savedLocallyTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">
                 {offlineTriage?.triageLevel
                   ? t('intakeForm.result.savedLocallyWithTriage')
@@ -382,7 +383,7 @@ export default function IntakeForm() {
                 </div>
               )}
               {result.triage_level === 'EMERGENCY' && <AmbulanceCallButton />}
-              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">{t('intakeForm.result.successTitle')}</h2>
+              <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display font-bold">{t('intakeForm.result.successTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">{result.risk_driver}</p>
               <PatientKeyCard patientKey={newPatientKey} />
             </>
@@ -404,7 +405,7 @@ export default function IntakeForm() {
 
   return (
     <form onSubmit={handleSubmit} className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300 relative pb-32">
-      <h1 className="text-2xl font-display italic text-forest tracking-tight mb-8 text-center">{t('intakeForm.title')}</h1>
+      <h1 className="text-2xl font-display font-bold text-text tracking-tight mb-8 text-center">{t('intakeForm.title')}</h1>
 
       {error && (
         <div role="alert" aria-live="assertive" className="bg-emergency/10 border border-emergency/30 text-emergency px-4 py-3 rounded-md mb-4 text-sm">
@@ -693,27 +694,32 @@ export default function IntakeForm() {
         </button>
       </div>
 
-      {/* Preliminary Triage Result Display */}
+      {/* Preliminary Triage Result Display — perforated severity edge,
+          same signature as the doctor's case-review card (BriefingCard.jsx). */}
       {localResult && (
-        <div className={`mt-4 rounded-lg border p-4 animate-fade-up ${prelimStyle.container}`}>
-          <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center rounded-pill px-3 py-1 text-xs font-bold tracking-widest uppercase font-mono ${prelimStyle.badge}`}>
-              {localResult.triageLevel || t('intakeForm.preliminary.pendingBadge')}
-            </span>
-            <span className="text-sm font-medium text-text2">
-              {localResult.triageLevel ? t('intakeForm.preliminary.label') : t('intakeForm.preliminary.pendingLabel')}
-            </span>
-          </div>
-          {localResult.lowConfidence && (
-            <p className="mt-2 text-xs text-urgent font-medium">
-              {t('intakeForm.preliminary.lowConfidence')}
+        <div className="mt-4 flex rounded-lg border border-leaf/40 overflow-hidden animate-fade-up">
+          <div className={`w-[7px] shrink-0 tag-perforated ${prelimStyle.stripe}`} aria-hidden="true"></div>
+          <div className="flex-1 min-w-0 bg-surface p-4">
+            <div className="flex items-center gap-3">
+              <span className={`inline-flex items-center rounded px-2.5 py-0.5 text-xs font-display font-bold tracking-wide uppercase ${prelimStyle.badge}`}>
+                {localResult.triageLevel || t('intakeForm.preliminary.pendingBadge')}
+              </span>
+              <span className="text-sm font-medium text-text2">
+                {localResult.triageLevel ? t('intakeForm.preliminary.label') : t('intakeForm.preliminary.pendingLabel')}
+              </span>
+            </div>
+            {localResult.lowConfidence && (
+              <p className="mt-2 text-xs text-urgent font-medium flex items-start gap-1.5">
+                <TriangleAlert size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+                {t('intakeForm.preliminary.lowConfidence')}
+              </p>
+            )}
+            <p className="mt-2 text-xs text-text3">
+              {navigator.onLine
+                ? t('intakeForm.preliminary.sendingOnline')
+                : t('intakeForm.preliminary.sendingOffline')}
             </p>
-          )}
-          <p className="mt-2 text-xs text-text3">
-            {navigator.onLine
-              ? t('intakeForm.preliminary.sendingOnline')
-              : t('intakeForm.preliminary.sendingOffline')}
-          </p>
+          </div>
         </div>
       )}
     </form>

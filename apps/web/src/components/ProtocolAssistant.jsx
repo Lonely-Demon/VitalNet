@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { askProtocolQuestion, listProtocolQuestions, curateProtocolAnswer } from '../lib/api'
 import { useTranslation } from 'react-i18next'
+import { Check } from 'lucide-react'
 
 const LANGUAGES = [
   { code: 'en', label: 'English' },
@@ -43,7 +44,9 @@ function QuestionCard({ q, canCurate, onCurated }) {
         <p className="mt-2 text-sm text-text2">
           {finalAnswer}
           {q.status === 'curated' && (
-            <span className="ml-2 text-xs font-mono text-routine">✓ curated</span>
+            <span className="ml-2 text-xs font-mono text-routine inline-flex items-center gap-1">
+              <Check size={12} aria-hidden="true" />curated
+            </span>
           )}
         </p>
       )}

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { CircleCheck } from 'lucide-react'
 import { getCases } from '../lib/api'
 import BriefingCard from '../components/BriefingCard'
 import { useAuth } from '../store/authStore'
@@ -141,8 +142,10 @@ export default function Dashboard({ filter = 'all' }) {
 
       {visibleCases.length === 0 && !error && (
         <div className="text-center bg-surface border border-dashed border-leaf/60 rounded-xl p-12 shadow-card mt-8 animate-fade-up">
-          <div className="text-4xl mb-3">📭</div>
-          <p className="text-xl font-medium text-text tracking-tight font-display italic">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-routine/10 text-routine mb-3">
+            <CircleCheck size={24} aria-hidden="true" />
+          </div>
+          <p className="text-xl font-medium text-text tracking-tight font-display font-bold">
             {filter === 'pending' ? 'No Pending Cases' : 'Queue is Empty'}
           </p>
           <p className="text-sm text-text2 mt-2">
