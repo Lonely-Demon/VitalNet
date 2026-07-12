@@ -51,6 +51,19 @@ below.
     failing AA for normal-size text. Darkened to `#9C5A2B`, **~4.9:1**,
     kept in the same warm-terracotta hue family as `--color-terra` for
     palette consistency.
+
+  **Superseded by the visual-identity redesign** (`docs/DECISIONS.md`
+  §34): the whole palette was re-picked around a teal
+  brand color kept deliberately outside the clinical red/amber/green
+  system, not around these exact hex values. Re-verified by script at
+  that time, not just carried over: `--color-text3` is now `#5A6B67`
+  (**~5.13:1** on the page background), `--color-urgent` is now
+  `#A85A0C` (**~4.64:1**) — both still clear AA, with the same
+  reasoning (`--color-terra`-adjacent warm hue for `--color-urgent`,
+  now a signal color deliberately separate from brand chroma). The
+  redesign re-ran this same contrast check on every text/background
+  pair before shipping; see `docs/DECISIONS.md` for the full token
+  table.
 - **Login error message** and consent-checkbox error message weren't
   marked `role="alert"` — added, plus `aria-describedby` wiring the
   consent checkbox to its own error text.
@@ -63,9 +76,20 @@ below.
   triage display always render the text label (`ROUTINE`/`URGENT`/
   `EMERGENCY`) alongside the color, so a colorblind user isn't dependent
   on hue to read triage level.
-- **The one icon-only button in the app** (`VoiceInputButton`'s mic
-  button, 🎤 with no visible text) already had `aria-label` before this
-  audit.
+- **Icon-only buttons all have `aria-label`.** The redesign replaced
+  every emoji/glyph icon with `lucide-react` icons and added a second
+  icon-only control (`NavBar.jsx`'s sign-out button — previously a
+  "Sign out" text link); both it and `VoiceInputButton`'s mic button
+  carry `aria-label`.
+- **Badge-background contrast**, flagged as a known gap in an earlier
+  pass of this audit (`TriageBadge` and the result-page badges rendering
+  triage text on a translucent tint of the same color, ~4.0-4.3:1,
+  short of AA), is resolved as a side effect of the visual-identity
+  redesign: every triage badge is now solid-fill with white text
+  (`bg-emergency text-white`, etc.), computed at **~5.1-7.8:1** across
+  all four tiers plus the PENDING state — comfortably clear of AA. Not
+  the redesign's original motivation (it was chasing a "stamped tag"
+  look, not this gap specifically) but it closes it regardless.
 - **Every `outline-none` in the codebase is paired with a `focus:ring-*`
   replacement** — verified by grep — so removing the default browser
   outline never leaves keyboard users without a visible focus indicator.
@@ -81,18 +105,6 @@ below.
 
 ## Known gaps (honest, not fixed this pass)
 
-- **Badge-background contrast is still short of AA in one specific
-  context**: `TriageBadge` and the result-page badges render triage text
-  at 100%-opacity color on a *10%-opacity tint* of that same color as the
-  background (`bg-emergency/10 text-emergency`, etc.) — computed contrast
-  there is **~4.0-4.3:1**, short of the 4.5:1 AA threshold for normal-size
-  bold text (it would pass at the ≥18.66px-bold "large text" threshold of
-  3:1, but `text-sm`/`text-lg` renders are borderline on that size cutoff
-  depending on exact Tailwind size). Not fixed this pass — pushing the
-  colors dark enough to clear 4.5:1 *on that specific tinted background*
-  starts to look muddy against the plain-white/full-saturation contexts
-  the same tokens are used in elsewhere. Worth a dedicated design pass,
-  not a good target for a mechanical contrast bump.
 - **No automated accessibility testing in CI** — no axe-core/Lighthouse-CI
   job exists. This audit was manual (source read + computed contrast
   ratios), which finds structural issues (missing labels, missing live

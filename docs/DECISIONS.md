@@ -1348,3 +1348,88 @@ can't be loaded offline, rather than silently computing a `rules_first`
 tier without one. `apps/web` moves to `rules_first` only alongside the
 real `apps/api` cutover, not before it. See `apps/web/README.md`'s
 "Triage logic lives in one place" section for the corrected design.
+
+### 34. `apps/web` visual identity redesign — teal brand chroma, triage-tag signature, self-hosted type
+
+**Context**: the shipped UI ("Parsley Health" tokens — cream background,
+forest-green brand, italic serif wordmark, DM Sans/DM Serif Display via a
+Google Fonts `<link>`) had a real, specific problem, not just a vague
+"doesn't feel professional" one: `--color-forest` (the brand's primary
+interactive color — buttons, active nav state, headings) sat in the same
+green hue family as `--color-routine`, the ROUTINE triage tier. Brand
+chrome and the single signal in this app that must never be ambiguous
+could render in visually adjacent colors on the same screen. Separately,
+every icon in the app was a unicode glyph (▲▼✓⚠⚑→) or emoji (📭🚫🎤),
+and fonts loaded from a Google Fonts CDN in an app that is explicitly
+offline-first.
+
+**Process**: two rounds of static HTML mockups (self-contained artifacts,
+real embedded fonts, browser-screenshotted before being shown), following
+the `interface-design` design process — a named domain-grounded signature
+element, a token plan with a stated reason for every choice, then build —
+rather than going straight to code. Both rounds were reviewed and
+explicitly approved before any `apps/web` file was touched.
+
+**What changed**:
+- **Color**: brand chroma (`--color-forest`/`sage`/`mint`/`leaf`) moves
+  from green to a teal (`#0E5B66`) that appears nowhere in the
+  `--color-emergency`/`urgent`/`routine` system — brand and triage-severity
+  color can no longer collide. Ground/surface tones shift cool
+  (`#F3F5F3`) instead of cream. Every text/background pair was
+  re-verified against WCAG AA by script before shipping (see
+  `docs/ACCESSIBILITY.md`), not carried over from the old palette by
+  assumption.
+- **Type**: DM Sans/DM Serif Display, loaded via a render-blocking Google
+  Fonts `<link>`, replaced with self-hosted IBM Plex Sans / Sans
+  Condensed / Mono (SIL OFL 1.1, license text at
+  `apps/web/public/fonts/LICENSE.txt`). Two reasons, not one: IBM Plex
+  ships matching Devanagari and Tamil weights — hi/ta are real target
+  languages here, and the old fonts had no non-Latin coverage at all —
+  and self-hosting removes a third-party CDN dependency from an
+  offline-first app. The font files are now part of the PWA's
+  service-worker precache.
+- **Signature element**: a real mass-casualty triage tag is perforated
+  cardstock, torn along a dotted line to whichever tier applies. Every
+  case card (`BriefingCard.jsx`) and the intake form's preliminary-result
+  card now carry that as a literal CSS `mask-image` punch-hole texture on
+  the severity edge (`.tag-perforated` in `index.css`), replacing a flat
+  4px color bar — chosen specifically because it's an object that could
+  only belong to a triage tool, not a generic dashboard.
+- **Icons**: `lucide-react` installed; every unicode-glyph icon and
+  decorative emoji across the whole app replaced with real icons,
+  `aria-label`ed where icon-only (the NavBar sign-out button went from a
+  text link to an icon-only button in this pass, so it needed one newly).
+- **Triage badges**: `TriageBadge.jsx`, `IntakeForm.jsx`'s
+  `PRELIM_RESULT_STYLES`, and `BADGE_COLORS` all moved from a translucent
+  tint (`bg-emergency/10 text-emergency`) to solid fill with white text
+  (`bg-emergency text-white`) — the "stamped tag" look was the motivation,
+  but it also closed a real, previously-documented accessibility gap (the
+  tint badges computed ~4.0-4.3:1, short of AA; solid-fill computes
+  ~5.1-7.8:1 across every tier). Found and fixed while updating this
+  document, not in the original redesign PR — see
+  `docs/ACCESSIBILITY.md`.
+- **NavBar**: underline tab indicator instead of filled pills, a
+  pulse-line SVG wordmark mark.
+
+**Verified, not assumed**: every text/background token pair recomputed
+against WCAG AA (script, not eyeballed — see `docs/ACCESSIBILITY.md`);
+the mocked-auth Playwright harness (`docs/TESTING_STRATEGY.md`) re-run
+across ASHA worker and doctor roles at mobile (390px) and tablet (768px)
+widths after the change, not just a production build. That verification
+pass caught a real, pre-existing layout bug unrelated to the redesign
+itself: three secondary text-link buttons in `BriefingCard.jsx` (correct
+triage tier / record outcome / refer to another facility) were
+`inline-block` siblings relying on `space-y-5` for spacing, which only
+creates visible separation when each element wraps to its own line —
+when two rendered adjacent (common, since the fieldsets between them are
+conditionally hidden), their text ran together with no visible gap.
+Fixed by making all three `block`-level.
+
+**Consequences**: Supervisor, Admin, and Outbreak panels were not
+individually re-mocked or screenshotted in this pass — they inherit the
+new tokens and shared components (`NavBar`, card/button/badge styles)
+automatically, on the same logic that made the token remap low-risk in
+the first place (existing Tailwind utility classes like `bg-forest`
+kept their names, only their resolved color changed), but that inheritance
+hasn't been visually verified screen-by-screen the way ASHA/doctor flows
+were. Worth a follow-up pass if those panels are heavily used.
