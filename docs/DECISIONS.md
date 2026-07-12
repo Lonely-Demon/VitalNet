@@ -1531,3 +1531,98 @@ functions, duplicate constraint, and overlapping RLS policies found along
 the way are documented here as open items, not fixed, pending the user's
 own review — several touch PHI access control on a clinical app and
 shouldn't be resolved by inference.
+
+### 36. A privilege-escalation RLS vulnerability inside §35's "overlapping policies" finding — client-writable JWT metadata trusted for authorization, found and fixed
+
+**Context**: §35 flagged, as an open item requiring the user's own
+judgment, that `profiles`, `case_records`, and `facilities` had older
+PERMISSIVE RLS policies sitting alongside newer, stricter ones — Postgres
+OR-combines permissive policies, so the looser one governs regardless of
+the newer one's intent. Reading those specific policies' `USING` clauses
+turned this from a policy-hygiene finding into an actively exploitable
+privilege-escalation vulnerability.
+
+**What was found**: `doctor_update` and part of `asha_select_own` on
+`case_records`, and `profile_select` on `profiles`, authorized access by
+reading `auth.jwt() -> 'user_metadata' ->> 'role'`. `user_metadata`
+(`auth.users.raw_user_meta_data`) is writable by any authenticated user via
+Supabase's own Auth REST API (`PUT /auth/v1/user` with `{"data": {...}}`,
+using nothing but their own access token) — it is not an app-controlled
+claim, regardless of what VitalNet's own frontend does with it. Any
+authenticated user could call that endpoint directly, set
+`user_metadata.role = "admin"`, and any policy trusting that claim would
+grant them elevated access, independent of their real role in
+`public.profiles`. Because these unsafe policies were PERMISSIVE and
+coexisted with safer, stricter policies on the same tables, they silently
+widened access beyond what the safer policies alone would have allowed:
+`case_records_update_policy` already used a correct table-lookup pattern,
+but `doctor_update`'s presence OR-combined it with the unsafe check, so the
+safe policy's restriction was never actually enforced in practice. Same
+story for `profiles_select_policy_hardened` — its name says what it was
+supposed to replace, but `profile_select` (unsafe) was still active
+alongside it.
+
+A fourth location — three policies on `case_referrals` — uses the
+identical pattern but was left untouched: that table has zero references
+anywhere in the codebase (confirmed by grep), superseded by the separate
+`referrals` table from `phase19_referrals.sql`. Patching policies nothing
+queries isn't worth touching a table pending its own removal decision;
+recorded here as a follow-up, not fixed.
+
+**What was fixed** (`phase32_fix_jwt_metadata_rls_vulnerability.sql`):
+dropped `doctor_update` outright (redundant with
+`case_records_update_policy`, which already does this correctly); rewrote
+`asha_select_own` to replace its JWT-trusting doctor/admin clause with the
+same `EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND
+role = ...)` table-lookup pattern, keeping its self-access clause
+(`submitted_by = auth.uid()`) unchanged; dropped `profile_select` outright,
+since `profiles_select_policy_hardened` already covers the same access
+correctly via `get_user_role()`/`get_user_facility()`.
+
+`get_user_role(uuid)`/`get_user_facility(uuid)` — flagged in §35 as
+untracked functions called by `profiles_select_policy_hardened` — were
+pulled from the live project via `pg_get_functiondef()` and inspected
+before relying on them further: both are plain `SECURITY DEFINER` lookups
+against `public.profiles`, no JWT trust, safe.
+`phase33_track_get_user_role_and_facility.sql` starts tracking their real
+definitions for the first time (`CREATE OR REPLACE`, idempotent against
+the live project's existing functions), deliberately without touching
+grants — guessing a grant state different from what's already working live
+risks narrowing access based on a guess.
+
+**Verification**: a local Postgres test database was rebuilt from
+`ci_stubs.sql` → `schema_snapshot.sql` → phase28 through phase33, seeded
+with two facilities and five profiles spanning every role, then exercised
+with nine functional RLS tests that simulate real authenticated users the
+way PostgREST does — `SET ROLE authenticated` (not `SET LOCAL`, which
+silently no-ops outside a transaction and leaves the session as the
+bypassing superuser) plus `set_config('request.jwt.claims', '{"sub":
+"...", ...}', false)` — against `ci_stubs.sql`'s
+`auth.jwt()`/`auth.uid()`/`auth.role()` stubs, upgraded from static
+placeholders to real implementations reading that same GUC so the
+simulation is behaviorally accurate rather than parse-only. Confirmed:
+legitimate access (ASHA worker sees own case; same-facility doctor sees
+facility cases; different-facility doctor sees none; real admin sees
+everything, including all 5 profiles via `profiles_select_policy_hardened`)
+is unchanged; the vulnerability itself — a user with `user_metadata.role =
+"admin"` set but no matching row in `public.profiles` — now sees zero
+cases, zero profiles beyond their own, and an UPDATE attempt affects zero
+rows. Both migrations were then applied to the live project via the SQL
+Editor and re-verified with a read-only `pg_policies` query confirming
+`doctor_update`/`profile_select` are gone and
+`asha_select_own`/`profiles_select_policy_hardened` are the only policies
+remaining on their respective commands.
+
+**Why documentation waited for the live fix**: this repository was public
+for the duration of this investigation. Committing the vulnerable
+policies' exact text and a full writeup of the exploit path before the
+live database was patched would have been a public disclosure of an
+active, unpatched privilege-escalation vulnerability in a system handling
+PHI — so the fix was applied live first (via the same SQL-Editor handoff
+pattern as §35), re-verified, and only then documented and committed.
+
+**Consequences**: the `case_referrals` dead-table policies remain a
+documented, unaddressed follow-up (same PHI-access-control caveat as §35 —
+not resolved by inference). Everything else §35 flagged as "overlapping"
+on `profiles`/`case_records` is now closed; `facilities`' policy situation
+was not part of this pass and remains open.
