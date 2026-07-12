@@ -75,7 +75,7 @@ const ROLE_LABELS = {
 const ROLE_COLORS = {
   asha_worker: 'bg-leaf text-forest',
   doctor:      'bg-sand text-forest',
-  supervisor:  'bg-urgent/10 text-urgent',
+  supervisor:  'bg-urgent/10 text-urgent-ink',
   admin:       'bg-surface3 text-text',
 }
 
@@ -437,7 +437,7 @@ export default function AdminUsers() {
                 <td className="px-4 py-3">
                   <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${
                     u.is_active
-                      ? 'bg-routine/10 text-routine'
+                      ? 'bg-routine/10 text-routine-ink'
                       : 'bg-surface3 text-text3'
                   }`}>
                     {u.is_active ? 'Active' : 'Inactive'}

@@ -69,7 +69,7 @@ export default function OutbreakSignals() {
             >
               <div className="flex items-center justify-between">
                 <p className="font-medium text-text">{formatSymptom(s.symptom)}</p>
-                <span className="text-xs font-mono px-2 py-0.5 rounded-pill bg-urgent/10 text-urgent">
+                <span className="text-xs font-mono px-2 py-0.5 rounded-pill bg-urgent/10 text-urgent-ink">
                   {s.today_count} today
                 </span>
               </div>

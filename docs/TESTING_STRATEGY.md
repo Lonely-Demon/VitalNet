@@ -101,7 +101,7 @@ time-dependent engineered feature, extend the freeze in all three places
 
 ### Build
 ```bash
-cd frontend && npm run build
+cd apps/web && pnpm build
 ```
 Not "just a build" — it's the primary regression check for import errors,
 bundle-size blowups (watch for a sudden jump in `dist/assets/*.js` sizes —
@@ -110,13 +110,31 @@ generation issues.
 
 ### Playwright E2E (`tests/offline.spec.js`)
 ```bash
-cd frontend && npx playwright test tests/offline.spec.js
+cd apps/web && pnpm exec playwright test tests/offline.spec.js
 ```
 Drives a real browser through: login → go offline → fill and submit an
 intake form → verify it queues → reconnect → verify it syncs. Needs a
-running dev server (`npm run dev`) and seeded test users. Not part of the
-unit-test CI job for the same reason `test_e2e.py` isn't — it needs a live
-environment.
+running dev server (`pnpm dev`) and seeded test users against a real
+Supabase project. Not part of CI for the same reason `test_e2e.py` isn't —
+it needs a live environment.
+
+### Accessibility scan (`tests/a11y.spec.js`)
+```bash
+cd apps/web && pnpm exec playwright test tests/a11y.spec.js
+```
+Runs `@axe-core/playwright`'s WCAG 2 A/AA ruleset against every role's main
+screen. Unlike `offline.spec.js`, this one *is* wired into CI
+(`a11y-frontend-pr`, PR-triggered) because it needs no live environment —
+it uses `tests/helpers/mockBackend.js` to fake Supabase auth and the legacy
+API via `page.route()` (the same mocked-auth technique documented above),
+so it's safe to run on untrusted PR code with no secrets. See
+`docs/ACCESSIBILITY.md` for what it's caught. Two of its tests wait a fixed
+~1s before scanning to clear the login page's and intake form's CSS
+entrance animations — Playwright's "visible" state doesn't wait for
+`opacity: 1`, so scanning immediately catches elements mid-fade and axe
+reports a false-positive contrast violation on the blended color; if you
+add a new `animate-fade-up`/staggered-delay element to a scanned page and
+this suite starts flaking, that's almost certainly why.
 
 ### Ad hoc live-browser E2E in a sandbox with no direct internet access
 
@@ -151,12 +169,13 @@ data, not fabricated data.
 ## What CI actually runs automatically
 
 On every PR: `ruff check` (backend), the pytest suite minus `test_e2e.py`
-(backend), `npm run build` (frontend), CodeQL analysis (Python +
-JS/TypeScript + GitHub Actions workflows). The tree/feature parity tests
-and the Playwright spec are documented above as things a contributor should
-run locally — check `.github/workflows/ci.yml` for the exact current CI
-job list, since this doc can drift from it (the workflow file is the source
-of truth for what actually gates merges).
+(backend), `npm run build` (frontend), the `tests/a11y.spec.js` axe-core
+scan (`a11y-frontend-pr`), CodeQL analysis (Python + JS/TypeScript +
+GitHub Actions workflows). `offline.spec.js` is documented above as
+something a contributor should run locally — check
+`.github/workflows/ci.yml` for the exact current CI job list, since this
+doc can drift from it (the workflow file is the source of truth for what
+actually gates merges).
 
 ## Adding a new test
 

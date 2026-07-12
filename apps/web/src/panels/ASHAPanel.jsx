@@ -16,9 +16,9 @@ const TABS = [
 ]
 
 const TRIAGE_STYLES = {
-  EMERGENCY: 'bg-emergency/10 text-emergency border-emergency/30',
-  URGENT:    'bg-urgent/10 text-urgent border-urgent/30',
-  ROUTINE:   'bg-routine/10 text-routine border-routine/30',
+  EMERGENCY: 'bg-emergency/10 text-emergency-ink border-emergency/30',
+  URGENT:    'bg-urgent/10 text-urgent-ink border-urgent/30',
+  ROUTINE:   'bg-routine/10 text-routine-ink border-routine/30',
 }
 
 export default function ASHAPanel() {

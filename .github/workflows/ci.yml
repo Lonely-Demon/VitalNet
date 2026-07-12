@@ -74,6 +74,44 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ci-placeholder-anon-key
           VITE_API_BASE_URL: http://localhost:8000
 
+  a11y-frontend-pr:
+    # WCAG 2 A/AA scan (axe-core via Playwright) of the main screen for every
+    # role. Same no-secrets posture as build-frontend-pr: every test drives
+    # the dev server against a mocked Supabase/legacy-API backend
+    # (tests/helpers/mockBackend.js) rather than a live project, so untrusted
+    # PR code never sees real credentials. See docs/ACCESSIBILITY.md.
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
+      - name: Install workspace deps (no install scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Install Playwright's Chromium
+        run: pnpm --filter @vitalnet/web exec playwright install --with-deps chromium
+      - name: Run axe-core accessibility suite
+        run: pnpm --filter @vitalnet/web exec playwright test tests/a11y.spec.js
+        env:
+          CI: true
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+          VITE_API_BASE_URL: http://localhost:8000
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: failure()
+        with:
+          name: a11y-report-${{ github.sha }}
+          path: apps/web/playwright-report/
+          retention-days: 14
+
   test-backend:
     runs-on: ubuntu-latest
     timeout-minutes: 15

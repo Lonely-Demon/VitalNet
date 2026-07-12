@@ -157,7 +157,7 @@ export default function AdminFacilities() {
                 </td>
                 <td className="px-4 py-3">
                   <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${
-                    f.is_active ? 'bg-routine/10 text-routine' : 'bg-surface3 text-text3'
+                    f.is_active ? 'bg-routine/10 text-routine-ink' : 'bg-surface3 text-text3'
                   }`}>
                     {f.is_active ? 'Active' : 'Inactive'}
                   </span>

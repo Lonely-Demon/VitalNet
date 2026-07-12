@@ -339,7 +339,7 @@ export default function IntakeForm() {
                     <p className="text-xs text-urgent mt-2 font-mono">{t('intakeForm.result.lowConfidenceShort')}</p>
                   )}
                   {offlineTriage.contraindicationFlags?.length > 0 && (
-                    <div className="mt-3 text-left text-xs text-urgent bg-urgent/5 border border-urgent/20 rounded-lg p-3">
+                    <div className="mt-3 text-left text-xs text-urgent-ink bg-urgent/5 border border-urgent/20 rounded-lg p-3">
                       <p className="font-semibold mb-1">{t('intakeForm.result.contraindicationTitle')}</p>
                       <ul className="list-disc ml-4 space-y-1">
                         {offlineTriage.contraindicationFlags.map((flag) => <li key={flag}>{flag}</li>)}
@@ -355,7 +355,7 @@ export default function IntakeForm() {
                 </>
               )}
               <div className="mb-6">
-                <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide shadow-sm bg-sand text-urgent border border-urgent/20 font-mono">
+                <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide shadow-sm bg-sand text-urgent-ink border border-urgent/20 font-mono">
                   {t('intakeForm.result.savedOfflineBadge')}
                 </span>
               </div>
@@ -375,7 +375,7 @@ export default function IntakeForm() {
                 </span>
               </div>
               {result.contraindication_flags?.length > 0 && (
-                <div className="mb-4 text-left text-xs text-urgent bg-urgent/5 border border-urgent/20 rounded-lg p-3">
+                <div className="mb-4 text-left text-xs text-urgent-ink bg-urgent/5 border border-urgent/20 rounded-lg p-3">
                   <p className="font-semibold mb-1">{t('intakeForm.result.contraindicationTitle')}</p>
                   <ul className="list-disc ml-4 space-y-1">
                     {result.contraindication_flags.map((flag) => <li key={flag}>{flag}</li>)}

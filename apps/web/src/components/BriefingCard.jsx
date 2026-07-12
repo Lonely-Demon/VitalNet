@@ -243,7 +243,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
             <ul className="text-sm text-text2 space-y-1.5 list-none">
               {(b.differential_diagnoses || []).map((d, i) => (
                 <li key={i} className="flex gap-2.5 items-start">
-                  <span className="text-sage font-bold shrink-0">{i + 1}.</span> {d}
+                  <span className="text-forest font-bold shrink-0">{i + 1}.</span> {d}
                 </li>
               ))}
             </ul>

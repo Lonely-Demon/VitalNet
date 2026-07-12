@@ -159,7 +159,7 @@ export default function Dashboard({ filter = 'all' }) {
       {emergency.length > 0 && (
         <div className="mb-8">
           <h2 className="text-xs font-mono font-bold text-emergency uppercase tracking-widest mb-3 flex items-center gap-2">
-            Emergency <span className="bg-emergency/10 text-emergency px-2 py-0.5 rounded-pill">{emergency.length}</span>
+            Emergency <span className="bg-emergency/10 text-emergency-ink px-2 py-0.5 rounded-pill">{emergency.length}</span>
           </h2>
           {emergency.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={handleReviewed} />)}
         </div>
@@ -168,7 +168,7 @@ export default function Dashboard({ filter = 'all' }) {
       {urgent.length > 0 && (
         <div className="mb-8">
           <h2 className="text-xs font-mono font-bold text-urgent uppercase tracking-widest mb-3 flex items-center gap-2">
-            Urgent <span className="bg-urgent/10 text-urgent px-2 py-0.5 rounded-pill">{urgent.length}</span>
+            Urgent <span className="bg-urgent/10 text-urgent-ink px-2 py-0.5 rounded-pill">{urgent.length}</span>
           </h2>
           {urgent.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={handleReviewed} />)}
         </div>
@@ -177,7 +177,7 @@ export default function Dashboard({ filter = 'all' }) {
       {routine.length > 0 && (
         <div className="mb-8">
           <h2 className="text-xs font-mono font-bold text-routine uppercase tracking-widest mb-3 flex items-center gap-2">
-            Routine <span className="bg-routine/10 text-routine px-2 py-0.5 rounded-pill">{routine.length}</span>
+            Routine <span className="bg-routine/10 text-routine-ink px-2 py-0.5 rounded-pill">{routine.length}</span>
           </h2>
           {routine.map(c => <BriefingCard key={c.id} caseData={c} onReviewed={handleReviewed} />)}
         </div>
