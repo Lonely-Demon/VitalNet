@@ -1440,17 +1440,27 @@ were. Worth a follow-up pass if those panels are heavily used.
 surface — `packages/clinical-core`, `apps/api`, `apps/web`, plus the still-
 authoritative `backend/` FastAPI service). All four automated suites
 passed cleanly (297 tests total: clinical-core 61, backend 108, apps/api
-121 — the last of which had never actually run in CI before this pass, see
-below — plus a clean `apps/web` build and a11y suite). That was reassuring
+121 — plus a clean `apps/web` build and a11y suite). That was reassuring
 but incomplete: every one of `apps/api`'s 121 tests mocks its Supabase
 client, so none of them touch a real database. The Round 6 rebuild plan's
 own verification section called for exactly this gap to be closed with a
 live smoke test; it never was.
 
-**What "test the dev branch" actually found**: closing two CI gaps
-surfaced by that pass (`apps/api` had no CI job at all; the DB
-schema-drift job from Phase 2 of the Round 6 plan was never built) required
-a real schema snapshot from the live Supabase project. Getting one — via a
+*Correction, made while opening the PR for this work*: this entry
+originally also claimed `apps/api`'s Deno suite had never run in CI before
+this pass, and added a second CI job (`apps-api-test` in `ci.yml`) on that
+premise. That claim was wrong — `.github/workflows/api-edge-function.yml`'s
+`test` job has run this exact suite on every PR/push touching `apps/api`
+or `packages/clinical-core` since the Round 6 rebuild's Phase 3 (PR #54),
+well before this pass. The duplicate `apps-api-test` job has been removed
+from `ci.yml`; `api-edge-function.yml` remains the one place this suite
+runs, more correctly path-scoped than the duplicate was. The one genuine
+CI gap this pass found and closed was the schema-drift check below.
+
+**What "test the dev branch" actually found**: closing the one real CI gap
+surfaced by that pass (the DB schema-drift job from Phase 2 of the Round 6
+plan was never built) required a real schema snapshot from the live
+Supabase project. Getting one — via a
 pg_catalog introspection query run in the SQL Editor, not `pg_dump`, since
 the user only had SQL Editor access, and a live connection string was
 deliberately never shared into this chat (schema DDL is safe to paste;
@@ -1477,9 +1487,13 @@ PERMISSIVE policy sits alongside a newer, more restrictive one — since
 Postgres OR-combines multiple permissive policies for the same command,
 the looser one governs effective access regardless of the newer one's
 intent (`profiles_select_policy_hardened`'s name says what it was
-*supposed* to replace). None of these were touched — they need the user's
-own judgment, not a unilateral fix, and are recorded here rather than
-silently patched.
+*supposed* to replace). None of these were touched at the time this
+paragraph was first written — they needed the user's own judgment, not a
+unilateral fix. The RLS policies, the untracked functions, and the dead
+table were subsequently investigated, authorized, fixed, and re-verified
+live; see §36. The duplicate `UNIQUE` constraint on
+`case_records.client_id` remains open and undocumented-fix, as originally
+recorded here.
 
 **What was fixed, in order, with the user's explicit sign-off at each
 step**: (1) the four migration files — verified additive-only (no `DROP`/
@@ -1526,11 +1540,12 @@ exactly. The full loop — introspect, snapshot, reapply from scratch, diff
 **Consequences**: `apps/api` is now schema-compatible with the live
 project for the first time, though still not deployed or cut over
 (`apps/web/src/api/base.js` still routes every endpoint to `'legacy'`) —
-that remains a separate, larger decision. The dead table, untracked
-functions, duplicate constraint, and overlapping RLS policies found along
-the way are documented here as open items, not fixed, pending the user's
-own review — several touch PHI access control on a clinical app and
-shouldn't be resolved by inference.
+that remains a separate, larger decision. Of the open items found along
+the way: the untracked functions and overlapping RLS policies were
+resolved in §36 below (phase32–34); the dead `case_referrals` table was
+dropped outright as part of that same fix. The duplicate `UNIQUE`
+constraint on `case_records.client_id` remains genuinely open, documented
+here rather than fixed, pending the user's own review.
 
 ### 36. A privilege-escalation RLS vulnerability inside §35's "overlapping policies" finding — client-writable JWT metadata trusted for authorization, found and fixed
 

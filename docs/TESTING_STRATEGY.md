@@ -181,18 +181,20 @@ cd packages/clinical-core && pnpm run build   # apps/api's deno.json import map
                                                 # from its compiled dist/, same
                                                 # gotcha as the a11y suite above
 cd apps/api/supabase/functions/api
-deno test --allow-env --allow-read --allow-net
+deno test --allow-net --allow-env
 ```
 121 tests across every `_shared/*.ts` module and route helper — auth (hybrid
 JWT + JWKS), rate limiting, CSRF/device guard, scoping, the analytics
 percentile math (had to match Python's round-half-to-even `round()` exactly),
 team metrics, EARS outbreak signals, voice transcription fallback ordering,
 idempotency, etc. All self-contained (mocked `fetch`/Supabase clients) — no
-live Supabase project or secrets needed, wired into CI as `apps-api-test`
-(PR-triggered). This suite existed on disk for a while before it was
-actually wired into CI — if you're adding a new `_shared/` module, add its
-test file under `test/` following the existing pattern, and don't assume CI
-will remind you if a route change breaks an untested one.
+live Supabase project or secrets needed. Wired into CI via
+`.github/workflows/api-edge-function.yml`'s `test` job (fmt/lint/typecheck
+too), which runs on every PR/push touching `apps/api/**` or
+`packages/clinical-core/**` — has since the Round 6 rebuild's Phase 3 (PR
+#54). If you're adding a new `_shared/` module, add its test file under
+`test/` following the existing pattern, and don't assume CI will remind you
+if a route change breaks an untested one.
 
 Not covered by any of this: `apps/api` has never been deployed to a real
 Supabase project. Everything above is unit/contract-level — things like
@@ -239,13 +241,15 @@ did.
 
 On every PR: `ruff check` (backend), the pytest suite minus `test_e2e.py`
 (backend), `npm run build` (frontend), the `tests/a11y.spec.js` axe-core
-scan (`a11y-frontend-pr`), the apps/api Deno suite (`apps-api-test`), the
-DB schema-drift check (`db-schema-drift`), CodeQL analysis (Python +
-JS/TypeScript + GitHub Actions workflows). `offline.spec.js` is documented
-above as something a contributor should run locally — check
-`.github/workflows/ci.yml` for the exact current CI job list, since this
-doc can drift from it (the workflow file is the source of truth for what
-actually gates merges).
+scan (`a11y-frontend-pr`), the DB schema-drift check (`db-schema-drift`),
+CodeQL analysis (Python + JS/TypeScript + GitHub Actions workflows) — all
+in `.github/workflows/ci.yml`. Separately, on any PR/push touching
+`apps/api/**` or `packages/clinical-core/**`:
+`.github/workflows/api-edge-function.yml`'s `test` job (fmt/lint/typecheck
++ the 121-test Deno suite above). `offline.spec.js` is documented above as
+something a contributor should run locally — check the two workflow files
+for the exact current CI job list, since this doc can drift from them (the
+workflow files are the source of truth for what actually gates merges).
 
 ## Adding a new test
 

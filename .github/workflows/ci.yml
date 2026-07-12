@@ -120,38 +120,6 @@ jobs:
           path: apps/web/playwright-report/
           retention-days: 14
 
-  apps-api-test:
-    # Deno test suite for apps/api — the Supabase Edge Function backend
-    # (Round 6 rebuild plan Phase 3/4, see apps/api/README.md). All 121
-    # tests are self-contained (mocked fetch/Supabase clients, pure-logic
-    # unit tests) — no live Supabase project or secrets needed, safe on
-    # untrusted PR code. Previously this suite only ran if someone thought
-    # to run it by hand; a regression here shipped silently.
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: '20'
-      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
-        with:
-          version: '10'
-      - name: Install workspace deps (no install scripts)
-        run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Build clinical-core (apps/api's deno.json import map resolves it from packages/clinical-core/dist/)
-        run: pnpm --filter @vitalnet/clinical-core run build
-      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed  # v2.0.5
-        with:
-          deno-version: '2.9.2'
-      - name: Run apps/api Deno test suite
-        working-directory: apps/api/supabase/functions/api
-        run: deno test --allow-env --allow-read --allow-net
-
   db-schema-drift:
     # Verifies every tracked migration newer than schema_snapshot.sql's
     # baseline actually applies cleanly on top of it. Doesn't need live
