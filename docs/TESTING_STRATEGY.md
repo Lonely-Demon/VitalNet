@@ -210,40 +210,59 @@ SECURITY DEFINER functions every one of `apps/api`'s RPC calls depends on,
 including `fn_rate_limit` which the middleware calls on every request —
 had never been applied to the live project (docs/DECISIONS.md §35 has the
 full story). They have now been applied and re-verified live. The
-`db-schema-drift` CI job below exists specifically so a tracked migration
+`migration-replay` job below exists specifically so a tracked migration
 silently never landing can't happen again undetected.
 
-## DB schema drift (`db-schema-drift`)
+## DB schema drift (`db-schema-drift.yml`)
 
 `backend/supabase/schema_snapshot.sql` is a real capture of the live
 project's `public` schema (via pg_catalog introspection — see its header),
 not hand-written. Its header records `SNAPSHOT_BASELINE_PHASE` — the last
-migration phase already folded into it. On every PR, `db-schema-drift`
-loads the snapshot into a disposable `postgres:16` service container
-(after `backend/supabase/ci_stubs.sql` stubs the Supabase-managed `auth`
-schema and two untracked helper functions — see that file's header), then
-applies every tracked migration numbered higher than the baseline, in
-order. If a new migration doesn't apply cleanly against the tracked
-baseline, this job fails and says exactly which file broke. No live
-credentials needed — nothing here compares against the actual live
-project. That's a separate, harder problem (a scheduled job calling
-`fn_schema_fingerprint()` against the live database) deferred until
-someone adds live Supabase secrets to the repo.
+migration phase already folded into it. On any PR touching
+`backend/supabase/migrations/**`, `schema_snapshot.sql`, or `ci_stubs.sql`,
+`migration-replay` loads the snapshot into a disposable `postgres:16`
+service container (after `backend/supabase/ci_stubs.sql` stubs the
+Supabase-managed `auth` schema, the `authenticated`/`anon` PostgREST roles,
+and two untracked helper functions — see that file's header), then applies
+every tracked migration numbered higher than the baseline, in order. If a
+new migration doesn't apply cleanly against the tracked baseline, this job
+fails and says exactly which file broke.
+
+That alone only proves the DDL parses — connecting as the postgres
+superuser bypasses RLS entirely regardless of what any policy says, so a
+migration could break access control while still applying cleanly. The
+job's last step, `backend/supabase/ci_rls_regression_check.sql`, closes
+that gap: it seeds a facility/profile/case record, then `SET ROLE
+authenticated` and simulates two real requests via
+`set_config('request.jwt.claims', ...)` — a user with a self-set
+`user_metadata.role = "admin"` but no matching `public.profiles` row
+(must see nothing), and a real admin with a matching row (must see
+everything) — the same functional technique used to verify the phase32
+fix by hand (docs/DECISIONS.md §36), now re-run on every relevant PR
+instead of once.
+
+No live credentials needed for either step — nothing here compares against
+the actual live project. That's a separate, harder problem
+(`live-schema-fingerprint`, calling `fn_schema_fingerprint()` against the
+live database weekly) deferred until someone adds live Supabase secrets to
+the repo.
 
 The baseline doesn't need to be bumped when you add a migration —
 migrations just keep layering on top of it indefinitely. Only regenerate
 `schema_snapshot.sql` (and bump `SNAPSHOT_BASELINE_PHASE`) if you want to
 fold migrations in to keep the container-load step fast, or if you
 discover further untracked live drift that needs recapturing the way §35
-did.
+and §36 did.
 
 ## What CI actually runs automatically
 
 On every PR: `ruff check` (backend), the pytest suite minus `test_e2e.py`
 (backend), `npm run build` (frontend), the `tests/a11y.spec.js` axe-core
-scan (`a11y-frontend-pr`), the DB schema-drift check (`db-schema-drift`),
-CodeQL analysis (Python + JS/TypeScript + GitHub Actions workflows) — all
-in `.github/workflows/ci.yml`. Separately, on any PR/push touching
+scan (`a11y-frontend-pr`), CodeQL analysis (Python + JS/TypeScript +
+GitHub Actions workflows) — all in `.github/workflows/ci.yml`. On any PR
+touching `backend/supabase/migrations/**`, `schema_snapshot.sql`, or
+`ci_stubs.sql`: `migration-replay` in `.github/workflows/db-schema-drift.yml`
+(above). Separately, on any PR/push touching
 `apps/api/**` or `packages/clinical-core/**`:
 `.github/workflows/api-edge-function.yml`'s `test` job (fmt/lint/typecheck
 + the 121-test Deno suite above). `offline.spec.js` is documented above as

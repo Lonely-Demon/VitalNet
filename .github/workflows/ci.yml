@@ -120,62 +120,6 @@ jobs:
           path: apps/web/playwright-report/
           retention-days: 14
 
-  db-schema-drift:
-    # Verifies every tracked migration newer than schema_snapshot.sql's
-    # baseline actually applies cleanly on top of it. Doesn't need live
-    # Supabase credentials — schema_snapshot.sql is a real pg_catalog
-    # capture of the live project (see its header + docs/DECISIONS.md for
-    # how it was obtained), not a hand-written guess, and this job replays
-    # tracked migrations against a disposable Postgres service container.
-    # This exists because backend/supabase/migrations/phase28 through
-    # phase31 sat committed in git for a while without ever being applied
-    # to the live project — every apps/api endpoint that depended on them
-    # was broken and nothing caught it. This job is what would have.
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    if: github.event_name == 'pull_request'
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-      - name: Stub Supabase-managed objects (auth schema, untracked helper fns)
-        run: psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f backend/supabase/ci_stubs.sql
-      - name: Load schema_snapshot.sql baseline
-        run: psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f backend/supabase/schema_snapshot.sql
-      - name: Apply every migration newer than the snapshot's baseline
-        run: |
-          baseline=$(grep -oP '^-- SNAPSHOT_BASELINE_PHASE=\K[0-9]+' backend/supabase/schema_snapshot.sql)
-          echo "Snapshot baseline: phase $baseline"
-          applied=0
-          # Sort numerically by phase number, not lexicographically by filename
-          # (lexicographic sort silently breaks once phase numbers cross a digit
-          # boundary, e.g. phase9 vs phase10 — "phase10" < "phase9" as strings).
-          for f in $(for m in backend/supabase/migrations/phase*.sql; do
-                       phase=$(basename "$m" | grep -oP '^phase\K[0-9]+')
-                       echo "$phase $m"
-                     done | sort -n -k1,1 | cut -d' ' -f2-); do
-            phase=$(basename "$f" | grep -oP '^phase\K[0-9]+')
-            if [ "$phase" -gt "$baseline" ]; then
-              echo "Applying $f ..."
-              psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f "$f"
-              applied=$((applied + 1))
-            fi
-          done
-          echo "Applied $applied migration(s) beyond the snapshot baseline."
-
   test-backend:
     runs-on: ubuntu-latest
     timeout-minutes: 15

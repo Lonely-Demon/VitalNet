@@ -1,35 +1,39 @@
-name: DB Live Schema Fingerprint
+name: DB Schema Drift Detection
 
-# Complements the `db-schema-drift` job in ci.yml (Round 6 rebuild plan,
-# item 4 / DECISIONS.md §29, §32, §35, §36), both aimed at the same failure
-# mode: a change made directly against the live database, outside any
-# tracked migration (§25 recorded one such incident — an undocumented
-# profiles_role_check CHECK constraint edit that silently blocked the new
-# 'supervisor' role until discovered during manual E2E testing; §35 later
-# found four tracked migrations — phase28 through phase31 — that had gone
-# the other direction and sat committed for a while without ever being
-# applied live).
+# Two complementary checks (Round 6 rebuild plan, item 4 / DECISIONS.md
+# §29, §32, §35, §36), both aimed at the same failure mode: a change made
+# directly against the live database, outside any tracked migration (§25
+# recorded one such incident — an undocumented profiles_role_check CHECK
+# constraint edit that silently blocked the new 'supervisor' role until
+# discovered during manual E2E testing; §35 found four tracked migrations
+# — phase28 through phase31 — that had gone the other direction and sat
+# committed for a while without ever being applied live; §36 found a
+# third instance, profiles_select_policy_hardened's tracked definition
+# having silently diverged from what's actually live).
 #
-# ci.yml's `db-schema-drift` job handles the PR-time half: it replays every
-# migration newer than backend/supabase/schema_snapshot.sql's baseline
-# phase against a disposable Postgres container on every PR, catching a
-# migration that doesn't apply cleanly before it merges. It needs no live
-# credentials.
-#
-# This workflow handles the half that job architecturally cannot: drift
-# that happens directly against the live project, with no migration file
-# at all. live-schema-fingerprint calls the live project's
-# fn_schema_fingerprint() (phase28) weekly and compares it to the last
-# known-good value.
-#
-# HISTORY: this file previously also carried a `pr-migration-lint` job that
-# predated schema_snapshot.sql and depended on a schema_baseline.sql that
-# was never created — it never actually ran (gated behind a file-existence
-# check that was always false) and is now superseded by ci.yml's working
-# db-schema-drift job, so it was removed rather than left as dead,
-# never-triggering CI.
+#   1. migration-replay: on any PR touching backend/supabase/migrations/**
+#      or the snapshot/stub files, replays backend/supabase/schema_snapshot.sql
+#      (a real pg_catalog capture, not hand-written) plus every tracked
+#      migration numbered higher than its SNAPSHOT_BASELINE_PHASE against a
+#      disposable Postgres container, then runs a functional RLS regression
+#      check (ci_rls_regression_check.sql) — connecting as the postgres
+#      superuser only proves DDL parses, since RLS doesn't apply to
+#      superusers; the regression check actually SET ROLEs to a restricted
+#      role and verifies row visibility the way PostgREST does. Needs no
+#      live credentials. Path-scoped so it doesn't run on every unrelated
+#      PR.
+#   2. live-schema-fingerprint: weekly + on demand, calls the live
+#      project's fn_schema_fingerprint() (phase28) and compares it to the
+#      last known-good value, catching drift with no migration file at all
+#      — the half migration-replay architecturally cannot catch.
 
 on:
+  pull_request:
+    paths:
+      - "backend/supabase/migrations/**"
+      - "backend/supabase/schema_snapshot.sql"
+      - "backend/supabase/ci_stubs.sql"
+      - "backend/supabase/ci_rls_regression_check.sql"
   schedule:
     - cron: "23 5 * * 1" # weekly, Monday
   workflow_dispatch: {}
@@ -38,7 +42,62 @@ permissions:
   contents: read
 
 jobs:
+  migration-replay:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Stub Supabase-managed objects (auth schema, PostgREST roles, untracked helper fns)
+        run: psql "$DB_URL" -v ON_ERROR_STOP=1 -f backend/supabase/ci_stubs.sql
+
+      - name: Load schema_snapshot.sql baseline
+        run: psql "$DB_URL" -v ON_ERROR_STOP=1 -f backend/supabase/schema_snapshot.sql
+
+      - name: Apply every migration newer than the snapshot's baseline
+        run: |
+          set -euo pipefail
+          baseline=$(grep -oP '^-- SNAPSHOT_BASELINE_PHASE=\K[0-9]+' backend/supabase/schema_snapshot.sql)
+          echo "Snapshot baseline: phase $baseline"
+          applied=0
+          # sort -V (version sort) orders phase9 before phase10 before
+          # phase27 natively — no need to hand-extract and re-sort phase
+          # numbers. Reads null-delimited to survive a filename with a
+          # space, matching this repo's phaseNN_description.sql convention
+          # either way.
+          while IFS= read -r -d '' f; do
+            phase=$(basename "$f" | grep -oP '^phase\K[0-9]+')
+            if [ "$phase" -gt "$baseline" ]; then
+              echo "Applying $f ..."
+              psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$f"
+              applied=$((applied + 1))
+            fi
+          done < <(printf '%s\0' backend/supabase/migrations/phase*.sql | sort -zV)
+          echo "Applied $applied migration(s) beyond the snapshot baseline."
+
+      - name: Functional RLS regression check
+        run: psql "$DB_URL" -v ON_ERROR_STOP=1 -f backend/supabase/ci_rls_regression_check.sql
+
   live-schema-fingerprint:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

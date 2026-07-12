@@ -1657,3 +1657,96 @@ pattern as §35), re-verified, and only then documented and committed.
 `case_records`, `profiles`, and `case_referrals` (dropped entirely) all
 resolved. `facilities`' policy situation was not part of this pass and
 remains open.
+
+### 37. Reviewing the PR for §35/§36 found three more real bugs — two more untracked-drift instances and an unscoped CI job
+
+**Context**: before merging the PR carrying §35/§36's work, it got a
+multi-angle automated code review (10 independent finder passes — line-by-line,
+removed-behavior, cross-file, language-pitfall, wrapper-correctness, reuse,
+simplification, efficiency, altitude, conventions) against the full diff.
+Several angles converged independently on the same issues, which is what
+made them worth chasing down rather than a single low-confidence flag.
+
+**A third instance of tracked-vs-live drift, in a migration nobody had
+reason to suspect**: two review angles independently noticed that
+`phase15_data_security_hardening.sql` — a migration years older than this
+PR, untouched by it — tracks `profiles_select_policy_hardened` using an
+inline self-join `EXISTS` check, but `schema_snapshot.sql`'s live capture
+shows the real, live policy calls `get_user_role()`/`get_user_facility()`
+instead (the same functions §36 tracks for the first time in phase33).
+Verified directly (`grep` on both files, side by side): confirmed real.
+Someone changed this policy against the live project outside any tracked
+migration, at some unknown point before this session's involvement — a
+third instance of the exact failure mode phase28-31 (§35) and the
+JWT-metadata policies (§36) already surfaced twice. `phase35_retrack_
+profiles_select_policy_hardened.sql` fixes it: applying it live is a
+no-op (it reproduces what's already there verbatim), but it corrects the
+migration history itself, which otherwise would hand a fresh
+bootstrap-from-migrations project the wrong, years-stale policy.
+
+**A real, live indexing bug caused by this PR's own `case_referrals`
+drop**: a third review angle found that `phase19_referrals.sql`'s `CREATE
+INDEX IF NOT EXISTS idx_referrals_case_id`/`idx_referrals_status` on
+`public.referrals` silently no-op'd when it originally ran — Postgres
+index names are schema-scoped, not table-scoped, and `case_referrals` (a
+different table) already had indexes by those exact names. Confirmed via
+`schema_snapshot.sql`: `public.referrals`, the table the referral workflow
+actually uses, has been missing both indexes since. phase34 (dropping
+`case_referrals`) frees the names but doesn't recreate them on the right
+table; `phase36_backfill_referrals_indexes.sql` does.
+
+**The new `db-schema-drift` CI job had no path filter**: added directly
+to `ci.yml`, it ran on every PR regardless of whether anything relevant
+changed — a regression from the job it replaced, which was properly
+path-scoped. Fixed by moving it back into its own
+`.github/workflows/db-schema-drift.yml` (as `migration-replay`, alongside
+`live-schema-fingerprint`), restoring `paths:` scoping to
+`backend/supabase/migrations/**`, `schema_snapshot.sql`, and
+`ci_stubs.sql`.
+
+**CI only ever proved DDL parses, never that RLS actually restricts
+access**: four review angles converged on this independently. The
+`migration-replay` job connects as the `postgres` superuser, and RLS does
+not apply to superusers regardless of policy content — so a future
+migration that reintroduced the exact `user_metadata` JWT-trust pattern
+phase32 fixes would apply cleanly and pass CI. Fixed by adding
+`backend/supabase/ci_rls_regression_check.sql` as a job step: it seeds a
+facility/profile/case record, then `SET ROLE authenticated` and simulates
+two real requests via `set_config('request.jwt.claims', ...)` — the same
+functional technique used to hand-verify the phase32 fix (§36), now
+re-run on every relevant PR. Verified it actually has teeth, not just a
+vacuous pass: deliberately reverted `asha_select_own` to the vulnerable
+JWT-trusting version locally and confirmed the check fails loudly with a
+clear message; restored the fix and confirmed it passes again.
+
+**Smaller fixes from the same pass, all verified**: `ci_stubs.sql`'s
+`auth.role()` defaulted to `'anon'` when `request.jwt.claims` was unset;
+real Supabase's returns `NULL` in that state, and defaulting could mask a
+test that forgot to call `set_config` at all — fixed to match.
+`ci_stubs.sql` also gained the `authenticated`/`anon` PostgREST roles
+(needed for the new regression check to `SET ROLE` at all) via `ALTER
+DEFAULT PRIVILEGES`, not a plain `GRANT ... ON ALL TABLES`, since the
+grant runs before `schema_snapshot.sql` creates any tables and a
+snapshot-style grant would silently apply to nothing. An unused
+`CREATE EXTENSION pgcrypto` was removed (nothing loaded afterward calls
+anything from it). The migration-ordering loop was simplified from a
+hand-rolled extract-pair-sort-strip pipeline to `sort -V`, matching what
+the job it replaced already did, with a null-delimited read loop to
+survive a filename with a space.
+
+**Found, not fixed — genuinely lower severity or out of scope**:
+`case_records_update_policy`'s `WITH CHECK` clause contains a tautological
+`submitted_by = submitted_by`, which on its own would let any doctor/admin
+UPDATE silently reassign a case's `submitted_by`. Checked before treating
+this as urgent: phase15 also created a `BEFORE UPDATE` trigger
+(`trg_protect_case_records_submitted_by`) that independently `RAISE
+EXCEPTION`s if `submitted_by` changes, and cannot be bypassed by RLS
+policy text — the tautology is real, confusing dead code, but not
+currently exploitable, since the trigger is the actual enforcement
+mechanism. Left as a documented cleanup item rather than an urgent fix.
+`facilities_public_read USING (true)` OR-combining with the stricter
+`facilities_select_policy` was already documented as open in §36; nothing
+new here. A live-vs-mocked gap remains even after this PR:
+`live-schema-fingerprint` still needs `SUPABASE_URL`/
+`SUPABASE_SERVICE_ROLE_KEY`/`EXPECTED_SCHEMA_FINGERPRINT` configured by the
+user before it does anything beyond warning — unchanged from §35.

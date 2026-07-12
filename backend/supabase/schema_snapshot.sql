@@ -11,23 +11,28 @@
 -- docs/DECISIONS.md for the full story of how this was obtained and why
 -- SNAPSHOT_BASELINE_PHASE (below) matters.
 --
--- CI (.github/workflows/ci.yml's db-schema-drift job) loads this file into
--- a fresh Postgres container, then applies every tracked migration with a
--- phase number greater than SNAPSHOT_BASELINE_PHASE, in order — verifying
--- new migrations actually apply cleanly against a known-good ancestor
--- state. It does NOT need to be regenerated when a new migration is added;
--- migrations layer on top of it indefinitely. Only bump
--- SNAPSHOT_BASELINE_PHASE (and regenerate this file) if you want to
--- periodically fold migrations into the baseline to keep CI fast, or if
--- you discover further untracked live drift that needs recapturing.
+-- CI (.github/workflows/db-schema-drift.yml's migration-replay job) loads
+-- this file into a fresh Postgres container, then applies every tracked
+-- migration with a phase number greater than SNAPSHOT_BASELINE_PHASE, in
+-- order — verifying new migrations actually apply cleanly against a
+-- known-good ancestor state, then runs a functional RLS regression check
+-- on top (ci_rls_regression_check.sql). It does NOT need to be
+-- regenerated when a new migration is added; migrations layer on top of
+-- it indefinitely. Only bump SNAPSHOT_BASELINE_PHASE (and regenerate this
+-- file) if you want to periodically fold migrations into the baseline to
+-- keep CI fast, or if you discover further untracked live drift that
+-- needs recapturing.
 --
--- Known gap: two functions referenced by profiles_select_policy_hardened
--- below — get_user_role(uuid) and get_user_facility(uuid) — exist on the
--- live project but appear in NO tracked migration anywhere in this repo.
--- They're stubbed for CI in the db-schema-drift job (not defined here,
--- since this file should only contain what's genuinely tracked/verified).
--- Recommended follow-up: pull their real definitions via
--- pg_get_functiondef() and add a proper migration for them.
+-- Scope: this captures tables, columns, constraints, indexes, and RLS
+-- policies — the introspection query does NOT cover functions or
+-- triggers. Two functions referenced by profiles_select_policy_hardened
+-- below, get_user_role(uuid)/get_user_facility(uuid), are tracked
+-- separately as of phase33_track_get_user_role_and_facility.sql (stubbed
+-- here only as CI placeholders so this file's own CREATE POLICY succeeds
+-- before phase33 runs). Other functions/triggers phase10-27 define (e.g.
+-- phase15's trg_protect_case_records_submitted_by) are NOT recreated by
+-- loading this file — CI's migration-replay only verifies DDL shape
+-- (tables/constraints/indexes/policies), not full runtime behavior.
 
 -- SNAPSHOT_BASELINE_PHASE=27
 
