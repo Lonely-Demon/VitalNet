@@ -162,7 +162,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
     `}>
       {/* Triage-tag signature: a perforated severity edge, echoing a real
           mass-casualty tag torn along a dotted line to the tier that
-          applies — see docs/DECISIONS.md. */}
+          applies — see docs/DECISIONS.md §34. */}
       <div className={`w-[7px] shrink-0 tag-perforated ${tierBg}`} aria-hidden="true"></div>
       <div className="flex-1 min-w-0">
       {/* Header — always visible */}

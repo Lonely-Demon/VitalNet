@@ -74,7 +74,7 @@
      Brand chroma (forest/sage/mint/leaf) is teal, deliberately outside the
      red/amber/green used for triage tiers below — the app's own color never
      competes with the one signal that must never be ambiguous. See
-     docs/DECISIONS.md for the full rationale. */
+     docs/DECISIONS.md §34 for the full rationale. */
 
   /* Backgrounds — cool, not cream */
   --color-bg: #F3F5F3;

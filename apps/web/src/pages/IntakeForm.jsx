@@ -91,9 +91,9 @@ const SEX_OPTIONS = ["male", "female", "other"]
 const SPEECH_LANG_MAP = { en: "en-US", hi: "hi-IN", ta: "ta-IN" }
 
 const BADGE_COLORS = {
-  EMERGENCY: "bg-emergency/10 text-emergency border border-emergency/30",
-  URGENT: "bg-urgent/10 text-urgent border border-urgent/30",
-  ROUTINE: "bg-routine/10 text-routine border border-routine/30",
+  EMERGENCY: "bg-emergency text-white",
+  URGENT: "bg-urgent text-white",
+  ROUTINE: "bg-routine text-white",
 }
 
 // Preliminary-result card styling — container (border + faint bg) and badge
@@ -331,7 +331,7 @@ export default function IntakeForm() {
                       {offlineTriage.triageLevel}
                     </span>
                   ) : (
-                    <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono bg-text3/10 text-text3">
+                    <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide font-mono bg-text3 text-white">
                       {t('intakeForm.preliminary.pendingBadge')}
                     </span>
                   )}
