@@ -173,16 +173,46 @@ This tests 100% of your own frontend/backend code paths for real; only the
 third-party auth transport is faked, and it's faked with real captured
 data, not fabricated data.
 
+## apps/api (Supabase Edge Functions)
+
+```bash
+cd packages/clinical-core && pnpm run build   # apps/api's deno.json import map
+                                                # resolves @vitalnet/clinical-core
+                                                # from its compiled dist/, same
+                                                # gotcha as the a11y suite above
+cd apps/api/supabase/functions/api
+deno test --allow-env --allow-read --allow-net
+```
+121 tests across every `_shared/*.ts` module and route helper — auth (hybrid
+JWT + JWKS), rate limiting, CSRF/device guard, scoping, the analytics
+percentile math (had to match Python's round-half-to-even `round()` exactly),
+team metrics, EARS outbreak signals, voice transcription fallback ordering,
+idempotency, etc. All self-contained (mocked `fetch`/Supabase clients) — no
+live Supabase project or secrets needed, wired into CI as `apps-api-test`
+(PR-triggered). This suite existed on disk for a while before it was
+actually wired into CI — if you're adding a new `_shared/` module, add its
+test file under `test/` following the existing pattern, and don't assume CI
+will remind you if a route change breaks an untested one.
+
+Not covered by any of this: `apps/api` has never been deployed to a real
+Supabase project. Everything above is unit/contract-level — things like
+JWKS verification against a project's actual signing algorithm, real RPC
+call shapes, or Deno's `web-push` npm-compat can only be proven by a live
+smoke test against an actual project, which needs real credentials.
+`apps/web/src/api/base.js`'s `ENDPOINT_BACKEND` map still routes every
+endpoint to `'legacy'` (the FastAPI backend) for this reason — nothing is
+actually cut over yet.
+
 ## What CI actually runs automatically
 
 On every PR: `ruff check` (backend), the pytest suite minus `test_e2e.py`
 (backend), `npm run build` (frontend), the `tests/a11y.spec.js` axe-core
-scan (`a11y-frontend-pr`), CodeQL analysis (Python + JS/TypeScript +
-GitHub Actions workflows). `offline.spec.js` is documented above as
-something a contributor should run locally — check
-`.github/workflows/ci.yml` for the exact current CI job list, since this
-doc can drift from it (the workflow file is the source of truth for what
-actually gates merges).
+scan (`a11y-frontend-pr`), the apps/api Deno suite (`apps-api-test`),
+CodeQL analysis (Python + JS/TypeScript + GitHub Actions workflows).
+`offline.spec.js` is documented above as something a contributor should
+run locally — check `.github/workflows/ci.yml` for the exact current CI
+job list, since this doc can drift from it (the workflow file is the source
+of truth for what actually gates merges).
 
 ## Adding a new test
 
