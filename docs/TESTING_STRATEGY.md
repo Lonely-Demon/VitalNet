@@ -173,16 +173,102 @@ This tests 100% of your own frontend/backend code paths for real; only the
 third-party auth transport is faked, and it's faked with real captured
 data, not fabricated data.
 
+## apps/api (Supabase Edge Functions)
+
+```bash
+cd packages/clinical-core && pnpm run build   # apps/api's deno.json import map
+                                                # resolves @vitalnet/clinical-core
+                                                # from its compiled dist/, same
+                                                # gotcha as the a11y suite above
+cd apps/api/supabase/functions/api
+deno test --allow-net --allow-env
+```
+121 tests across every `_shared/*.ts` module and route helper — auth (hybrid
+JWT + JWKS), rate limiting, CSRF/device guard, scoping, the analytics
+percentile math (had to match Python's round-half-to-even `round()` exactly),
+team metrics, EARS outbreak signals, voice transcription fallback ordering,
+idempotency, etc. All self-contained (mocked `fetch`/Supabase clients) — no
+live Supabase project or secrets needed. Wired into CI via
+`.github/workflows/api-edge-function.yml`'s `test` job (fmt/lint/typecheck
+too), which runs on every PR/push touching `apps/api/**` or
+`packages/clinical-core/**` — has since the Round 6 rebuild's Phase 3 (PR
+#54). If you're adding a new `_shared/` module, add its test file under
+`test/` following the existing pattern, and don't assume CI will remind you
+if a route change breaks an untested one.
+
+Not covered by any of this: `apps/api` has never been deployed to a real
+Supabase project. Everything above is unit/contract-level — things like
+JWKS verification against a project's actual signing algorithm, or Deno's
+`web-push` npm-compat, can only be proven by a live smoke test against an
+actual project, which needs real credentials. `apps/web/src/api/base.js`'s
+`ENDPOINT_BACKEND` map still routes every endpoint to `'legacy'` (the
+FastAPI backend) for this reason — nothing is actually cut over yet.
+
+Real RPC call shapes are now schema-verified, though: a testing pass found
+that `backend/supabase/migrations/phase28` through `phase31` — the
+SECURITY DEFINER functions every one of `apps/api`'s RPC calls depends on,
+including `fn_rate_limit` which the middleware calls on every request —
+had never been applied to the live project (docs/DECISIONS.md §35 has the
+full story). They have now been applied and re-verified live. The
+`migration-replay` job below exists specifically so a tracked migration
+silently never landing can't happen again undetected.
+
+## DB schema drift (`db-schema-drift.yml`)
+
+`backend/supabase/schema_snapshot.sql` is a real capture of the live
+project's `public` schema (via pg_catalog introspection — see its header),
+not hand-written. Its header records `SNAPSHOT_BASELINE_PHASE` — the last
+migration phase already folded into it. On any PR touching
+`backend/supabase/migrations/**`, `schema_snapshot.sql`, or `ci_stubs.sql`,
+`migration-replay` loads the snapshot into a disposable `postgres:16`
+service container (after `backend/supabase/ci_stubs.sql` stubs the
+Supabase-managed `auth` schema, the `authenticated`/`anon` PostgREST roles,
+and two untracked helper functions — see that file's header), then applies
+every tracked migration numbered higher than the baseline, in order. If a
+new migration doesn't apply cleanly against the tracked baseline, this job
+fails and says exactly which file broke.
+
+That alone only proves the DDL parses — connecting as the postgres
+superuser bypasses RLS entirely regardless of what any policy says, so a
+migration could break access control while still applying cleanly. The
+job's last step, `backend/supabase/ci_rls_regression_check.sql`, closes
+that gap: it seeds a facility/profile/case record, then `SET ROLE
+authenticated` and simulates two real requests via
+`set_config('request.jwt.claims', ...)` — a user with a self-set
+`user_metadata.role = "admin"` but no matching `public.profiles` row
+(must see nothing), and a real admin with a matching row (must see
+everything) — the same functional technique used to verify the phase32
+fix by hand (docs/DECISIONS.md §36), now re-run on every relevant PR
+instead of once.
+
+No live credentials needed for either step — nothing here compares against
+the actual live project. That's a separate, harder problem
+(`live-schema-fingerprint`, calling `fn_schema_fingerprint()` against the
+live database weekly) deferred until someone adds live Supabase secrets to
+the repo.
+
+The baseline doesn't need to be bumped when you add a migration —
+migrations just keep layering on top of it indefinitely. Only regenerate
+`schema_snapshot.sql` (and bump `SNAPSHOT_BASELINE_PHASE`) if you want to
+fold migrations in to keep the container-load step fast, or if you
+discover further untracked live drift that needs recapturing the way §35
+and §36 did.
+
 ## What CI actually runs automatically
 
 On every PR: `ruff check` (backend), the pytest suite minus `test_e2e.py`
 (backend), `npm run build` (frontend), the `tests/a11y.spec.js` axe-core
 scan (`a11y-frontend-pr`), CodeQL analysis (Python + JS/TypeScript +
-GitHub Actions workflows). `offline.spec.js` is documented above as
-something a contributor should run locally — check
-`.github/workflows/ci.yml` for the exact current CI job list, since this
-doc can drift from it (the workflow file is the source of truth for what
-actually gates merges).
+GitHub Actions workflows) — all in `.github/workflows/ci.yml`. On any PR
+touching `backend/supabase/migrations/**`, `schema_snapshot.sql`, or
+`ci_stubs.sql`: `migration-replay` in `.github/workflows/db-schema-drift.yml`
+(above). Separately, on any PR/push touching
+`apps/api/**` or `packages/clinical-core/**`:
+`.github/workflows/api-edge-function.yml`'s `test` job (fmt/lint/typecheck
++ the 121-test Deno suite above). `offline.spec.js` is documented above as
+something a contributor should run locally — check the two workflow files
+for the exact current CI job list, since this doc can drift from them (the
+workflow files are the source of truth for what actually gates merges).
 
 ## Adding a new test
 

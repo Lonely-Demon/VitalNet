@@ -1,36 +1,39 @@
 name: DB Schema Drift Detection
 
 # Two complementary checks (Round 6 rebuild plan, item 4 / DECISIONS.md
-# §29, §32) aimed at the same failure mode: a change made directly against
-# the live database, outside any tracked migration (§25 already recorded
-# one such incident — an undocumented profiles_role_check CHECK constraint
-# edit that silently blocked the new 'supervisor' role until discovered
-# during manual E2E testing).
+# §29, §32, §35, §36), both aimed at the same failure mode: a change made
+# directly against the live database, outside any tracked migration (§25
+# recorded one such incident — an undocumented profiles_role_check CHECK
+# constraint edit that silently blocked the new 'supervisor' role until
+# discovered during manual E2E testing; §35 found four tracked migrations
+# — phase28 through phase31 — that had gone the other direction and sat
+# committed for a while without ever being applied live; §36 found a
+# third instance, profiles_select_policy_hardened's tracked definition
+# having silently diverged from what's actually live).
 #
-#   1. pr-migration-lint: on a PR touching backend/supabase/migrations/**,
-#      replays backend/supabase/schema_baseline.sql (if present) plus every
-#      tracked migration in order against a fresh Postgres, then diffs the
-#      resulting schema against the committed backend/supabase/schema_snapshot.sql.
+#   1. migration-replay: on any PR touching backend/supabase/migrations/**
+#      or the snapshot/stub files, replays backend/supabase/schema_snapshot.sql
+#      (a real pg_catalog capture, not hand-written) plus every tracked
+#      migration numbered higher than its SNAPSHOT_BASELINE_PHASE against a
+#      disposable Postgres container, then runs a functional RLS regression
+#      check (ci_rls_regression_check.sql) — connecting as the postgres
+#      superuser only proves DDL parses, since RLS doesn't apply to
+#      superusers; the regression check actually SET ROLEs to a restricted
+#      role and verifies row visibility the way PostgREST does. Needs no
+#      live credentials. Path-scoped so it doesn't run on every unrelated
+#      PR.
 #   2. live-schema-fingerprint: weekly + on demand, calls the live
 #      project's fn_schema_fingerprint() (phase28) and compares it to the
-#      last known-good value, catching drift this repo's migrations never
-#      caused in the first place.
-#
-# KNOWN GAP (documented, not silently worked around): this repo's earliest
-# tracked migration is phase10 — the base tables (profiles, case_records,
-# facilities, ...) predate migration tracking and are not themselves in any
-# committed .sql file (DECISIONS.md §25, §29). Until backend/supabase/schema_baseline.sql
-# exists (a one-time `pg_dump --schema-only` of a real project, taken once
-# and committed), job 1 cannot replay from scratch and intentionally
-# no-ops with a loud warning instead of either failing every unrelated PR
-# or silently passing on a fake baseline.
+#      last known-good value, catching drift with no migration file at all
+#      — the half migration-replay architecturally cannot catch.
 
 on:
   pull_request:
     paths:
       - "backend/supabase/migrations/**"
-      - "backend/supabase/schema_baseline.sql"
       - "backend/supabase/schema_snapshot.sql"
+      - "backend/supabase/ci_stubs.sql"
+      - "backend/supabase/ci_rls_regression_check.sql"
   schedule:
     - cron: "23 5 * * 1" # weekly, Monday
   workflow_dispatch: {}
@@ -39,10 +42,10 @@ permissions:
   contents: read
 
 jobs:
-  pr-migration-lint:
+  migration-replay:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     services:
       postgres:
         image: postgres:16
@@ -56,70 +59,42 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      PGPASSWORD: postgres
-      PGHOST: localhost
-      PGUSER: postgres
-      DB: driftcheck
+      DB_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
 
-      - name: Check for a tracked base-schema snapshot
-        id: baseline
-        run: |
-          if [ -f backend/supabase/schema_baseline.sql ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::backend/supabase/schema_baseline.sql does not exist yet, so this job cannot replay the schema from scratch (the tracked migrations start at phase10 and ALTER tables no committed file CREATEs — see this workflow's header). Generate it once with: pg_dump --schema-only --no-owner --no-privileges <staging-or-prod-connection-string> > backend/supabase/schema_baseline.sql, review it for anything environment-specific, and commit it. Skipping this check (not failing the PR) until that exists."
-          fi
+      - name: Stub Supabase-managed objects (auth schema, PostgREST roles, untracked helper fns)
+        run: psql "$DB_URL" -v ON_ERROR_STOP=1 -f backend/supabase/ci_stubs.sql
 
-      - name: Create scratch database
-        if: steps.baseline.outputs.present == 'true'
-        run: psql -c "CREATE DATABASE ${DB};"
+      - name: Load schema_snapshot.sql baseline
+        run: psql "$DB_URL" -v ON_ERROR_STOP=1 -f backend/supabase/schema_snapshot.sql
 
-      - name: Apply baseline + all tracked migrations in order
-        if: steps.baseline.outputs.present == 'true'
+      - name: Apply every migration newer than the snapshot's baseline
         run: |
           set -euo pipefail
-          psql -d "$DB" -v ON_ERROR_STOP=1 -f backend/supabase/schema_baseline.sql
-          for f in $(ls backend/supabase/migrations/*.sql | sort -V); do
-            echo "Applying $f"
-            psql -d "$DB" -v ON_ERROR_STOP=1 -f "$f"
-          done
+          baseline=$(grep -oP '^-- SNAPSHOT_BASELINE_PHASE=\K[0-9]+' backend/supabase/schema_snapshot.sql)
+          echo "Snapshot baseline: phase $baseline"
+          applied=0
+          # sort -V (version sort) orders phase9 before phase10 before
+          # phase27 natively — no need to hand-extract and re-sort phase
+          # numbers. Reads null-delimited to survive a filename with a
+          # space, matching this repo's phaseNN_description.sql convention
+          # either way.
+          while IFS= read -r -d '' f; do
+            phase=$(basename "$f" | grep -oP '^phase\K[0-9]+')
+            if [ "$phase" -gt "$baseline" ]; then
+              echo "Applying $f ..."
+              psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$f"
+              applied=$((applied + 1))
+            fi
+          done < <(printf '%s\0' backend/supabase/migrations/phase*.sql | sort -zV)
+          echo "Applied $applied migration(s) beyond the snapshot baseline."
 
-      - name: Dump resulting schema
-        if: steps.baseline.outputs.present == 'true'
-        run: |
-          pg_dump --schema-only --no-owner --no-privileges -d "$DB" \
-            | grep -v '^--' | grep -v '^$' > /tmp/schema_dump.sql
-
-      - name: Diff against the committed snapshot
-        id: diff
-        if: steps.baseline.outputs.present == 'true'
-        run: |
-          if [ ! -f backend/supabase/schema_snapshot.sql ]; then
-            echo "::warning::backend/supabase/schema_snapshot.sql does not exist yet — uploading the freshly replayed schema as a build artifact instead of failing. Review it and commit it as the initial snapshot to turn this into a real drift check."
-            # Copied into the workspace (not /tmp): upload-artifact and the
-            # step-output gate below both operate workspace-relative.
-            cp /tmp/schema_dump.sql schema_snapshot_proposed.sql
-            echo "proposed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! diff -u backend/supabase/schema_snapshot.sql /tmp/schema_dump.sql; then
-            echo "::error::Applying every tracked migration in order does not reproduce the committed schema_snapshot.sql. Either a migration is missing/wrong, or schema_snapshot.sql is stale — regenerate it (see this workflow's header) as part of this PR."
-            exit 1
-          fi
-          echo "Schema matches the committed snapshot."
-
-      - name: Upload proposed snapshot (bootstrap only)
-        # A step output, not hashFiles(): hashFiles only matches paths under
-        # GITHUB_WORKSPACE, so a /tmp path can never satisfy it and the
-        # original condition was permanently false.
-        if: steps.baseline.outputs.present == 'true' && steps.diff.outputs.proposed == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        with:
-          name: schema_snapshot_proposed
-          path: schema_snapshot_proposed.sql
+      - name: Functional RLS regression check
+        run: psql "$DB_URL" -v ON_ERROR_STOP=1 -f backend/supabase/ci_rls_regression_check.sql
 
   live-schema-fingerprint:
     if: github.event_name != 'pull_request'

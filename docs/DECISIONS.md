@@ -1433,3 +1433,320 @@ the first place (existing Tailwind utility classes like `bg-forest`
 kept their names, only their resolved color changed), but that inheritance
 hasn't been visually verified screen-by-screen the way ASHA/doctor flows
 were. Worth a follow-up pass if those panels are heavily used.
+
+### 35. The `dev` branch test pass that found phase28–31 were never applied to the live project — and the schema-drift CI job built from what that uncovered
+
+**Context**: asked to "test the dev branch" (the Round 6 rebuild's full TS
+surface — `packages/clinical-core`, `apps/api`, `apps/web`, plus the still-
+authoritative `backend/` FastAPI service). All four automated suites
+passed cleanly (297 tests total: clinical-core 61, backend 108, apps/api
+121 — plus a clean `apps/web` build and a11y suite). That was reassuring
+but incomplete: every one of `apps/api`'s 121 tests mocks its Supabase
+client, so none of them touch a real database. The Round 6 rebuild plan's
+own verification section called for exactly this gap to be closed with a
+live smoke test; it never was.
+
+*Correction, made while opening the PR for this work*: this entry
+originally also claimed `apps/api`'s Deno suite had never run in CI before
+this pass, and added a second CI job (`apps-api-test` in `ci.yml`) on that
+premise. That claim was wrong — `.github/workflows/api-edge-function.yml`'s
+`test` job has run this exact suite on every PR/push touching `apps/api`
+or `packages/clinical-core` since the Round 6 rebuild's Phase 3 (PR #54),
+well before this pass. The duplicate `apps-api-test` job has been removed
+from `ci.yml`; `api-edge-function.yml` remains the one place this suite
+runs, more correctly path-scoped than the duplicate was. The one genuine
+CI gap this pass found and closed was the schema-drift check below.
+
+**What "test the dev branch" actually found**: closing the one real CI gap
+surfaced by that pass (the DB schema-drift job from Phase 2 of the Round 6
+plan was never built) required a real schema snapshot from the live
+Supabase project. Getting one — via a
+pg_catalog introspection query run in the SQL Editor, not `pg_dump`, since
+the user only had SQL Editor access, and a live connection string was
+deliberately never shared into this chat (schema DDL is safe to paste;
+passwords aren't, regardless of who's offering) — revealed that
+`backend/supabase/migrations/phase28_security_definer_fns.sql` through
+`phase31_client_event_record_fn.sql` had never been applied to the live
+project. Concretely: `case_records` was missing `model_tier`/
+`rules_fired`/`model_agreed`; the `client_events` table (the entire
+unified-outbox idempotency mechanism) didn't exist; and all 8
+`fn_*` SECURITY DEFINER functions phase28/30/31 define — including
+`fn_rate_limit`, which `apps/api`'s middleware calls on every single
+request — were absent. **`apps/api` was completely non-functional against
+the real database**, not merely unverified; it would have failed on its
+first request in production. Cross-referencing the live dump against the
+actual codebase (`grep`, not assumption) also surfaced: `case_referrals`
+is a fully orphaned table (zero references anywhere in `backend/app` or
+`apps/api` — only the separate `referrals` table, created by the tracked
+`phase19_referrals.sql`, is actually used); `get_user_role(uuid)` and
+`get_user_facility(uuid)`, called by `profiles_select_policy_hardened`,
+exist live but in no tracked migration anywhere in this repo; a duplicate
+UNIQUE constraint on `case_records.client_id`; and RLS policies on
+`profiles`, `case_records`, and `facilities` where an older, looser
+PERMISSIVE policy sits alongside a newer, more restrictive one — since
+Postgres OR-combines multiple permissive policies for the same command,
+the looser one governs effective access regardless of the newer one's
+intent (`profiles_select_policy_hardened`'s name says what it was
+*supposed* to replace). None of these were touched at the time this
+paragraph was first written — they needed the user's own judgment, not a
+unilateral fix. The RLS policies, the untracked functions, and the dead
+table were subsequently investigated, authorized, fixed, and re-verified
+live; see §36. The duplicate `UNIQUE` constraint on
+`case_records.client_id` remains open and undocumented-fix, as originally
+recorded here.
+
+**What was fixed, in order, with the user's explicit sign-off at each
+step**: (1) the four migration files — verified additive-only (no `DROP`/
+`TRUNCATE` against real data) before handing them over — were run by the
+user via the SQL Editor, in phase order; (2) re-verified via the exact
+same introspection query plus a function-existence check, both showing the
+expected post-migration state; (3) the schema-drift CI job was built from
+the *pre*-migration dump (captured earlier in the same session) as
+`backend/supabase/schema_snapshot.sql`'s baseline — recorded as
+`SNAPSHOT_BASELINE_PHASE=27` in its header — with the job applying every
+tracked migration numbered higher than that baseline to a disposable
+Postgres service container on every PR. This needs no live credentials:
+the baseline is a verified capture, not a live comparison. The one
+piece that does need credentials (a scheduled job diffing the live
+project's `fn_schema_fingerprint()` against the tracked baseline, catching
+future *live* drift the same way this pass caught past drift) is
+deliberately deferred — it needs `SUPABASE_URL`/`SERVICE_ROLE_KEY` added
+as GitHub repo secrets by the user directly, never seen by this session.
+
+**A bug the process itself caught**: loading the snapshot into a fresh
+container failed on the first attempt — `case_records.triage_priority`'s
+default was reconstructed as a bare `DEFAULT CASE triage_level ...`,
+which is illegal Postgres syntax (a column default cannot reference a
+sibling column in the same row). The live column is actually a
+`GENERATED ALWAYS AS (...) STORED` computed column; `pg_get_expr()`
+returns a generated column's expression through the same code path as a
+plain default, and the introspection query hadn't checked
+`pg_attribute.attgenerated` to distinguish the two. Fixed in both the
+committed snapshot and the introspection query itself. Caught because the
+snapshot was actually loaded into a real, disposable Postgres instance and
+the real phase28–31 files were actually applied on top of it before this
+entry was written — not merely asserted to work.
+
+**Verification, concretely**: `schema_snapshot.sql` loads cleanly into a
+fresh `postgres:16` container with the Supabase-managed objects it
+references stubbed (`backend/supabase/ci_stubs.sql` — the `auth` schema,
+plus the two untracked `get_user_role`/`get_user_facility` functions,
+clearly commented as CI-only and not a substitute for tracking them
+properly); phase28–31 apply on top with zero errors; the resulting
+schema's tables/columns/functions match the live post-migration capture
+exactly. The full loop — introspect, snapshot, reapply from scratch, diff
+— was run locally before any of it was committed.
+
+**Consequences**: `apps/api` is now schema-compatible with the live
+project for the first time, though still not deployed or cut over
+(`apps/web/src/api/base.js` still routes every endpoint to `'legacy'`) —
+that remains a separate, larger decision. Of the open items found along
+the way: the untracked functions and overlapping RLS policies were
+resolved in §36 below (phase32–34); the dead `case_referrals` table was
+dropped outright as part of that same fix. The duplicate `UNIQUE`
+constraint on `case_records.client_id` remains genuinely open, documented
+here rather than fixed, pending the user's own review.
+
+### 36. A privilege-escalation RLS vulnerability inside §35's "overlapping policies" finding — client-writable JWT metadata trusted for authorization, found and fixed
+
+**Context**: §35 flagged, as an open item requiring the user's own
+judgment, that `profiles`, `case_records`, and `facilities` had older
+PERMISSIVE RLS policies sitting alongside newer, stricter ones — Postgres
+OR-combines permissive policies, so the looser one governs regardless of
+the newer one's intent. Reading those specific policies' `USING` clauses
+turned this from a policy-hygiene finding into an actively exploitable
+privilege-escalation vulnerability.
+
+**What was found**: `doctor_update` and part of `asha_select_own` on
+`case_records`, and `profile_select` on `profiles`, authorized access by
+reading `auth.jwt() -> 'user_metadata' ->> 'role'`. `user_metadata`
+(`auth.users.raw_user_meta_data`) is writable by any authenticated user via
+Supabase's own Auth REST API (`PUT /auth/v1/user` with `{"data": {...}}`,
+using nothing but their own access token) — it is not an app-controlled
+claim, regardless of what VitalNet's own frontend does with it. Any
+authenticated user could call that endpoint directly, set
+`user_metadata.role = "admin"`, and any policy trusting that claim would
+grant them elevated access, independent of their real role in
+`public.profiles`. Because these unsafe policies were PERMISSIVE and
+coexisted with safer, stricter policies on the same tables, they silently
+widened access beyond what the safer policies alone would have allowed:
+`case_records_update_policy` already used a correct table-lookup pattern,
+but `doctor_update`'s presence OR-combined it with the unsafe check, so the
+safe policy's restriction was never actually enforced in practice. Same
+story for `profiles_select_policy_hardened` — its name says what it was
+supposed to replace, but `profile_select` (unsafe) was still active
+alongside it.
+
+A fourth location — three policies on `case_referrals` — used the
+identical pattern. Initially recorded here as a deferred follow-up on the
+reasoning that the table had zero references anywhere in the codebase
+(confirmed by grep) and so wasn't worth the risk of touching pending its
+own removal decision. That reasoning was wrong: Supabase exposes every
+`public`-schema table through its auto-generated PostgREST API regardless
+of whether an app's own code ever queries it, so "nothing in this
+codebase references it" did not mean "unreachable" — any authenticated
+user could hit `case_referrals` directly and exploit the same
+privilege-escalation path being fixed everywhere else in this entry. Once
+that was pointed out, a whole-repo grep (every `.py`/`.js`/`.jsx`/`.ts`/
+`.tsx` file, not just the two directories originally checked) confirmed
+zero references anywhere, and the table — fully superseded by the
+separate `referrals` table from `phase19_referrals.sql` — was dropped
+outright (`phase34_drop_case_referrals.sql`) rather than patched: with no
+code path reading or writing it, keeping dead schema (and any
+PHI-adjacent referral rows already stored in it) around indefinitely once
+its vulnerable policies were noticed served no purpose. No `FOREIGN KEY`
+anywhere in the schema referenced it, so the drop had no cascading
+effect; verified locally against a full phase28–34 rebuild before being
+applied live and re-verified via `SELECT to_regclass('public.case_referrals')`
+returning `NULL`.
+
+**What was fixed** (`phase32_fix_jwt_metadata_rls_vulnerability.sql`):
+dropped `doctor_update` outright (redundant with
+`case_records_update_policy`, which already does this correctly); rewrote
+`asha_select_own` to replace its JWT-trusting doctor/admin clause with the
+same `EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND
+role = ...)` table-lookup pattern, keeping its self-access clause
+(`submitted_by = auth.uid()`) unchanged; dropped `profile_select` outright,
+since `profiles_select_policy_hardened` already covers the same access
+correctly via `get_user_role()`/`get_user_facility()`.
+
+`get_user_role(uuid)`/`get_user_facility(uuid)` — flagged in §35 as
+untracked functions called by `profiles_select_policy_hardened` — were
+pulled from the live project via `pg_get_functiondef()` and inspected
+before relying on them further: both are plain `SECURITY DEFINER` lookups
+against `public.profiles`, no JWT trust, safe.
+`phase33_track_get_user_role_and_facility.sql` starts tracking their real
+definitions for the first time (`CREATE OR REPLACE`, idempotent against
+the live project's existing functions), deliberately without touching
+grants — guessing a grant state different from what's already working live
+risks narrowing access based on a guess.
+
+**Verification**: a local Postgres test database was rebuilt from
+`ci_stubs.sql` → `schema_snapshot.sql` → phase28 through phase33, seeded
+with two facilities and five profiles spanning every role, then exercised
+with nine functional RLS tests that simulate real authenticated users the
+way PostgREST does — `SET ROLE authenticated` (not `SET LOCAL`, which
+silently no-ops outside a transaction and leaves the session as the
+bypassing superuser) plus `set_config('request.jwt.claims', '{"sub":
+"...", ...}', false)` — against `ci_stubs.sql`'s
+`auth.jwt()`/`auth.uid()`/`auth.role()` stubs, upgraded from static
+placeholders to real implementations reading that same GUC so the
+simulation is behaviorally accurate rather than parse-only. Confirmed:
+legitimate access (ASHA worker sees own case; same-facility doctor sees
+facility cases; different-facility doctor sees none; real admin sees
+everything, including all 5 profiles via `profiles_select_policy_hardened`)
+is unchanged; the vulnerability itself — a user with `user_metadata.role =
+"admin"` set but no matching row in `public.profiles` — now sees zero
+cases, zero profiles beyond their own, and an UPDATE attempt affects zero
+rows. Both migrations were then applied to the live project via the SQL
+Editor and re-verified with a read-only `pg_policies` query confirming
+`doctor_update`/`profile_select` are gone and
+`asha_select_own`/`profiles_select_policy_hardened` are the only policies
+remaining on their respective commands.
+
+**Why documentation waited for the live fix**: this repository was public
+for the duration of this investigation. Committing the vulnerable
+policies' exact text and a full writeup of the exploit path before the
+live database was patched would have been a public disclosure of an
+active, unpatched privilege-escalation vulnerability in a system handling
+PHI — so the fix was applied live first (via the same SQL-Editor handoff
+pattern as §35), re-verified, and only then documented and committed.
+
+**Consequences**: every JWT-metadata privilege-escalation path §35's
+"overlapping policies" finding turned out to contain is now closed —
+`case_records`, `profiles`, and `case_referrals` (dropped entirely) all
+resolved. `facilities`' policy situation was not part of this pass and
+remains open.
+
+### 37. Reviewing the PR for §35/§36 found three more real bugs — two more untracked-drift instances and an unscoped CI job
+
+**Context**: before merging the PR carrying §35/§36's work, it got a
+multi-angle automated code review (10 independent finder passes — line-by-line,
+removed-behavior, cross-file, language-pitfall, wrapper-correctness, reuse,
+simplification, efficiency, altitude, conventions) against the full diff.
+Several angles converged independently on the same issues, which is what
+made them worth chasing down rather than a single low-confidence flag.
+
+**A third instance of tracked-vs-live drift, in a migration nobody had
+reason to suspect**: two review angles independently noticed that
+`phase15_data_security_hardening.sql` — a migration years older than this
+PR, untouched by it — tracks `profiles_select_policy_hardened` using an
+inline self-join `EXISTS` check, but `schema_snapshot.sql`'s live capture
+shows the real, live policy calls `get_user_role()`/`get_user_facility()`
+instead (the same functions §36 tracks for the first time in phase33).
+Verified directly (`grep` on both files, side by side): confirmed real.
+Someone changed this policy against the live project outside any tracked
+migration, at some unknown point before this session's involvement — a
+third instance of the exact failure mode phase28-31 (§35) and the
+JWT-metadata policies (§36) already surfaced twice. `phase35_retrack_
+profiles_select_policy_hardened.sql` fixes it: applying it live is a
+no-op (it reproduces what's already there verbatim), but it corrects the
+migration history itself, which otherwise would hand a fresh
+bootstrap-from-migrations project the wrong, years-stale policy.
+
+**A real, live indexing bug caused by this PR's own `case_referrals`
+drop**: a third review angle found that `phase19_referrals.sql`'s `CREATE
+INDEX IF NOT EXISTS idx_referrals_case_id`/`idx_referrals_status` on
+`public.referrals` silently no-op'd when it originally ran — Postgres
+index names are schema-scoped, not table-scoped, and `case_referrals` (a
+different table) already had indexes by those exact names. Confirmed via
+`schema_snapshot.sql`: `public.referrals`, the table the referral workflow
+actually uses, has been missing both indexes since. phase34 (dropping
+`case_referrals`) frees the names but doesn't recreate them on the right
+table; `phase36_backfill_referrals_indexes.sql` does.
+
+**The new `db-schema-drift` CI job had no path filter**: added directly
+to `ci.yml`, it ran on every PR regardless of whether anything relevant
+changed — a regression from the job it replaced, which was properly
+path-scoped. Fixed by moving it back into its own
+`.github/workflows/db-schema-drift.yml` (as `migration-replay`, alongside
+`live-schema-fingerprint`), restoring `paths:` scoping to
+`backend/supabase/migrations/**`, `schema_snapshot.sql`, and
+`ci_stubs.sql`.
+
+**CI only ever proved DDL parses, never that RLS actually restricts
+access**: four review angles converged on this independently. The
+`migration-replay` job connects as the `postgres` superuser, and RLS does
+not apply to superusers regardless of policy content — so a future
+migration that reintroduced the exact `user_metadata` JWT-trust pattern
+phase32 fixes would apply cleanly and pass CI. Fixed by adding
+`backend/supabase/ci_rls_regression_check.sql` as a job step: it seeds a
+facility/profile/case record, then `SET ROLE authenticated` and simulates
+two real requests via `set_config('request.jwt.claims', ...)` — the same
+functional technique used to hand-verify the phase32 fix (§36), now
+re-run on every relevant PR. Verified it actually has teeth, not just a
+vacuous pass: deliberately reverted `asha_select_own` to the vulnerable
+JWT-trusting version locally and confirmed the check fails loudly with a
+clear message; restored the fix and confirmed it passes again.
+
+**Smaller fixes from the same pass, all verified**: `ci_stubs.sql`'s
+`auth.role()` defaulted to `'anon'` when `request.jwt.claims` was unset;
+real Supabase's returns `NULL` in that state, and defaulting could mask a
+test that forgot to call `set_config` at all — fixed to match.
+`ci_stubs.sql` also gained the `authenticated`/`anon` PostgREST roles
+(needed for the new regression check to `SET ROLE` at all) via `ALTER
+DEFAULT PRIVILEGES`, not a plain `GRANT ... ON ALL TABLES`, since the
+grant runs before `schema_snapshot.sql` creates any tables and a
+snapshot-style grant would silently apply to nothing. An unused
+`CREATE EXTENSION pgcrypto` was removed (nothing loaded afterward calls
+anything from it). The migration-ordering loop was simplified from a
+hand-rolled extract-pair-sort-strip pipeline to `sort -V`, matching what
+the job it replaced already did, with a null-delimited read loop to
+survive a filename with a space.
+
+**Found, not fixed — genuinely lower severity or out of scope**:
+`case_records_update_policy`'s `WITH CHECK` clause contains a tautological
+`submitted_by = submitted_by`, which on its own would let any doctor/admin
+UPDATE silently reassign a case's `submitted_by`. Checked before treating
+this as urgent: phase15 also created a `BEFORE UPDATE` trigger
+(`trg_protect_case_records_submitted_by`) that independently `RAISE
+EXCEPTION`s if `submitted_by` changes, and cannot be bypassed by RLS
+policy text — the tautology is real, confusing dead code, but not
+currently exploitable, since the trigger is the actual enforcement
+mechanism. Left as a documented cleanup item rather than an urgent fix.
+`facilities_public_read USING (true)` OR-combining with the stricter
+`facilities_select_policy` was already documented as open in §36; nothing
+new here. A live-vs-mocked gap remains even after this PR:
+`live-schema-fingerprint` still needs `SUPABASE_URL`/
+`SUPABASE_SERVICE_ROLE_KEY`/`EXPECTED_SCHEMA_FINGERPRINT` configured by the
+user before it does anything beyond warning — unchanged from §35.

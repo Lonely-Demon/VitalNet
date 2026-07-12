@@ -171,16 +171,20 @@ VitalNet/
 │                       recoverable from git history if ever needed.
 ├── .github/
 │   ├── workflows/
-│   │   ├── ci.yml               Lint (PR) + pytest/build (push) on main and dev for
-│   │   │                        backend/ + apps/web, plus an SBOM job (push-only,
-│   │   │                        CycloneDX for backend+frontend deps — docs/SECURITY.md)
+│   │   ├── ci.yml               Lint + clinical-core/frontend build (PR), pytest/build
+│   │   │                        (push) on main and dev for backend/ + apps/web, the
+│   │   │                        axe-core a11y scan (`a11y-frontend-pr`), plus an SBOM job
+│   │   │                        (push-only, CycloneDX for backend+frontend deps —
+│   │   │                        docs/SECURITY.md)
 │   │   ├── api-edge-function.yml Deno fmt/lint/check/test for apps/api on every PR/push
 │   │   │                        touching it or packages/clinical-core; a manual-only
 │   │   │                        (workflow_dispatch) `deploy` job — see §3b.
 │   │   ├── training-smoke.yml    Fast smoke test (not a real training run) for
 │   │   │                        tools/training/'s clinical-core cli.mjs wiring.
-│   │   ├── db-schema-drift.yml   PR migration-replay lint + weekly live-fingerprint
-│   │   │                        check — see §5.
+│   │   ├── db-schema-drift.yml   `migration-replay` (path-scoped to
+│   │   │                        backend/supabase/migrations|schema_snapshot.sql|
+│   │   │                        ci_stubs.sql, so it doesn't run on unrelated PRs) +
+│   │   │                        weekly/on-demand `live-schema-fingerprint`; see §5.
 │   │   ├── backend-keepalive.yml Pings the live legacy backend to avoid free-tier
 │   │   │                        cold starts. NOT deleted — backend/ is still live.
 │   │   └── supabase-keepalive.yml Pings Supabase to avoid the 7-day pause.
@@ -1141,16 +1145,70 @@ don't; `phase31_client_event_record_fn.sql` — `fn_client_event_record`,
 `SECURITY DEFINER`, the one function needed to actually WRITE a
 `client_events` row (RLS default-denies `authenticated` inserts) — derives
 `submitted_by` from `auth.uid()` internally, never a client-supplied value,
-so spoofing is structurally impossible. Run them in order against the live
-Supabase project's SQL editor (or via the Supabase CLI) — they're written to
-be safe to re-run, and are shared by both backends. **If you're setting up
-a project for the first time or resuming a long-paused one, don't assume
-it's current — verify the schema actually matches this list**
-(docs/DECISIONS.md §29 has the exact column-existence check that caught
-this project ten migrations behind). `.github/workflows/db-schema-drift.yml`
-(see §2) now also checks this automatically: a PR-time replay-and-diff
-against a committed schema snapshot, plus a weekly live-fingerprint check
-via `fn_schema_fingerprint()`.
+so spoofing is structurally impossible; `phase32_fix_jwt_metadata_rls_
+vulnerability.sql` and `phase34_drop_case_referrals.sql` — a real
+privilege-escalation fix, not hygiene: several RLS policies trusted
+`auth.jwt() -> 'user_metadata'`, a claim any authenticated user can set on
+themselves via Supabase's own Auth API, independent of their real
+`profiles.role` — phase32 rewrites the ones on `case_records`/`profiles`
+to a table-lookup check instead, phase34 drops `case_referrals` outright
+(same bug, zero code references anywhere, fully superseded by the
+`referrals` table) rather than patch policies nothing queries (docs/
+DECISIONS.md §36); `phase33_track_get_user_role_and_facility.sql` — starts
+tracking `get_user_role(uuid)`/`get_user_facility(uuid)` for the first
+time, functions that existed live and are called by
+`profiles_select_policy_hardened` but had never appeared in any committed
+migration until this pass found them; `phase35_retrack_profiles_select_
+policy_hardened.sql` — found reviewing the PR that added phase32-34: phase15
+(years earlier) tracks this policy with an inline self-join, but the live
+project's actual policy — captured verbatim in schema_snapshot.sql — calls
+get_user_role()/get_user_facility() instead. A third instance of the same
+tracked-vs-live divergence phase28-31 and phase32-34 already found, this
+time inside a migration nobody had reason to suspect. Applying phase35
+live is a no-op (it reproduces what's already there); what it actually
+fixes is the migration history itself — bootstrapping a project from
+phase10 onward without it would silently produce the stale version;
+`phase36_backfill_referrals_indexes.sql` — also found in that same review
+pass: phase19_referrals.sql's `CREATE INDEX IF NOT EXISTS idx_referrals_
+case_id`/`idx_referrals_status` on `public.referrals` silently no-op'd back
+when it ran, because `public.case_referrals` (a different table, dropped by
+phase34) already had indexes by those exact names — Postgres index names
+are schema-scoped, not table-scoped. `referrals` — the table the referral
+workflow actually uses — has been missing both indexes since. phase34
+frees the names by dropping case_referrals; phase36 creates them on the
+right table.
+
+**phase28 through phase31 sat committed in git for a while without ever
+being applied to the live project** — every `apps/api` endpoint that
+depended on them (including `fn_rate_limit`, called on every request) was
+completely broken against the real database and nothing caught it until a
+manual test pass (docs/DECISIONS.md §35). Run migrations in order against
+the live Supabase project's SQL editor (or via the Supabase CLI) — they're
+written to be safe to re-run, and are shared by both backends. **If you're
+setting up a project for the first time or resuming a long-paused one,
+don't assume it's current — verify the schema actually matches this
+list.** Two jobs in `.github/workflows/db-schema-drift.yml` now exist
+specifically because that verification used to be a manual, easy-to-skip
+step: `migration-replay` (path-scoped to `backend/supabase/migrations/**`,
+`schema_snapshot.sql`, `ci_stubs.sql` — it doesn't run on unrelated PRs)
+replays every migration newer than the snapshot's baseline phase against a
+disposable Postgres container, then runs
+`backend/supabase/ci_rls_regression_check.sql` — connecting as the
+postgres superuser only proves the DDL parses, since RLS doesn't apply to
+superusers, so this step actually `SET ROLE`s to a restricted role and
+seeds/queries data the way PostgREST would, proving the phase32 fix (and
+any future policy) actually restricts access, not just that `CREATE
+POLICY` didn't error. No live credentials needed for either — the
+snapshot is a real captured baseline, not a guess. `live-schema-fingerprint`
+compares the live project's actual `fn_schema_fingerprint()` against a
+known-good value weekly, catching drift that happens directly against the
+live database with no migration file at all (the PR-time job
+architecturally can't catch that kind — it only ever sees tracked
+migrations). The live check still needs `SUPABASE_URL`/
+`SUPABASE_SERVICE_ROLE_KEY` added as GitHub repo secrets and
+`EXPECTED_SCHEMA_FINGERPRINT` as a repo variable before it does anything
+beyond warning — deliberately left for the user to wire up, since it needs
+credentials this session never had.
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`
