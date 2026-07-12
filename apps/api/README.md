@@ -57,6 +57,19 @@ supabase/functions/api/
 
 ## Status (Phase 3 Tranche A + Phase 4 Tranche B — both complete)
 
+**"Complete" means the code and its unit tests, not a live deployment.** A
+testing pass found that `phase28`–`phase31` (the SECURITY DEFINER
+functions every RPC call below depends on, and the `client_events` table/
+`case_records` columns Tranche B's write path needs) sat committed in git
+without ever being applied to the live Supabase project — this whole
+tranche would have failed on its first real request. Fixed and re-verified
+(docs/DECISIONS.md §35); `.github/workflows/ci.yml`'s `db-schema-drift`
+job now exists so a migration landing in git but not in the live project
+can't happen silently again. Still true: nothing here has been exercised
+against a live project end-to-end (see Testing below), and no endpoint is
+actually cut over — `apps/web/src/api/base.js` still routes everything to
+`'legacy'`.
+
 **Tranche A** (read-mostly): middleware stack (CORS, security headers, correlation id,
 CSRF/device guard, rate limiting, hybrid JWT auth with per-isolate profile caching),
 `/api/health`, `GET /api/outbreak/signals` (EARS C1 aberration signals, ported to

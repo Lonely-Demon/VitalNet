@@ -196,23 +196,56 @@ will remind you if a route change breaks an untested one.
 
 Not covered by any of this: `apps/api` has never been deployed to a real
 Supabase project. Everything above is unit/contract-level — things like
-JWKS verification against a project's actual signing algorithm, real RPC
-call shapes, or Deno's `web-push` npm-compat can only be proven by a live
-smoke test against an actual project, which needs real credentials.
-`apps/web/src/api/base.js`'s `ENDPOINT_BACKEND` map still routes every
-endpoint to `'legacy'` (the FastAPI backend) for this reason — nothing is
-actually cut over yet.
+JWKS verification against a project's actual signing algorithm, or Deno's
+`web-push` npm-compat, can only be proven by a live smoke test against an
+actual project, which needs real credentials. `apps/web/src/api/base.js`'s
+`ENDPOINT_BACKEND` map still routes every endpoint to `'legacy'` (the
+FastAPI backend) for this reason — nothing is actually cut over yet.
+
+Real RPC call shapes are now schema-verified, though: a testing pass found
+that `backend/supabase/migrations/phase28` through `phase31` — the
+SECURITY DEFINER functions every one of `apps/api`'s RPC calls depends on,
+including `fn_rate_limit` which the middleware calls on every request —
+had never been applied to the live project (docs/DECISIONS.md §35 has the
+full story). They have now been applied and re-verified live. The
+`db-schema-drift` CI job below exists specifically so a tracked migration
+silently never landing can't happen again undetected.
+
+## DB schema drift (`db-schema-drift`)
+
+`backend/supabase/schema_snapshot.sql` is a real capture of the live
+project's `public` schema (via pg_catalog introspection — see its header),
+not hand-written. Its header records `SNAPSHOT_BASELINE_PHASE` — the last
+migration phase already folded into it. On every PR, `db-schema-drift`
+loads the snapshot into a disposable `postgres:16` service container
+(after `backend/supabase/ci_stubs.sql` stubs the Supabase-managed `auth`
+schema and two untracked helper functions — see that file's header), then
+applies every tracked migration numbered higher than the baseline, in
+order. If a new migration doesn't apply cleanly against the tracked
+baseline, this job fails and says exactly which file broke. No live
+credentials needed — nothing here compares against the actual live
+project. That's a separate, harder problem (a scheduled job calling
+`fn_schema_fingerprint()` against the live database) deferred until
+someone adds live Supabase secrets to the repo.
+
+The baseline doesn't need to be bumped when you add a migration —
+migrations just keep layering on top of it indefinitely. Only regenerate
+`schema_snapshot.sql` (and bump `SNAPSHOT_BASELINE_PHASE`) if you want to
+fold migrations in to keep the container-load step fast, or if you
+discover further untracked live drift that needs recapturing the way §35
+did.
 
 ## What CI actually runs automatically
 
 On every PR: `ruff check` (backend), the pytest suite minus `test_e2e.py`
 (backend), `npm run build` (frontend), the `tests/a11y.spec.js` axe-core
-scan (`a11y-frontend-pr`), the apps/api Deno suite (`apps-api-test`),
-CodeQL analysis (Python + JS/TypeScript + GitHub Actions workflows).
-`offline.spec.js` is documented above as something a contributor should
-run locally — check `.github/workflows/ci.yml` for the exact current CI
-job list, since this doc can drift from it (the workflow file is the source
-of truth for what actually gates merges).
+scan (`a11y-frontend-pr`), the apps/api Deno suite (`apps-api-test`), the
+DB schema-drift check (`db-schema-drift`), CodeQL analysis (Python +
+JS/TypeScript + GitHub Actions workflows). `offline.spec.js` is documented
+above as something a contributor should run locally — check
+`.github/workflows/ci.yml` for the exact current CI job list, since this
+doc can drift from it (the workflow file is the source of truth for what
+actually gates merges).
 
 ## Adding a new test
 

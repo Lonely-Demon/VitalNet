@@ -1433,3 +1433,101 @@ the first place (existing Tailwind utility classes like `bg-forest`
 kept their names, only their resolved color changed), but that inheritance
 hasn't been visually verified screen-by-screen the way ASHA/doctor flows
 were. Worth a follow-up pass if those panels are heavily used.
+
+### 35. The `dev` branch test pass that found phase28–31 were never applied to the live project — and the schema-drift CI job built from what that uncovered
+
+**Context**: asked to "test the dev branch" (the Round 6 rebuild's full TS
+surface — `packages/clinical-core`, `apps/api`, `apps/web`, plus the still-
+authoritative `backend/` FastAPI service). All four automated suites
+passed cleanly (297 tests total: clinical-core 61, backend 108, apps/api
+121 — the last of which had never actually run in CI before this pass, see
+below — plus a clean `apps/web` build and a11y suite). That was reassuring
+but incomplete: every one of `apps/api`'s 121 tests mocks its Supabase
+client, so none of them touch a real database. The Round 6 rebuild plan's
+own verification section called for exactly this gap to be closed with a
+live smoke test; it never was.
+
+**What "test the dev branch" actually found**: closing two CI gaps
+surfaced by that pass (`apps/api` had no CI job at all; the DB
+schema-drift job from Phase 2 of the Round 6 plan was never built) required
+a real schema snapshot from the live Supabase project. Getting one — via a
+pg_catalog introspection query run in the SQL Editor, not `pg_dump`, since
+the user only had SQL Editor access, and a live connection string was
+deliberately never shared into this chat (schema DDL is safe to paste;
+passwords aren't, regardless of who's offering) — revealed that
+`backend/supabase/migrations/phase28_security_definer_fns.sql` through
+`phase31_client_event_record_fn.sql` had never been applied to the live
+project. Concretely: `case_records` was missing `model_tier`/
+`rules_fired`/`model_agreed`; the `client_events` table (the entire
+unified-outbox idempotency mechanism) didn't exist; and all 8
+`fn_*` SECURITY DEFINER functions phase28/30/31 define — including
+`fn_rate_limit`, which `apps/api`'s middleware calls on every single
+request — were absent. **`apps/api` was completely non-functional against
+the real database**, not merely unverified; it would have failed on its
+first request in production. Cross-referencing the live dump against the
+actual codebase (`grep`, not assumption) also surfaced: `case_referrals`
+is a fully orphaned table (zero references anywhere in `backend/app` or
+`apps/api` — only the separate `referrals` table, created by the tracked
+`phase19_referrals.sql`, is actually used); `get_user_role(uuid)` and
+`get_user_facility(uuid)`, called by `profiles_select_policy_hardened`,
+exist live but in no tracked migration anywhere in this repo; a duplicate
+UNIQUE constraint on `case_records.client_id`; and RLS policies on
+`profiles`, `case_records`, and `facilities` where an older, looser
+PERMISSIVE policy sits alongside a newer, more restrictive one — since
+Postgres OR-combines multiple permissive policies for the same command,
+the looser one governs effective access regardless of the newer one's
+intent (`profiles_select_policy_hardened`'s name says what it was
+*supposed* to replace). None of these were touched — they need the user's
+own judgment, not a unilateral fix, and are recorded here rather than
+silently patched.
+
+**What was fixed, in order, with the user's explicit sign-off at each
+step**: (1) the four migration files — verified additive-only (no `DROP`/
+`TRUNCATE` against real data) before handing them over — were run by the
+user via the SQL Editor, in phase order; (2) re-verified via the exact
+same introspection query plus a function-existence check, both showing the
+expected post-migration state; (3) the schema-drift CI job was built from
+the *pre*-migration dump (captured earlier in the same session) as
+`backend/supabase/schema_snapshot.sql`'s baseline — recorded as
+`SNAPSHOT_BASELINE_PHASE=27` in its header — with the job applying every
+tracked migration numbered higher than that baseline to a disposable
+Postgres service container on every PR. This needs no live credentials:
+the baseline is a verified capture, not a live comparison. The one
+piece that does need credentials (a scheduled job diffing the live
+project's `fn_schema_fingerprint()` against the tracked baseline, catching
+future *live* drift the same way this pass caught past drift) is
+deliberately deferred — it needs `SUPABASE_URL`/`SERVICE_ROLE_KEY` added
+as GitHub repo secrets by the user directly, never seen by this session.
+
+**A bug the process itself caught**: loading the snapshot into a fresh
+container failed on the first attempt — `case_records.triage_priority`'s
+default was reconstructed as a bare `DEFAULT CASE triage_level ...`,
+which is illegal Postgres syntax (a column default cannot reference a
+sibling column in the same row). The live column is actually a
+`GENERATED ALWAYS AS (...) STORED` computed column; `pg_get_expr()`
+returns a generated column's expression through the same code path as a
+plain default, and the introspection query hadn't checked
+`pg_attribute.attgenerated` to distinguish the two. Fixed in both the
+committed snapshot and the introspection query itself. Caught because the
+snapshot was actually loaded into a real, disposable Postgres instance and
+the real phase28–31 files were actually applied on top of it before this
+entry was written — not merely asserted to work.
+
+**Verification, concretely**: `schema_snapshot.sql` loads cleanly into a
+fresh `postgres:16` container with the Supabase-managed objects it
+references stubbed (`backend/supabase/ci_stubs.sql` — the `auth` schema,
+plus the two untracked `get_user_role`/`get_user_facility` functions,
+clearly commented as CI-only and not a substitute for tracking them
+properly); phase28–31 apply on top with zero errors; the resulting
+schema's tables/columns/functions match the live post-migration capture
+exactly. The full loop — introspect, snapshot, reapply from scratch, diff
+— was run locally before any of it was committed.
+
+**Consequences**: `apps/api` is now schema-compatible with the live
+project for the first time, though still not deployed or cut over
+(`apps/web/src/api/base.js` still routes every endpoint to `'legacy'`) —
+that remains a separate, larger decision. The dead table, untracked
+functions, duplicate constraint, and overlapping RLS policies found along
+the way are documented here as open items, not fixed, pending the user's
+own review — several touch PHI access control on a clinical app and
+shouldn't be resolved by inference.
