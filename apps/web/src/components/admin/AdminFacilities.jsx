@@ -71,7 +71,7 @@ export default function AdminFacilities() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-base font-semibold text-text font-display italic">Facilities <span className="text-text3 font-normal font-body">({facilities.length})</span></h2>
+        <h2 className="text-base font-semibold text-text font-display font-bold">Facilities <span className="text-text3 font-normal font-body">({facilities.length})</span></h2>
         <button
           onClick={() => setShowCreateForm(v => !v)}
           className="text-sm px-3 py-1.5 bg-forest text-white rounded-pill hover:shadow-btn transition-all"

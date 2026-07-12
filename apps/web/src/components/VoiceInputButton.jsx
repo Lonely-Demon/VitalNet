@@ -5,6 +5,7 @@
 // a clinical context). Renders nothing on browsers without SpeechRecognition
 // support (e.g. Firefox) rather than showing a dead button.
 import { useTranslation } from 'react-i18next'
+import { Mic } from 'lucide-react'
 import { useVoiceInput } from '../hooks/useVoiceInput'
 
 export default function VoiceInputButton({ onTranscript, lang }) {
@@ -28,7 +29,7 @@ export default function VoiceInputButton({ onTranscript, lang }) {
           ${listening ? 'bg-emergency text-white animate-pulse' : 'bg-surface2 text-text2 hover:bg-surface3'}
           disabled:opacity-40 disabled:cursor-not-allowed`}
       >
-        🎤
+        <Mic size={15} aria-hidden="true" />
       </button>
       {error && (
         <span className="text-xs text-emergency">{t(`intakeForm.voice.${error}`)}</span>

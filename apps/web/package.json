@@ -10,11 +10,12 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.2",
-    "@vitalnet/clinical-core": "workspace:*",
     "@tailwindcss/vite": "^4.2.1",
+    "@vitalnet/clinical-core": "workspace:*",
     "@vitejs/plugin-react": "^6.0.3",
     "i18next": "^26.3.6",
     "idb": "^8.0.3",
+    "lucide-react": "^1.24.0",
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

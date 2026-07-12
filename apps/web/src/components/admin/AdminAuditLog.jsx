@@ -58,7 +58,7 @@ export default function AdminAuditLog() {
 
   return (
     <div>
-      <h2 className="text-base font-semibold text-text mb-1 font-display italic">Audit Log</h2>
+      <h2 className="text-base font-semibold text-text mb-1 font-display font-bold">Audit Log</h2>
       <p className="text-xs text-text3 mb-4">Every PHI access and admin action, most recent first.</p>
 
       {entries.length === 0 ? (

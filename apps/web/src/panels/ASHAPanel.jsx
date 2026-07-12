@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Check } from 'lucide-react'
 import NavBar from '../components/NavBar'
 import IntakeForm from '../pages/IntakeForm'
 import OfflineBanner from '../components/OfflineBanner'
@@ -99,7 +100,7 @@ export default function ASHAPanel() {
 
         {activeTab === 'history' && (
           <div>
-            <h2 className="text-base font-semibold text-text mb-4 font-display italic">My Submissions</h2>
+            <h2 className="text-base font-semibold text-text mb-4 font-display font-bold">My Submissions</h2>
 
             {loading && (
               <div className="text-center py-12 text-text3 text-sm">Loading...</div>
@@ -144,7 +145,9 @@ export default function ASHAPanel() {
                       {s.triage_level}
                     </span>
                     {s.reviewed_at && (
-                      <span className="text-xs text-routine font-mono">✓ Reviewed</span>
+                      <span className="text-xs text-routine font-mono inline-flex items-center gap-1">
+                        <Check size={12} aria-hidden="true" />Reviewed
+                      </span>
                     )}
                   </div>
                 </div>
