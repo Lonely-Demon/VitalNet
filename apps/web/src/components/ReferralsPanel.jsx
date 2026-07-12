@@ -7,10 +7,10 @@ import { useRealtimeReferrals } from '../hooks/useRealtimeReferrals'
 import { listReferrals, updateReferralStatus, updateFacilityCapacity } from '../lib/api'
 
 const STATUS_COLORS = {
-  pending: 'bg-urgent/10 text-urgent',
+  pending: 'bg-urgent/10 text-urgent-ink',
   acknowledged: 'bg-sage/20 text-forest',
   patient_arrived: 'bg-sage/20 text-forest',
-  completed: 'bg-routine/10 text-routine',
+  completed: 'bg-routine/10 text-routine-ink',
   cancelled: 'bg-surface3 text-text3',
 }
 

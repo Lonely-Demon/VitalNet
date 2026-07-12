@@ -13,7 +13,7 @@ const ROLE_COLORS = {
   asha_worker: 'bg-leaf text-forest',
   doctor:      'bg-sand text-forest',
   admin:       'bg-surface3 text-text',
-  supervisor:  'bg-urgent/10 text-urgent',
+  supervisor:  'bg-urgent/10 text-urgent-ink',
 }
 
 const LANGUAGES = ['en', 'hi', 'ta']
@@ -70,7 +70,7 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
           <span className="text-sm text-text2 hidden sm:block font-body">
             {profile?.full_name || profile?.id?.slice(0, 8)}
           </span>
-          <span className={`text-xs font-mono px-2 py-0.5 rounded-pill font-medium ${
+          <span className={`hidden sm:block text-xs font-mono px-2 py-0.5 rounded-pill font-medium ${
             ROLE_COLORS[profile?.role] || ROLE_COLORS.admin
           }`}>
             {ROLE_LABELS[profile?.role] || profile?.role}

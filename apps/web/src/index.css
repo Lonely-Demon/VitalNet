@@ -98,6 +98,16 @@
   --color-urgent: #A85A0C;
   --color-routine: #1D7A4C;
 
+  /* Darker variants for text sitting on a translucent tier tint
+     (bg-{tier}/5 to /10, e.g. status pills, count badges). The plain tier
+     color only just clears 4.5:1 on white and dips below it once composited
+     over any warm/cool tint or the page background — axe-core caught this
+     in CI (docs/ACCESSIBILITY.md). Use text-{tier}-ink instead of
+     text-{tier} wherever the background isn't flat white/surface. */
+  --color-emergency-ink: #B22820;
+  --color-urgent-ink: #944F0B;
+  --color-routine-ink: #1A6E44;
+
   /* Text */
   --color-text: #12181A;
   --color-text2: #4F5F5B;
