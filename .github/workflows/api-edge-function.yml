@@ -43,7 +43,7 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+      - uses: pnpm/action-setup@v6  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
         with:
           version: '10'
       - name: Install workspace deps (no install scripts)
@@ -100,7 +100,7 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+      - uses: pnpm/action-setup@v6  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
         with:
           version: '10'
       - name: Install workspace deps (no install scripts)
