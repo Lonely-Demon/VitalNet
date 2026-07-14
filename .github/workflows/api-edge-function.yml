@@ -120,7 +120,7 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: supabase/setup-cli@v1  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+      - uses: supabase/setup-cli@v3  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
         if: steps.creds.outputs.configured == 'true'
         with:
           version: latest
