@@ -23,6 +23,6 @@ python-jose[cryptography]==3.5.0
 supabase==2.10.0
 email-validator==2.3.0
 slowapi==0.1.9
-json-repair==0.36.0
+json-repair==0.60.1
 python-json-logger==4.1.0
 pywebpush==2.3.0
