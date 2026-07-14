@@ -6,12 +6,27 @@ against triageClassifier.js::buildFeatureMap(). Both must match the fixture
 exactly or offline (browser) triage can silently diverge from online triage.
 """
 import json
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from app.ml.clinical_features import ClinicalFeatureEngineer
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "golden_feature_vectors.json"
 TOLERANCE = 1e-6
+
+# ClinicalFeatureEngineer._time_based_risk/_seasonal_disease_risk both key off
+# datetime.now(), so the fixture's time_of_day_risk/seasonal_risk values are
+# only correct for the moment it was captured. Freeze "now" to that moment —
+# a daytime hour (7-17) in July — so this test doesn't flake depending on
+# what hour/month it happens to run in.
+_FIXTURE_CAPTURE_TIME = datetime(2026, 7, 4, 12, 0, 0)
+
+
+class _FrozenDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return _FIXTURE_CAPTURE_TIME
 
 
 def test_feature_engineering_matches_golden_vectors():
@@ -21,23 +36,24 @@ def test_feature_engineering_matches_golden_vectors():
     engineer = ClinicalFeatureEngineer()
     mismatches = []
 
-    for i, vector in enumerate(vectors):
-        computed = engineer.engineer_features(vector["input"])
-        expected = vector["features"]
+    with patch("app.ml.clinical_features.datetime", _FrozenDateTime):
+        for i, vector in enumerate(vectors):
+            computed = engineer.engineer_features(vector["input"])
+            expected = vector["features"]
 
-        if set(computed.keys()) != set(expected.keys()):
-            mismatches.append(
-                f"vector {i}: feature key mismatch — "
-                f"missing={set(expected) - set(computed)}, extra={set(computed) - set(expected)}"
-            )
-            continue
-
-        for key, expected_val in expected.items():
-            computed_val = computed[key]
-            if abs(computed_val - expected_val) > TOLERANCE:
+            if set(computed.keys()) != set(expected.keys()):
                 mismatches.append(
-                    f"vector {i}, feature '{key}': expected {expected_val}, got {computed_val}"
+                    f"vector {i}: feature key mismatch — "
+                    f"missing={set(expected) - set(computed)}, extra={set(computed) - set(expected)}"
                 )
+                continue
+
+            for key, expected_val in expected.items():
+                computed_val = computed[key]
+                if abs(computed_val - expected_val) > TOLERANCE:
+                    mismatches.append(
+                        f"vector {i}, feature '{key}': expected {expected_val}, got {computed_val}"
+                    )
 
     assert not mismatches, (
         "ClinicalFeatureEngineer output drifted from the golden fixture "
