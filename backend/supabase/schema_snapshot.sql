@@ -25,14 +25,20 @@
 --
 -- Scope: this captures tables, columns, constraints, indexes, and RLS
 -- policies — the introspection query does NOT cover functions or
--- triggers. Two functions referenced by profiles_select_policy_hardened
--- below, get_user_role(uuid)/get_user_facility(uuid), are tracked
--- separately as of phase33_track_get_user_role_and_facility.sql (stubbed
--- here only as CI placeholders so this file's own CREATE POLICY succeeds
--- before phase33 runs). Other functions/triggers phase10-27 define (e.g.
--- phase15's trg_protect_case_records_submitted_by) are NOT recreated by
--- loading this file — CI's migration-replay only verifies DDL shape
--- (tables/constraints/indexes/policies), not full runtime behavior.
+-- triggers in general. Two exceptions are captured explicitly below
+-- because they were found to matter in practice, not because the capture
+-- method changed: get_user_role(uuid)/get_user_facility(uuid) (referenced
+-- by profiles_select_policy_hardened; stubbed here only as CI placeholders
+-- so this file's own CREATE POLICY succeeds before phase33 tracks their
+-- real definitions), and protect_case_records_submitted_by() +
+-- trg_protect_case_records_submitted_by (phase15's submitted_by-
+-- immutability trigger — confirmed present live, added directly here
+-- since it's phase15 < this snapshot's baseline). A repo-wide check
+-- (grep for CREATE FUNCTION/CREATE TRIGGER across phase10-27) confirmed
+-- these are the ONLY functions/triggers those migrations define, so this
+-- closes the gap completely for the pre-phase28 range — not just these
+-- two known instances. Anything phase28 and later defines is applied via
+-- the tracked migrations themselves, same as always.
 
 -- SNAPSHOT_BASELINE_PHASE=27
 
@@ -304,6 +310,29 @@ CREATE INDEX idx_push_subscriptions_user_id ON public.push_subscriptions USING b
 CREATE INDEX idx_push_subscriptions_facility_id ON public.push_subscriptions USING btree (facility_id);
 CREATE INDEX idx_referrals_referring_facility ON public.referrals USING btree (referring_facility_id);
 CREATE INDEX idx_referrals_receiving_facility ON public.referrals USING btree (receiving_facility_id);
+
+-- Added as of phase37_backfill_submitted_by_trigger.sql — not because this
+-- function/trigger is new (it's phase15's, phase15 < this snapshot's
+-- baseline), but because the introspection query this file was captured
+-- with never covered functions/triggers, and this one specifically was
+-- discovered to be MISSING from the live project despite being tracked
+-- since phase15 — a phase10-27-internal instance of the same
+-- tracked-but-never-applied failure mode phase28-31 and phase37 itself
+-- both are. Verified present live via pg_proc/pg_trigger before adding
+-- here (docs/DECISIONS.md).
+CREATE OR REPLACE FUNCTION public.protect_case_records_submitted_by()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.submitted_by IS DISTINCT FROM OLD.submitted_by THEN
+    RAISE EXCEPTION 'submitted_by is immutable and cannot be changed';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER trg_protect_case_records_submitted_by
+  BEFORE UPDATE ON public.case_records
+  FOR EACH ROW EXECUTE FUNCTION public.protect_case_records_submitted_by();
 
 ALTER TABLE public.case_attachments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.case_outcomes ENABLE ROW LEVEL SECURITY;

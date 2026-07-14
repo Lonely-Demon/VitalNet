@@ -1750,3 +1750,86 @@ new here. A live-vs-mocked gap remains even after this PR:
 `live-schema-fingerprint` still needs `SUPABASE_URL`/
 `SUPABASE_SERVICE_ROLE_KEY`/`EXPECTED_SCHEMA_FINGERPRINT` configured by the
 user before it does anything beyond warning — unchanged from §35.
+
+*Correction (§38 below): the "not currently exploitable, since the
+trigger is the actual enforcement mechanism" claim above was wrong. The
+trigger didn't exist on the live project. §38 has the full story.*
+
+### 38. The submitted_by trigger §37 assumed protected the tautology didn't exist on the live project either
+
+**Context**: while scoping how to bootstrap a genuinely new pre-production
+Supabase project from `schema_snapshot.sql` alone (rather than the
+disposable, `ci_stubs.sql`-stubbed containers CI uses), the snapshot's own
+documented scope limitation — it doesn't capture functions or triggers —
+stopped being a hypothetical CI-only gap and became a real question: what,
+specifically, would be missing? A repo-wide check found exactly one
+answer across the entire pre-phase28 range: `phase15_data_security_
+hardening.sql`'s `protect_case_records_submitted_by()` function and its
+`trg_protect_case_records_submitted_by` trigger — the same trigger §37
+had just cited as the reason `case_records_update_policy`'s tautological
+`WITH CHECK (submitted_by = submitted_by)` clause wasn't actually
+exploitable.
+
+**What a direct check found**: a read-only query against
+`pg_proc`/`pg_trigger` on the live project — run by the user via the SQL
+Editor, the same pattern used throughout this engagement for anything
+touching production — confirmed neither the function nor the trigger
+exists live. `phase15` tracks them in git; they were never applied. A
+fourth instance of the exact failure mode this whole effort exists to
+catch (§35's phase28-31, §36/§37's `profiles_select_policy_hardened`),
+this time inside the pre-phase28 range that `schema_snapshot.sql`'s
+baseline had always treated as an already-verified black box — nothing in
+`db-schema-drift`'s `migration-replay` job could have caught it, since
+that job only ever applies migrations *newer* than the baseline.
+
+**Why this one is a real vulnerability, not just hygiene**: without the
+trigger, `submitted_by` on `case_records` has no protection at all against
+being changed. `case_records_update_policy`'s USING clause grants UPDATE
+to a fairly broad set — the original submitter, any doctor/facility_admin
+at the same facility, any admin — and its WITH CHECK clause's `submitted_by
+= submitted_by` conjunct is always true for a non-null value, i.e. no
+actual constraint. Any of those roles could reassign a case's `submitted_
+by` to an arbitrary uuid, corrupting the audit trail for who actually
+submitted it — reachable directly via Supabase's PostgREST API regardless
+of whether any application endpoint's request schema even exposes
+`submitted_by` as settable, the same "app code doesn't call it isn't a
+safety boundary" lesson §36 already learned once with `case_referrals`.
+
+**What was fixed** (`phase37_backfill_submitted_by_trigger.sql`): applies
+phase15's original, already-tracked function and trigger definitions
+verbatim — this isn't a new design, it's finishing a migration that never
+landed. Verified locally before handing off: rebuilt the full phase28-37
+chain from a fresh database, then ran a genuine functional test — attempted
+to `UPDATE case_records SET submitted_by = ...`, confirmed it fails with
+the trigger's `RAISE EXCEPTION`, then confirmed an unrelated column update
+on the same row still succeeds normally (the trigger doesn't over-block
+legitimate writes). Applied to the live project via the SQL Editor and
+re-verified with the same `pg_proc`/`pg_trigger` existence check, now
+returning true for both.
+
+**`schema_snapshot.sql` updated too**: rather than leave this as a
+documented-but-uncaptured exception indefinitely, the function and trigger
+were added directly into the snapshot itself (phase15 predates the
+snapshot's phase27 baseline, so this belongs there, not in a separate
+tracked migration layered on top). The same repo-wide grep that found this
+one instance confirmed it's the *only* function/trigger defined anywhere
+in phase10-27 — closing this specific gap closes the pre-phase28 range
+completely for functions/triggers, not just partially. Re-verified
+end-to-end afterward: a fresh database loading the updated snapshot, then
+applying phase28 through phase37 on top, applies with zero errors and
+creates the trigger exactly once (no duplicate-object conflict between the
+snapshot's copy and phase37's own `CREATE OR REPLACE`/`DROP TRIGGER IF
+EXISTS` — both are idempotent by design).
+
+**Consequences**: §37's characterization of the tautology as "not
+currently exploitable" is retracted — it was exploitable the entire time
+this repository believed otherwise. The lesson generalizes: `schema_
+snapshot.sql`'s baseline being "verified" only ever meant verified against
+what the introspection query captured (tables/constraints/indexes/
+policies) — it was never a guarantee that everything phase10-27 tracked
+had actually landed. This pass checked functions/triggers specifically
+because a new practical need (bootstrapping a real project) forced the
+question; the same kind of check has not been run for every other DDL
+category those migrations touch. Worth treating as a standing open
+question rather than an assumption the next time schema_snapshot.sql is
+relied on for something it hasn't been asked to do before.
