@@ -13,7 +13,25 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { buildFeatureMap } from '../src/utils/triageClassifier.js'
+
+// triageClassifier.js's time_of_day_risk/seasonal_risk read `new Date()`, so
+// the fixture's expected values are only correct for the moment it was
+// captured. Freeze Date to that moment — a daytime hour (7-17) in July —
+// before importing the module under test, so this doesn't flake depending
+// on what hour/month it happens to run in.
+const FIXTURE_CAPTURE_TIME = [2026, 6, 4, 12, 0, 0] // month is 0-indexed: 6 = July
+const RealDate = Date
+class FrozenDate extends RealDate {
+  constructor(...args) {
+    super(...(args.length ? args : FIXTURE_CAPTURE_TIME))
+  }
+  static now() {
+    return new RealDate(...FIXTURE_CAPTURE_TIME).getTime()
+  }
+}
+globalThis.Date = FrozenDate
+
+const { buildFeatureMap } = await import('../src/utils/triageClassifier.js')
 
 const here = dirname(fileURLToPath(import.meta.url))
 const vectors = JSON.parse(readFileSync(join(here, 'fixtures/golden_feature_vectors.json'), 'utf8'))
