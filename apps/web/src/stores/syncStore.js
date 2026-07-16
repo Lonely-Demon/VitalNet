@@ -39,13 +39,20 @@ export async function submitCase(formData) {
   const clientId = uuidv4()
   const payload = { ...formData, client_id: clientId, client_submitted_at: new Date().toISOString() }
 
+  // The queuing worker's identity — stamped onto any outbox row so that only
+  // this same worker can later drain it (never whoever is logged in at sync
+  // time on a shared PHC tablet). getSession() reads local storage, so this
+  // resolves offline too.
+  const { data: { session } } = await supabase.auth.getSession()
+  const ownerId = session?.user?.id ?? null
+
   // True connectivity check — not just navigator.onLine.
   const online = await isServerReachable()
 
   if (!online) {
     // Offline path: queue in the outbox with offline flag (no token stored)
     const offlinePayload = { ...payload, created_offline: true }
-    await enqueue(clientId, 'case.submit', offlinePayload)
+    await enqueue(clientId, 'case.submit', offlinePayload, ownerId)
     // Signal useLocalTriage to begin offline-model warmup
     window.dispatchEvent(new CustomEvent('vitalnet-server-unreachable'))
     return { queued: true, client_id: clientId }
@@ -53,7 +60,6 @@ export async function submitCase(formData) {
 
   // Online path: attempt fetch, fall back to queueing on network error
   try {
-    const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     const headers = { ...buildAuthHeaders(session.access_token), 'X-Event-Id': clientId }
     const res = await fetch(`${apiBase('cases.submit')}/api/submit`, {
@@ -70,7 +76,7 @@ export async function submitCase(formData) {
     // Network error (TypeError: Failed to fetch) → silently queue
     if (err instanceof TypeError) {
       const offlinePayload = { ...payload, created_offline: true }
-      await enqueue(clientId, 'case.submit', offlinePayload)
+      await enqueue(clientId, 'case.submit', offlinePayload, ownerId)
       window.dispatchEvent(new CustomEvent('vitalnet-server-unreachable'))
       return { queued: true, client_id: clientId }
     }
@@ -123,16 +129,20 @@ async function drainCaseSubmit(item, token) {
  * Returns { synced: number, failed: number, dead: number, requiresLogin?: boolean }
  */
 export async function processQueue() {
-  const pending = await getPendingEvents()
-  if (pending.length === 0) return { synced: 0, failed: 0, dead: 0 }
-
-  // Get fresh token — supabase-js auto-refreshes if access token expired
+  // Get fresh token FIRST — supabase-js auto-refreshes if the access token
+  // expired — because the drain is scoped to the logged-in worker's own
+  // queued rows (owner_id). A different worker's rows on this shared device
+  // are left untouched for that worker to sync under their own identity.
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) {
     // No valid session — user needs to re-login before the outbox can drain
     return { synced: 0, failed: 0, dead: 0, requiresLogin: true }
   }
   const freshToken = session.access_token
+  const ownerId = session.user.id
+
+  const pending = await getPendingEvents(ownerId)
+  if (pending.length === 0) return { synced: 0, failed: 0, dead: 0 }
 
   let synced = 0
   let failed = 0

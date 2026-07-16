@@ -130,7 +130,14 @@ graph LR
 ## Dependency management
 
 - `.github/dependabot.yml` opens daily update PRs for pip/npm/GitHub
-  Actions dependencies, targeting `dev`.
+  Actions dependencies, targeting `dev`. The npm entry points at the repo
+  root, so the single `pnpm-lock.yaml` there covers both `apps/web` and
+  `packages/clinical-core`. **Known gap:** `apps/api` (Deno/Hono) is not
+  covered — Deno is not a supported Dependabot ecosystem, so its
+  dependencies (`deno.lock`) need a manual review cadence or a Renovate
+  config. Its `deno.json` pins jsr/npm specifiers with caret ranges and
+  `deno.lock` records integrity hashes, so an unexpected version change is at
+  least detectable at install time.
 - `scikit-learn` and `shap` are pinned to **exact** versions (not `>=`) —
   bumping either requires retraining and committing new model artifacts in
   the same change (see `AGENTS.md` and `backend/app/ml/README.md`). This is

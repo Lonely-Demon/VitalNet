@@ -153,8 +153,12 @@ export default function IntakeForm() {
   const { showToast } = useToast()
   const { classify } = useLocalTriage()
 
-  // Tie draft strictly to the authenticated worker so tab evictions safely restore
-  const { loadDraft, saveDraft, clearDraft } = useDraftSave(profile?.id || 'anonymous')
+  // Tie draft strictly to the authenticated worker so tab evictions safely
+  // restore. Never fall back to a shared 'anonymous' key: on a shared PHC
+  // tablet that would let one worker's in-progress patient data restore into
+  // another worker's form before the profile resolves. Null ⇒ no draft
+  // persistence until the profile is known (see useDraftSave).
+  const { loadDraft, saveDraft, clearDraft } = useDraftSave(profile?.id ?? null)
 
   // Load draft on mount
   useEffect(() => {

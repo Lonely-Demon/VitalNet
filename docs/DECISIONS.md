@@ -1833,3 +1833,74 @@ question; the same kind of check has not been run for every other DDL
 category those migrations touch. Worth treating as a standing open
 question rather than an assumption the next time schema_snapshot.sql is
 relied on for something it hasn't been asked to do before.
+
+### 39. Second adversarial audit pass — fail-closed scoping, RPC hardening, shared-device outbox ownership
+
+**Context**: an external two-pass adversarial review (1 critical, 2 high, 10
+medium, 9 low/info) was run against `dev`. Every finding was re-verified
+against the live code before acting; several turned out to be real, and the
+"critical" turned out to be substantially mitigated by RLS but still worth
+closing at the app layer.
+
+**What was fixed** (branch `security/audit-hardening-round2`):
+
+- **App-layer facility scoping now fails CLOSED (was open).**
+  `analytics.ts::resolveScope`, `cases.ts` list, and `cases.ts`
+  by-patient-key all previously dropped the `facility_id` filter (served
+  system-wide data) when a non-admin account had a null `facility_id`. All
+  three now route through `_shared/scoping.ts::resolveFacilityScope`, which
+  throws 400 for a non-admin with no facility. Important nuance recorded for
+  the next reviewer: the `asha_select_own` RLS policy (phase32) already
+  restricts doctors to their facility and ASHA workers to their own
+  submissions, so this was defense-in-depth, not the unbounded "every
+  facility" leak the report described — **provided phase32 is actually live**
+  (see §36/§38 on how often that assumption has been wrong here; worth a live
+  spot-check).
+
+- **`fn_rate_limit` DoS bounded (phase38).** It is granted to `anon`, so it
+  was callable directly via PostgREST with an unbounded `p_window_s` (which
+  also set the cleanup horizon `4 × p_window_s`) and no `p_key` length cap —
+  a storage-exhaustion vector against the shared limiter. Now bounds
+  `p_window_s ≤ 3600`, `p_key ≤ 200`, `p_max ≤ 1e6`. Legit callers only ever
+  pass window ≤ ~300 and short keys, so no real traffic is affected.
+
+- **`fn_deterioration_count` role-checked (phase38).** Was `is_active`-only,
+  so a supervisor could probe a patient's repeated-severe-visit signal by
+  key — contradicting supervisor_routes.py's documented "only sanctioned
+  path" isolation. Now restricted to `asha_worker`/`doctor`/`admin` (the
+  submit-path + already-case-authorized roles); supervisor is excluded.
+
+- **Shared-device outbox is owner-scoped.** On the handed-between-workers PHC
+  tablets, `processQueue()` drained *all* pending outbox rows under whoever
+  was logged in (submitting Worker A's patient data under Worker B's JWT),
+  and the dead-letter UI rendered any worker's `patient_name`/complaint. Rows
+  now carry `owner_id`; draining and the dead-letter list are scoped to the
+  logged-in worker. `signOut()` additionally clears in-progress form-drafts
+  and the cached facility phone. The outbox itself is deliberately **not**
+  wiped on logout (it is owner-scoped, and wiping it would break the
+  offline-first guarantee that a queued case survives until it syncs) — the
+  residual "raw IndexedDB readable via devtools on a shared device" is a
+  lower-severity, inherent-to-offline-first item left open (see below).
+
+- **Bounded LLM briefing chain (30s), sanitized LLM→LLM chaining, CORS
+  fail-closed, Gemini key moved to a header, dependabot repointed at the
+  monorepo, admin/user pagination ordered, degraded-count clamped, push
+  payload sanitized, draft-key `'anonymous'` collision closed.**
+
+**Deliberately deferred (documented, not fixed here):** LOW-1 (X-Forwarded-For
+left-most trust — fixing safely needs the exact proxy hop count), LOW-5
+(referral write-endpoint doc gap), LOW-6 (newborn age clamp — advisory-model
+only, needs golden-vector regeneration in two languages + clinician review, so
+its own PR), LOW-7/LOW-8/INFO-1 (perf/non-security), MED-5 (await-in-loop
+latency), MED-6 (voice buffers before size check), MED-10 (legacy `/api/admin/
+stats` under-count — the legacy backend is on the decommission path). Also
+open: the shared-device IndexedDB-at-rest residue described above.
+
+**Verification**: full migration-replay chain (stubs → snapshot → phase28–38 →
+RLS regression) applied cleanly against a local Postgres 16; phase38's bounds
+and the supervisor block were functionally exercised. `deno fmt/lint/check`
+and the edge test suite pass for all edited files (the 4 pre-existing
+`auth.test.ts`/`queryTimeout.test.ts` timer-leak failures reproduce
+unchanged on clean `dev` under Deno 2.4's stricter sanitizer — a
+deno-version artifact, not this change). clinical-core (61) and the web build
+are green.

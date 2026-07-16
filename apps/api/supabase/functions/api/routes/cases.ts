@@ -14,6 +14,7 @@ import { requireRole } from "../_shared/auth.ts";
 import { idempotent } from "../_shared/idempotency.ts";
 import { rateLimit } from "../_shared/rateLimit.ts";
 import { extractBearerToken, getSupabaseForUser, HttpError } from "../_shared/database.ts";
+import { resolveFacilityScope } from "../_shared/scoping.ts";
 import { AuditEventType, getClientIp, logPhiAccess } from "../_shared/audit.ts";
 import {
   authorizeCaseRowAccess,
@@ -324,7 +325,11 @@ cases.get("/api/cases", rateLimit(60, 60), requireRole("doctor", "admin"), async
   const rawToken = extractBearerToken(c.req.header("authorization"));
   const db = getSupabaseForUser(rawToken);
   const role = user.resolvedRole;
-  const facilityId = user.resolvedFacilityId;
+  // Fail CLOSED: a doctor with no facility assigned is rejected (400) rather
+  // than silently served every facility's queue. Admin resolves to null
+  // (system-wide). RLS backstops this too, but the app layer must not fall
+  // through to an unscoped list.
+  const facilityScope = resolveFacilityScope(role, user.resolvedFacilityId, null);
 
   const limitParam = Number.parseInt(c.req.query("limit") ?? "25", 10);
   const limit = Math.max(1, Math.min(Number.isFinite(limitParam) ? limitParam : 25, 100));
@@ -360,8 +365,8 @@ cases.get("/api/cases", rateLimit(60, 60), requireRole("doctor", "admin"), async
     .order("id", { ascending: false })
     .limit(limit + 1);
 
-  if (role === "doctor" && facilityId) {
-    query = query.eq("facility_id", facilityId);
+  if (facilityScope !== null) {
+    query = query.eq("facility_id", facilityScope);
   }
 
   if (normalizedBeforeTime !== null && beforePriority !== null) {
@@ -468,6 +473,12 @@ cases.get(
     const db = getSupabaseForUser(rawToken);
     const role = user.resolvedRole;
     const facilityId = user.resolvedFacilityId;
+    // Fail CLOSED for any non-admin without a facility (400). Admin resolves
+    // to null (system-wide, an admin may follow a patient across facilities);
+    // doctor/asha_worker are pinned to their own facility. RLS additionally
+    // restricts asha_worker to their own submissions (asha_select_own), so
+    // an ASHA worker can never see another facility's case history by key.
+    const facilityScope = resolveFacilityScope(role, facilityId, null);
 
     let query = db
       .from("case_records")
@@ -477,8 +488,8 @@ cases.get(
       .order("created_at", { ascending: false })
       .limit(50);
 
-    if (role === "doctor" && facilityId) {
-      query = query.eq("facility_id", facilityId);
+    if (facilityScope !== null) {
+      query = query.eq("facility_id", facilityScope);
     }
 
     const { data, error } = await query;

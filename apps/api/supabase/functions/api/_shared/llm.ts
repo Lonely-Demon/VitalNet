@@ -137,10 +137,14 @@ async function callGeminiJson(
   let response: Response;
   try {
     response = await fetchWithTimeout(
-      `${GEMINI_URL(model)}?key=${apiKey}`,
+      GEMINI_URL(model),
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // Key passed via the x-goog-api-key header, not a ?key= query
+        // parameter — a URL query string is far more likely to be captured
+        // verbatim in access/observability logs (including this environment's
+        // own outbound proxy) than a request header.
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           system_instruction: { parts: [{ text: systemPrompt }] },
           contents: [{ role: "user", parts: [{ text: userContent }] }],
@@ -319,13 +323,44 @@ function fallbackBriefing(triageResult: BriefingTriageInput): Briefing {
   };
 }
 
+// Hard ceiling on the whole 4-tier chain. Each tier is 2 attempts × 15s, so
+// an unbounded chain could reach ~120s — and generateBriefing() is awaited
+// on the submit path BEFORE the case row is persisted, so that worst case
+// would leave the already-computed, authoritative rules-engine triage
+// unsaved for up to two minutes and risk the edge isolate's wall-clock
+// ceiling on the single most safety-critical request in the app. When the
+// budget is hit we return the deterministic fallback briefing (triage_level
+// and risk_driver from the rules engine stay intact) so the case can persist
+// immediately; any still-in-flight provider call is abandoned.
+const BRIEFING_TOTAL_BUDGET_MS = 30_000;
+
 /**
- * Generate a clinical briefing using the 4-tier fallback chain. Never
- * throws — always returns a usable briefing. The triage_level is enforced
- * on every output path (enforceSchema), regardless of which tier (or
- * neither) produced the rest of the content.
+ * Generate a clinical briefing using the 4-tier fallback chain, bounded by
+ * BRIEFING_TOTAL_BUDGET_MS overall. Never throws — always returns a usable
+ * briefing. The triage_level is enforced on every output path
+ * (enforceSchema), regardless of which tier (or neither) produced the rest.
  */
 export async function generateBriefing(
+  form: BriefingFormInput,
+  triageResult: BriefingTriageInput,
+): Promise<Briefing> {
+  let budgetTimer: number | undefined;
+  const budget = new Promise<Briefing>((resolve) => {
+    budgetTimer = setTimeout(() => {
+      console.warn(
+        `LLM briefing exceeded ${BRIEFING_TOTAL_BUDGET_MS}ms budget — returning fallback. Triage badge intact.`,
+      );
+      resolve(fallbackBriefing(triageResult));
+    }, BRIEFING_TOTAL_BUDGET_MS);
+  });
+  try {
+    return await Promise.race([generateBriefingInner(form, triageResult), budget]);
+  } finally {
+    clearTimeout(budgetTimer);
+  }
+}
+
+async function generateBriefingInner(
   form: BriefingFormInput,
   triageResult: BriefingTriageInput,
 ): Promise<Briefing> {
@@ -437,13 +472,18 @@ export async function generatePatientSummary(
     return { summary: fallbackPatientSummary(triageResult), generated: false };
   }
 
+  // briefing.* is the OUTPUT of the first (triage-briefing) LLM call. If that
+  // call were ever jailbroken via patient free text, its output would be
+  // attacker-influenced — so it gets the same sanitizeField() treatment here
+  // as raw patient fields do before entering the first prompt, closing a
+  // prompt-injection chaining gap between the two calls.
   const actionsList = Array.isArray(briefing.recommended_immediate_actions)
-    ? (briefing.recommended_immediate_actions as unknown[]).map(String)
+    ? (briefing.recommended_immediate_actions as unknown[]).map((a) => sanitizeField(a, 200))
     : [];
   const actions = actionsList.length ? actionsList.join("; ") : "See a doctor for further guidance.";
   const prompt = `Write the explanation in ${languageName}.\n\n` +
     `Triage level: ${triageResult.triage_level}\n` +
-    `What this means: ${briefing.primary_risk_driver ?? ""}\n` +
+    `What this means: ${sanitizeField(briefing.primary_risk_driver, 300)}\n` +
     `What should happen next: ${actions}`;
 
   try {

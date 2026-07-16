@@ -12,6 +12,14 @@
 // online-only per the Round 6 rebuild plan's item 3 decision) — the schema
 // is generic so a future offline-capable action can reuse this store
 // without another IndexedDB version bump.
+//
+// SHARED-DEVICE SAFETY: every row carries owner_id — the auth user id of the
+// worker who queued it. The PHC tablets these run on are handed between ASHA
+// workers, so the drain loop and the dead-letter UI MUST only ever surface a
+// row to the same worker who created it. Without this, Worker B logging in
+// after Worker A queued a case offline would submit A's patient data under
+// B's identity/JWT (getPendingEvents) and see A's patient name/complaint in
+// the dead-letter list (getDeadLetters). Both are scoped by owner_id below.
 import { getOfflineDB } from './offlineDB'
 
 const STORE_NAME = 'outbox'
@@ -23,11 +31,13 @@ function notifyOutboxChange() {
 
 /**
  * Queue an event for later sync. No token stored — fresh token fetched at
- * sync time. Throws if the PENDING (not dead-lettered) count is already at
- * capacity — dead letters never block new submissions; they're a separate,
- * user-visible surface (getDeadLetters) the worker clears explicitly.
+ * sync time. ownerId is the queuing worker's auth user id; it gates who may
+ * later drain or view this row (see module header). Throws if the PENDING
+ * (not dead-lettered) count is already at capacity — dead letters never
+ * block new submissions; they're a separate, user-visible surface
+ * (getDeadLetters) the worker clears explicitly.
  */
-export async function enqueue(eventId, type, payload) {
+export async function enqueue(eventId, type, payload, ownerId) {
   const pendingCount = await getPendingCount()
   if (pendingCount >= MAX_PENDING) {
     console.warn(`[VitalNet] Offline outbox is full (${MAX_PENDING} pending items). Cannot queue more.`)
@@ -37,6 +47,7 @@ export async function enqueue(eventId, type, payload) {
   const db = await getOfflineDB()
   await db.put(STORE_NAME, {
     event_id: eventId,
+    owner_id: ownerId ?? null,
     type,
     payload,
     created_at: new Date().toISOString(),
@@ -53,13 +64,25 @@ export async function dequeue(eventId) {
   notifyOutboxChange()
 }
 
-/** All pending events, oldest first — the FIFO drain order processQueue() uses. */
-export async function getPendingEvents() {
+/**
+ * Pending events owned by `ownerId`, oldest first — the FIFO drain order
+ * processQueue() uses. Scoped by owner so a worker never drains (submits
+ * under their own JWT) a case another worker queued on the same device.
+ * Returns [] when ownerId is falsy: with no known identity there is nothing
+ * safe to submit.
+ */
+export async function getPendingEvents(ownerId) {
+  if (!ownerId) return []
   const db = await getOfflineDB()
   const all = await db.getAllFromIndex(STORE_NAME, 'created_at')
-  return all.filter((e) => e.status === 'pending')
+  return all.filter((e) => e.status === 'pending' && e.owner_id === ownerId)
 }
 
+/**
+ * Total pending count across ALL owners. This is a device-level indicator
+ * only (the "N pending" badge and the capacity guard) — it exposes no PHI,
+ * just a number — so it is intentionally not owner-scoped.
+ */
 export async function getPendingCount() {
   const db = await getOfflineDB()
   return db.countFromIndex(STORE_NAME, 'status', 'pending')
@@ -93,14 +116,22 @@ export async function incrementAttempts(eventId) {
   await tx.done
 }
 
-export async function getDeadLetters() {
+/**
+ * Dead-lettered events owned by `ownerId`. Owner-scoped because these rows
+ * carry patient_name/chief_complaint that the dead-letter UI renders — an
+ * unscoped list would show one worker another worker's patient PHI on a
+ * shared device. Returns [] when ownerId is falsy.
+ */
+export async function getDeadLetters(ownerId) {
+  if (!ownerId) return []
   const db = await getOfflineDB()
-  return db.getAllFromIndex(STORE_NAME, 'status', 'dead')
+  const all = await db.getAllFromIndex(STORE_NAME, 'status', 'dead')
+  return all.filter((e) => e.owner_id === ownerId)
 }
 
-export async function getDeadLetterCount() {
-  const db = await getOfflineDB()
-  return db.countFromIndex(STORE_NAME, 'status', 'dead')
+export async function getDeadLetterCount(ownerId) {
+  const dead = await getDeadLetters(ownerId)
+  return dead.length
 }
 
 /** Moves a dead-lettered event back to pending so the next drain retries it. */

@@ -112,6 +112,12 @@ admin.get("/api/admin/users", rateLimit(60, 60), requireRole("admin"), async (c)
   const { data: profileRows, error: profilesError } = await svc
     .from("profiles")
     .select("id, full_name, role, facility_id, asha_id, is_active, created_at, facilities(name, district)")
+    // Deterministic order before paginating — Postgres does not guarantee a
+    // stable row order across .range() calls without one, so an admin could
+    // otherwise see the same user twice or miss one across pages. created_at
+    // then id (tie-breaker for identical timestamps) is fully deterministic.
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
     .range(start, end);
   if (profilesError) throw profilesError;
 

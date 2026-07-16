@@ -14,16 +14,22 @@ const STORE = 'form-drafts'
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000   // 24 hours
 
 /**
- * Hook exposing per-draft save/load/clear tied to a specific clientId.
- * @param {string} clientId — UUID generated at form mount time
+ * Hook exposing per-draft save/load/clear tied to a specific owner id (the
+ * authenticated worker's profile id). All three operations no-op when
+ * ownerId is falsy: on a shared device the profile may not have resolved yet,
+ * and a fixed 'anonymous' key would let two different workers read/write the
+ * SAME draft bucket — leaking one worker's in-progress patient data to the
+ * next. No stable owner ⇒ no draft persistence, rather than a shared bucket.
+ * @param {string|null} ownerId — the authenticated worker's profile id
  */
-export function useDraftSave(clientId) {
-  const key = `draft-${clientId}`
+export function useDraftSave(ownerId) {
+  const key = ownerId ? `draft-${ownerId}` : null
 
   /**
-   * Load a saved draft. Returns null if no draft exists or draft is >24h old.
+   * Load a saved draft. Returns null if no owner, no draft, or draft is >24h old.
    */
   async function loadDraft() {
+    if (!key) return null
     const db = await getOfflineDB()
     const draft = await db.get(STORE, key)
     if (draft && Date.now() - draft.savedAt < DRAFT_TTL_MS) {
@@ -37,6 +43,7 @@ export function useDraftSave(clientId) {
    * @param {object} formData — current form values
    */
   async function saveDraft(formData) {
+    if (!key) return
     const db = await getOfflineDB()
     await db.put(STORE, { formData, savedAt: Date.now() }, key)
   }
@@ -46,6 +53,7 @@ export function useDraftSave(clientId) {
    * NOT after a failed attempt, so the draft survives transient errors.
    */
   async function clearDraft() {
+    if (!key) return
     const db = await getOfflineDB()
     await db.delete(STORE, key)
   }
