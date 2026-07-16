@@ -344,7 +344,10 @@ export async function generateBriefing(
   form: BriefingFormInput,
   triageResult: BriefingTriageInput,
 ): Promise<Briefing> {
-  let budgetTimer: number | undefined;
+  // ReturnType<typeof setTimeout>, not number: under the edge function's type
+  // resolution setTimeout returns a Timeout object (same idiom as
+  // queryTimeout.ts), so typing this as number fails `deno check`.
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
   const budget = new Promise<Briefing>((resolve) => {
     budgetTimer = setTimeout(() => {
       console.warn(
