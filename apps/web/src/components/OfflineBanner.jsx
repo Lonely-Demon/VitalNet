@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react'
 import { getPendingCount, getDeadLetters, retryDeadLetter, discardDeadLetter } from '../lib/outbox'
+import { useAuth } from '../store/authStore'
 
 export default function OfflineBanner() {
+  const { session } = useAuth()
+  const ownerId = session?.user?.id ?? null
   const [online,       setOnline]       = useState(navigator.onLine)
   const [queueCount,   setQueueCount]   = useState(0)
   const [deadLetters,  setDeadLetters]  = useState([])
@@ -9,7 +12,11 @@ export default function OfflineBanner() {
 
   useEffect(() => {
     async function updateCounts() {
-      const [count, dead] = await Promise.all([getPendingCount(), getDeadLetters()])
+      // Dead letters are owner-scoped: on a shared device this worker must
+      // never see another worker's queued patient data (the list renders
+      // patient_name/chief_complaint). The pending COUNT is a device-level
+      // indicator only (no PHI), so it stays global.
+      const [count, dead] = await Promise.all([getPendingCount(), getDeadLetters(ownerId)])
       setQueueCount(count)
       setDeadLetters(dead)
     }
@@ -27,7 +34,7 @@ export default function OfflineBanner() {
       window.removeEventListener('offline', handleOffline)
       window.removeEventListener('offline-queue-changed', updateCounts)
     }
-  }, [])
+  }, [ownerId])
 
   const handleRetry = async (eventId) => {
     await retryDeadLetter(eventId)

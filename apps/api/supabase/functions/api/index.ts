@@ -42,7 +42,13 @@ app.use(
   cors({
     origin: (origin) => {
       const allowed = allowedOrigins(getConfig());
-      return origin && allowed.includes(origin) ? origin : allowed[0] ?? "";
+      // Only ever reflect an explicitly allow-listed origin. On any mismatch
+      // return "" so no Access-Control-Allow-Origin is granted — never
+      // default to allowed[0], which both reflected the wrong origin on a
+      // mismatch and, if allowedOrigins() ever resolved empty in a
+      // misconfigured env, handed every caller an empty ACAO. Matches the
+      // Python original, which omits the header on a non-match.
+      return origin && allowed.includes(origin) ? origin : "";
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

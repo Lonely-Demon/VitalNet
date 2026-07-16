@@ -11,6 +11,7 @@ import { Hono } from "hono";
 import { requireRole } from "../_shared/auth.ts";
 import { rateLimit } from "../_shared/rateLimit.ts";
 import { getSupabaseForUser, HttpError } from "../_shared/database.ts";
+import { resolveFacilityScope } from "../_shared/scoping.ts";
 import { runQuery } from "../_shared/queryTimeout.ts";
 import { AuditEventType, getClientIp, logPhiAccess } from "../_shared/audit.ts";
 import { toCsv } from "../_shared/csv.ts";
@@ -29,11 +30,17 @@ import type { AppEnv } from "../_shared/types.ts";
 
 export const analytics = new Hono<AppEnv>();
 
-const GLOBAL_SCOPE_ROLE = "admin";
-
+// Fail CLOSED, not open. resolveFacilityScope throws HTTP 400 for any
+// non-admin whose account has no facility assigned, instead of the previous
+// behaviour of silently dropping the facility filter (scoped=false) and
+// widening the query to every facility in the system. `scoped` is true
+// whenever a facility filter must be applied (non-admin); admin resolves to
+// null (system-wide) exactly as before. RLS on case_records independently
+// backstops this, but a misprovisioned account must never fall through to an
+// unscoped aggregate here regardless.
 function resolveScope(user: { resolvedRole: string; resolvedFacilityId: string | null }) {
-  const scoped = user.resolvedRole !== GLOBAL_SCOPE_ROLE && Boolean(user.resolvedFacilityId);
-  return { role: user.resolvedRole, facilityId: user.resolvedFacilityId, scoped };
+  const facilityId = resolveFacilityScope(user.resolvedRole, user.resolvedFacilityId, null);
+  return { role: user.resolvedRole, facilityId, scoped: facilityId !== null };
 }
 
 // ── /summary ──────────────────────────────────────────────────────────────────
@@ -152,7 +159,11 @@ analytics.get("/api/analytics/summary", rateLimit(60, 60), requireRole("doctor",
     triage_distribution: dist,
     daily_volume: daily,
     reviewed_count: reviewed,
-    unreviewed_count: total - reviewed,
+    // Clamp at 0: total and reviewed come from two independently-degrading
+    // queries, so if `total` times out (→0) while `reviewed` succeeds (→N),
+    // a naive subtraction would surface a nonsensical negative count as if it
+    // were real. _degraded already flags the partial result.
+    unreviewed_count: Math.max(0, total - reviewed),
     top_asha_workers: topAsha,
   };
   if (failures.length) {
