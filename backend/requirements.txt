@@ -3,7 +3,7 @@ uvicorn[standard]==0.50.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
 python-dotenv==1.2.2
-groq==1.5.0
+groq==1.6.0
 google-generativeai==0.8.6
 # scikit-learn is pinned EXACTLY (not >=) because trained .pkl models are
 # only guaranteed to unpickle with the scikit-learn version that trained
