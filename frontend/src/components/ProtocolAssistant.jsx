@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { askProtocolQuestion, listProtocolQuestions, curateProtocolAnswer } from '../lib/api'
 import { useTranslation } from 'react-i18next'
+import { useToast } from './ToastProvider'
 
 const LANGUAGES = [
   { code: 'en', label: 'English' },
@@ -78,6 +79,7 @@ function QuestionCard({ q, canCurate, onCurated }) {
 
 export default function ProtocolAssistant({ canCurate = false }) {
   const { i18n } = useTranslation()
+  const { showToast } = useToast()
   const [questions, setQuestions] = useState([])
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState(null)
@@ -111,10 +113,21 @@ export default function ProtocolAssistant({ canCurate = false }) {
     setAskError(null)
     try {
       const created = await askProtocolQuestion({ questionText: questionText.trim(), language })
-      setQuestions((prev) => [created, ...prev])
+      const formatted = {
+        id: created.id || `temp-${Date.now()}`,
+        question_text: created.question_text || questionText.trim(),
+        llm_answer_text: created.llm_answer_text || '',
+        curator_answer_text: created.curator_answer_text || '',
+        status: created.status || (created.llm_answer_text ? 'answered' : 'pending_curation'),
+        created_at: created.created_at || new Date().isoformat(),
+      }
+      setQuestions((prev) => [formatted, ...prev])
       setQuestionText('')
+      showToast('Question submitted to Protocol Assistant', 'success')
     } catch (e) {
-      setAskError(e.message)
+      const msg = e.message || 'Failed to submit question'
+      setAskError(msg)
+      showToast(msg, 'error')
     } finally {
       setAsking(false)
     }
@@ -162,7 +175,7 @@ export default function ProtocolAssistant({ canCurate = false }) {
           <button
             type="submit"
             disabled={asking || !questionText.trim()}
-            className="rounded-pill bg-forest px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded-pill bg-forest px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50 cursor-pointer"
           >
             {asking ? 'Asking…' : 'Ask'}
           </button>
@@ -175,13 +188,13 @@ export default function ProtocolAssistant({ canCurate = false }) {
 
       {!loading && !listError && (
         <div className="space-y-4">
-          {canCurate && pending.length > 0 && (
+          {pending.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs font-mono font-semibold uppercase tracking-wide text-urgent">
-                Needs curation ({pending.length})
+                Pending Curation ({pending.length})
               </p>
-              {pending.map((q) => (
-                <QuestionCard key={q.id} q={q} canCurate={canCurate} onCurated={handleCurated} />
+              {pending.map((q, idx) => (
+                <QuestionCard key={q.id || `pending-${idx}`} q={q} canCurate={canCurate} onCurated={handleCurated} />
               ))}
             </div>
           )}
@@ -193,8 +206,8 @@ export default function ProtocolAssistant({ canCurate = false }) {
             {answered.length === 0 ? (
               <p className="text-sm text-text3">No answered questions yet.</p>
             ) : (
-              answered.map((q) => (
-                <QuestionCard key={q.id} q={q} canCurate={canCurate} onCurated={handleCurated} />
+              answered.map((q, idx) => (
+                <QuestionCard key={q.id || `answered-${idx}`} q={q} canCurate={canCurate} onCurated={handleCurated} />
               ))
             )}
           </div>

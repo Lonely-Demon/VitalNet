@@ -37,6 +37,7 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
   const recognitionRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
+  const manuallyStoppedRef = useRef(false)
 
   const speechSupported = Boolean(getSpeechRecognitionCtor())
   const recorderSupported = Boolean(getMediaRecorderCtor() && navigator.mediaDevices?.getUserMedia)
@@ -84,6 +85,10 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
       }
       recorder.onstop = async () => {
         stream.getTracks().forEach((track) => track.stop())
+        if (manuallyStoppedRef.current) {
+          setListening(false)
+          return
+        }
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
         try {
           const transcript = await transcribeAudio(blob, LANG_TO_ISO[lang])
@@ -91,7 +96,7 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
           if (transcript) onResult?.(transcript)
         } catch (err) {
           console.warn('[VitalNet] Server transcription failed, falling back to browser STT:', err)
-          if (speechSupported) {
+          if (!manuallyStoppedRef.current && speechSupported) {
             startBrowserRecognition()
           } else {
             setListening(false)
@@ -109,6 +114,7 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
   }, [lang, onResult, speechSupported, startBrowserRecognition])
 
   const start = useCallback(() => {
+    manuallyStoppedRef.current = false
     setError(null)
     if (!supported) {
       setError('unsupported')
@@ -126,10 +132,13 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
   }, [supported, online, recorderSupported, startServerRecording, startBrowserRecognition])
 
   const stop = useCallback(() => {
+    manuallyStoppedRef.current = true
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop()
     }
-    recognitionRef.current?.stop()
+    if (recognitionRef.current) {
+      recognitionRef.current.stop()
+    }
     setListening(false)
   }, [])
 

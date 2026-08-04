@@ -33,6 +33,7 @@
       "spo2": "SpO2 (%)",
       "heartRate": "Heart Rate (bpm)",
       "temperature": "Temperature (°C)",
+      "observations": "Observations",
       "knownConditions": "Known Conditions",
       "currentMedications": "Current Medications",
       "patientKey": "Patient Code (if known)",

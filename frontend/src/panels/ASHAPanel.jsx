@@ -22,7 +22,14 @@ const TRIAGE_STYLES = {
 
 export default function ASHAPanel() {
   const [activeTab,   setActiveTab]   = useState('new')
-  const [submissions, setSubmissions] = useState([])
+  const [submissions, setSubmissions] = useState(() => {
+    try {
+      const cached = localStorage.getItem('vn_my_submissions')
+      return cached ? JSON.parse(cached) : []
+    } catch {
+      return []
+    }
+  })
   const [loading,     setLoading]     = useState(false)
   const [error,       setError]       = useState(null)
   const { showToast } = useToast()
@@ -60,24 +67,29 @@ export default function ASHAPanel() {
     userId,
     onUpdate: (updatedCase) => {
       // Update the submission history when a queued offline case is processed
-      setSubmissions((prev) =>
-        prev.map((c) => (c.id === updatedCase.id ? {
+      setSubmissions((prev) => {
+        const next = prev.map((c) => (c.id === updatedCase.id ? {
           ...c,
           triage_level: updatedCase.triage_level,
           reviewed_at: updatedCase.reviewed_at,
         } : c))
-      )
+        try { localStorage.setItem('vn_my_submissions', JSON.stringify(next)) } catch {}
+        return next
+      })
     },
   })
 
   async function fetchSubmissions() {
-    setLoading(true)
+    if (submissions.length === 0) setLoading(true)
     setError(null)
     try {
       const data = await getMySubmissions()
-      setSubmissions(data.cases)
+      if (Array.isArray(data.cases)) {
+        setSubmissions(data.cases)
+        try { localStorage.setItem('vn_my_submissions', JSON.stringify(data.cases)) } catch {}
+      }
     } catch (e) {
-      setError(e.message)
+      if (submissions.length === 0) setError(e.message)
     } finally {
       setLoading(false)
     }

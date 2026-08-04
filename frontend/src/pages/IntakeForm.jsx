@@ -394,7 +394,7 @@ export default function IntakeForm() {
     : null
 
   return (
-    <form onSubmit={handleSubmit} className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300 relative pb-32">
+    <form onSubmit={handleSubmit} className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300">
       <h1 className="text-2xl font-display italic text-forest tracking-tight mb-8 text-center">{t('intakeForm.title')}</h1>
 
       {error && (
@@ -674,7 +674,7 @@ export default function IntakeForm() {
       </Section>
 
       {/* Submit */}
-      <div className="fixed sm:absolute bottom-0 left-0 right-0 sm:left-auto sm:right-auto sm:w-full p-4 bg-surface sm:bg-transparent border-t border-surface3 sm:border-none shadow-[0_-4px_10px_rgba(0,0,0,0.1)] sm:shadow-none z-20">
+      <div className="mt-8 pt-4 border-t border-surface3 flex justify-center w-full">
         <button
           type="submit"
           disabled={loading}

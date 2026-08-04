@@ -327,186 +327,195 @@ export default function BriefingCard({ caseData, onReviewed }) {
             )}
           </BriefingSection>
 
-          {/* Triage override */}
-          {!overrideState.triage && (
-            showOverride ? (
-              <fieldset className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
-                <legend className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
-                  Correct triage tier
-                </legend>
-                <select
-                  value={overrideTier}
-                  onChange={(e) => setOverrideTier(e.target.value)}
-                  aria-label="Correct triage tier"
-                  className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
-                >
-                  {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-                <textarea
-                  value={overrideReason}
-                  onChange={(e) => setOverrideReason(e.target.value)}
-                  placeholder="Why does this case need a different tier?"
-                  aria-label="Why does this case need a different tier?"
-                  rows={2}
-                  maxLength={500}
-                  className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleOverride}
-                    disabled={overriding || !overrideReason.trim()}
-                    className="flex-1 bg-forest text-white py-2 rounded-pill text-sm font-medium disabled:opacity-50 cursor-pointer"
-                  >
-                    {overriding ? 'Saving…' : 'Save override'}
-                  </button>
-                  <button
-                    onClick={() => setShowOverride(false)}
-                    className="px-4 py-2 text-sm text-text2 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </fieldset>
-            ) : (
-              <button
-                onClick={() => setShowOverride(true)}
-                className="text-xs text-text3 hover:text-forest underline cursor-pointer"
+          {/* Fieldsets when expanding active forms */}
+          {!overrideState.triage && showOverride && (
+            <div role="group" aria-label="Correct triage tier" className="p-4 rounded-xl border border-leaf/40 bg-surface2/70 space-y-3 shadow-xs">
+              <p className="text-xs font-mono font-bold text-text3 uppercase tracking-widest">
+                Correct triage tier
+              </p>
+              <select
+                value={overrideTier}
+                onChange={(e) => setOverrideTier(e.target.value)}
+                aria-label="Correct triage tier"
+                className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
               >
-                Correct the triage tier
-              </button>
-            )
+                {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <textarea
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+                placeholder="Why does this case need a different tier?"
+                aria-label="Why does this case need a different tier?"
+                rows={2}
+                maxLength={500}
+                className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleOverride}
+                  disabled={overriding || !overrideReason.trim()}
+                  className="flex-1 bg-forest text-white py-2 rounded-pill text-sm font-medium disabled:opacity-50 cursor-pointer"
+                >
+                  {overriding ? 'Saving…' : 'Save override'}
+                </button>
+                <button
+                  onClick={() => setShowOverride(false)}
+                  className="px-4 py-2 text-sm text-text2 cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           )}
 
-          {/* Record outcome — shown only after review */}
-          {reviewed && !outcomeRecorded && (
-            showOutcome ? (
-              <fieldset className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
-                <legend className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
-                  Record patient outcome
-                </legend>
-                <select
-                  value={outcomeSeverity}
-                  onChange={(e) => setOutcomeSeverity(e.target.value)}
-                  aria-label="Actual severity"
-                  className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
-                >
-                  {TIERS.map(t => <option key={t} value={t}>Actual severity: {t}</option>)}
-                </select>
-                <select
-                  value={outcomeDisposition}
-                  onChange={(e) => setOutcomeDisposition(e.target.value)}
-                  aria-label="Patient disposition"
-                  className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
-                >
-                  {DISPOSITIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-                </select>
-                <textarea
-                  value={outcomeNotes}
-                  onChange={(e) => setOutcomeNotes(e.target.value)}
-                  placeholder="Outcome notes (optional)"
-                  aria-label="Outcome notes (optional)"
-                  rows={2}
-                  maxLength={1000}
-                  className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleRecordOutcome}
-                    disabled={recordingOutcome}
-                    className="flex-1 bg-forest text-white py-2 rounded-pill text-sm font-medium disabled:opacity-50 cursor-pointer"
-                  >
-                    {recordingOutcome ? 'Saving…' : 'Save outcome'}
-                  </button>
-                  <button
-                    onClick={() => setShowOutcome(false)}
-                    className="px-4 py-2 text-sm text-text2 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </fieldset>
-            ) : (
-              <button
-                onClick={() => setShowOutcome(true)}
-                className="text-xs text-text3 hover:text-forest underline cursor-pointer"
-              >
+          {reviewed && !outcomeRecorded && showOutcome && (
+            <div role="group" aria-label="Record patient outcome" className="p-4 rounded-xl border border-leaf/40 bg-surface2/70 space-y-3 shadow-xs">
+              <p className="text-xs font-mono font-bold text-text3 uppercase tracking-widest">
                 Record patient outcome
-              </button>
-            )
+              </p>
+              <select
+                value={outcomeSeverity}
+                onChange={(e) => setOutcomeSeverity(e.target.value)}
+                aria-label="Actual severity"
+                className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
+              >
+                {TIERS.map(t => <option key={t} value={t}>Actual severity: {t}</option>)}
+              </select>
+              <select
+                value={outcomeDisposition}
+                onChange={(e) => setOutcomeDisposition(e.target.value)}
+                aria-label="Patient disposition"
+                className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
+              >
+                {DISPOSITIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+              </select>
+              <textarea
+                value={outcomeNotes}
+                onChange={(e) => setOutcomeNotes(e.target.value)}
+                placeholder="Outcome notes (optional)"
+                aria-label="Outcome notes (optional)"
+                rows={2}
+                maxLength={1000}
+                className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleRecordOutcome}
+                  disabled={recordingOutcome}
+                  className="flex-1 bg-forest text-white py-2 rounded-pill text-sm font-medium disabled:opacity-50 cursor-pointer"
+                >
+                  {recordingOutcome ? 'Saving…' : 'Save outcome'}
+                </button>
+                <button
+                  onClick={() => setShowOutcome(false)}
+                  className="px-4 py-2 text-sm text-text2 cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           )}
+
           {outcomeRecorded && (
             <p className="text-xs text-forest font-medium">✓ Outcome recorded</p>
           )}
 
-          {/* Inter-facility referral (FEATURES_ROADMAP §2.3) */}
-          {referred ? (
-            <p className="text-xs text-forest font-medium">✓ Referred to {referred.facilityName}</p>
-          ) : (
-            showReferral ? (
-              <fieldset className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">
-                <legend className="block text-xs font-mono font-bold text-text3 uppercase tracking-widest">
-                  Refer to another facility
-                </legend>
-                {facilitiesError && <p className="text-xs text-emergency">{facilitiesError}</p>}
-                {facilities === null ? (
-                  <p className="text-xs text-text3">Loading facilities…</p>
-                ) : (
-                  <select
-                    value={referralFacilityId}
-                    onChange={(e) => setReferralFacilityId(e.target.value)}
-                    aria-label="Receiving facility"
-                    className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
-                  >
-                    {facilities.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name}{f.district ? ` — ${f.district}` : ''}
-                        {f.capacity_status && f.capacity_status !== 'available' ? ` (${f.capacity_status})` : ''}
-                        {typeof f.open_case_count === 'number' ? ` · ${f.open_case_count} open` : ''}
-                      </option>
-                    ))}
-                  </select>
-                )}
+          {!referred && showReferral && (
+            <div role="group" aria-label="Refer to another facility" className="p-4 rounded-xl border border-leaf/40 bg-surface2/70 space-y-3 shadow-xs">
+              <p className="text-xs font-mono font-bold text-text3 uppercase tracking-widest">
+                Refer to another facility
+              </p>
+              {facilitiesError && <p className="text-xs text-emergency">{facilitiesError}</p>}
+              {facilities === null ? (
+                <p className="text-xs text-text3">Loading facilities…</p>
+              ) : (
                 <select
-                  value={referralUrgency}
-                  onChange={(e) => setReferralUrgency(e.target.value)}
-                  aria-label="Referral urgency"
+                  value={referralFacilityId}
+                  onChange={(e) => setReferralFacilityId(e.target.value)}
+                  aria-label="Receiving facility"
                   className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
                 >
-                  {TIERS.map(t => <option key={t} value={t}>Urgency: {t}</option>)}
+                  {facilities.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}{f.district ? ` — ${f.district}` : ''}
+                      {f.capacity_status && f.capacity_status !== 'available' ? ` (${f.capacity_status})` : ''}
+                      {typeof f.open_case_count === 'number' ? ` · ${f.open_case_count} open` : ''}
+                    </option>
+                  ))}
                 </select>
-                <textarea
-                  value={referralReason}
-                  onChange={(e) => setReferralReason(e.target.value)}
-                  placeholder="Reason for referral"
-                  aria-label="Reason for referral"
-                  rows={2}
-                  maxLength={1000}
-                  className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleCreateReferral}
-                    disabled={referring || !referralFacilityId || !referralReason.trim()}
-                    className="flex-1 bg-forest text-white py-2 rounded-pill text-sm font-medium disabled:opacity-50 cursor-pointer"
-                  >
-                    {referring ? 'Referring…' : 'Confirm referral'}
-                  </button>
-                  <button
-                    onClick={() => setShowReferral(false)}
-                    className="px-4 py-2 text-sm text-text2 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </fieldset>
-            ) : (
-              <button
-                onClick={handleOpenReferral}
-                className="text-xs text-text3 hover:text-forest underline cursor-pointer"
+              )}
+              <select
+                value={referralUrgency}
+                onChange={(e) => setReferralUrgency(e.target.value)}
+                aria-label="Referral urgency"
+                className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface"
               >
-                Refer to another facility
-              </button>
-            )
+                {TIERS.map(t => <option key={t} value={t}>Urgency: {t}</option>)}
+              </select>
+              <textarea
+                value={referralReason}
+                onChange={(e) => setReferralReason(e.target.value)}
+                placeholder="Reason for referral"
+                aria-label="Reason for referral"
+                rows={2}
+                maxLength={1000}
+                className="w-full border border-surface3 rounded-md px-3 py-2 text-sm bg-surface resize-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleCreateReferral}
+                  disabled={referring || !referralFacilityId || !referralReason.trim()}
+                  className="flex-1 bg-forest text-white py-2 rounded-pill text-sm font-medium disabled:opacity-50 cursor-pointer"
+                >
+                  {referring ? 'Referring…' : 'Confirm referral'}
+                </button>
+                <button
+                  onClick={() => setShowReferral(false)}
+                  className="px-4 py-2 text-sm text-text2 cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {referred && (
+            <p className="text-xs text-forest font-medium">✓ Referred to {referred.facilityName}</p>
+          )}
+
+          {/* Secondary Action Toolbar for Clinician */}
+          {((!overrideState.triage && !showOverride) || (reviewed && !outcomeRecorded && !showOutcome) || (!referred && !showReferral)) && (
+            <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-leaf/20">
+              {!overrideState.triage && !showOverride && (
+                <button
+                  type="button"
+                  onClick={() => setShowOverride(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-pill text-xs font-medium text-text2 bg-surface border border-surface3 hover:border-forest/50 hover:bg-leaf/20 hover:text-forest transition-all cursor-pointer shadow-xs"
+                >
+                  <span className="text-forest">✏️</span> Correct triage tier
+                </button>
+              )}
+
+              {reviewed && !outcomeRecorded && !showOutcome && (
+                <button
+                  type="button"
+                  onClick={() => setShowOutcome(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-pill text-xs font-medium text-text2 bg-surface border border-surface3 hover:border-forest/50 hover:bg-leaf/20 hover:text-forest transition-all cursor-pointer shadow-xs"
+                >
+                  <span className="text-forest">📋</span> Record patient outcome
+                </button>
+              )}
+
+              {!referred && !showReferral && (
+                <button
+                  type="button"
+                  onClick={handleOpenReferral}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-pill text-xs font-medium text-text2 bg-surface border border-surface3 hover:border-forest/50 hover:bg-leaf/20 hover:text-forest transition-all cursor-pointer shadow-xs"
+                >
+                  <span className="text-forest">🏥</span> Refer to another facility
+                </button>
+              )}
+            </div>
           )}
 
           {/* Actions */}

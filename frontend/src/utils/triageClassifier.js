@@ -22,6 +22,8 @@
 
 import { evaluateTrees } from './treeEvaluator.js'
 import { safetyNetCheck, news2ConcerningVital, checkContraindications } from './clinicalRules.js'
+import fallbackTrees from '../../public/models/triage_trees.json' with { type: 'json' }
+import fallbackConfig from '../../public/models/features_config.json' with { type: 'json' }
 
 const TREES_PATH = '/models/triage_trees.json'
 const FEATURES_CONFIG_PATH = '/models/features_config.json'
@@ -38,6 +40,9 @@ const LOW_CONFIDENCE_MARGIN = 0.15
 let _treeJson = null
 let _featureNames = null   // canonical feature order, fetched from features_config.json
 let _loadPromise = null
+
+const CACHE_TREES_KEY = 'vn_offline_triage_trees'
+const CACHE_CONFIG_KEY = 'vn_offline_features_config'
 
 /**
  * Load and cache the tree ensemble JSON + the feature-order manifest. Called
@@ -63,10 +68,32 @@ export async function loadModel() {
     _treeJson = trees
     _featureNames = config.feature_names
     _loadPromise = null
+    try {
+      localStorage.setItem(CACHE_TREES_KEY, JSON.stringify(trees))
+      localStorage.setItem(CACHE_CONFIG_KEY, JSON.stringify(config))
+    } catch {}
     console.log(`[VitalNet] Offline triage model loaded (${config.num_features}-feature, v${config.model_version}, pure-JS)`)
     return trees
   }).catch((err) => {
     _loadPromise = null
+    // Fallback 1: localStorage cached model
+    try {
+      const cachedTrees = localStorage.getItem(CACHE_TREES_KEY)
+      const cachedConfig = localStorage.getItem(CACHE_CONFIG_KEY)
+      if (cachedTrees && cachedConfig) {
+        _treeJson = JSON.parse(cachedTrees)
+        _featureNames = JSON.parse(cachedConfig).feature_names
+        console.log('[VitalNet] Offline triage model loaded from local cache')
+        return _treeJson
+      }
+    } catch {}
+    // Fallback 2: bundled fallback JSON
+    if (fallbackTrees && fallbackConfig) {
+      _treeJson = fallbackTrees
+      _featureNames = fallbackConfig.feature_names
+      console.log('[VitalNet] Offline triage model loaded from bundled fallback')
+      return _treeJson
+    }
     console.error('[VitalNet] Offline model load failed (rules-only fallback will be used):', err)
     throw err
   })
