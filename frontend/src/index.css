@@ -22,13 +22,19 @@
 
   /* Clinical status */
   --color-emergency: #C0392B;
-  --color-urgent: #C17240;
+  /* Darkened from #C17240 — the original only hit 3.33:1 against --color-bg,
+     failing WCAG AA (4.5:1) for normal-size text; this hits ~4.9:1. Same
+     hue family as --color-terra, kept for palette consistency. */
+  --color-urgent: #9C5A2B;
   --color-routine: #2E7D52;
 
   /* Text */
   --color-text: #1C2E20;
   --color-text2: #5A6E5A;
-  --color-text3: #9DB09D;
+  /* Darkened from #9DB09D — the original only hit ~2.1:1 against
+     --color-bg/--color-surface2, failing WCAG AA even for large text
+     (needs 3:1) let alone normal text (needs 4.5:1). This hits ~5:1. */
+  --color-text3: #556B58;
 
   /* Fonts */
   --font-display: 'DM Serif Display', Georgia, serif;

@@ -1,0 +1,48 @@
+name: Supabase Keep-Alive
+
+# Supabase's free tier pauses a project after 7 days with no DATABASE
+# activity (not just dashboard visits or auth checks — see docs/DECISIONS.md
+# §28). This runs well inside that window (worst-case gap ~6 days even
+# accounting for month-boundary drift in the day-of-month step) and issues
+# one read-only, anon-key SELECT against a small table, which counts as
+# real database activity and resets the pause timer.
+#
+# Requires two repository secrets (Settings > Secrets and variables >
+# Actions > Repository secrets): SUPABASE_URL, SUPABASE_ANON_KEY. This
+# workflow no-ops (does not fail the run) if either is unset, so a fork or
+# a not-yet-configured clone doesn't get a red X for missing secrets.
+
+on:
+  schedule:
+    - cron: "17 4 */3 * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Supabase REST API (read-only)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "SUPABASE_URL/SUPABASE_ANON_KEY repo secrets not set — skipping (nothing to keep alive yet)."
+            exit 0
+          fi
+          status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 \
+            "$SUPABASE_URL/rest/v1/facilities?select=id&limit=1" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          echo "Supabase REST responded HTTP $status"
+          # 200 (RLS allows it) or 401/403 (reached the DB, RLS just said no)
+          # both prove real database activity happened — only a network-level
+          # failure (000, 5xx) is a genuine problem worth failing the job for.
+          if [ "$status" -ge 500 ] || [ "$status" = "000" ]; then
+            echo "::error::Supabase did not respond as expected (HTTP $status)"
+            exit 1
+          fi

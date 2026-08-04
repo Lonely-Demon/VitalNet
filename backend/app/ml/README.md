@@ -7,7 +7,7 @@ or `backend/scripts/train_classifier.py`.
 
 ## What it is
 
-A single `sklearn.ensemble.HistGradientBoostingClassifier`, trained on 45
+A single `sklearn.ensemble.HistGradientBoostingClassifier`, trained on 43
 engineered clinical features, that predicts one of three triage tiers:
 `ROUTINE`, `URGENT`, `EMERGENCY`. It is:
 
@@ -51,11 +51,16 @@ engineered clinical features, that predicts one of three triage tiers:
 
 `clinical_features.py::ClinicalFeatureEngineer` expands the ~14 raw intake
 fields (age, sex, vitals, symptoms, free-text complaint/duration/location/
-conditions) into 45 features across five groups: basic vitals/symptoms,
+conditions) into 43 features across five groups: basic vitals/symptoms,
 vital-derived scores (shock index, pulse pressure, MAP, cardiac/respiratory/
 hemodynamic/sepsis risk scores, pediatric/geriatric/pregnancy adjustments),
 symptom-interaction clusters, age-specific risk scores, and contextual
-factors (time of day, season, location-derived healthcare access proxy).
+factors — monsoon-season vector-borne disease risk, a rural/tribal
+location-derived disease-exposure proxy, and a location-derived healthcare
+access proxy (`docs/DECISIONS.md` §23; two earlier contextual features,
+time-of-day risk and a hardcoded epidemic-alert placeholder, were removed
+after an audit found them constant across the entire training set and
+therefore contributing zero signal to any prediction).
 
 **This logic is duplicated in JavaScript** in
 `frontend/src/utils/triageClassifier.js::buildFeatureMap()` for offline
@@ -117,10 +122,11 @@ diagnosis, never a replacement for clinical judgment.
 
 Held-out 5,400-sample test set and 5-fold CV on 36,000 samples:
 
-- Accuracy: 98.9% held-out / 99.2% CV
-- EMERGENCY recall (model alone): 98.3% held-out / 98.6% CV
-- Expected Calibration Error: 0.0016
-- Model size: ~5.7 MB (`.pkl`, carries the SHAP explainer), ~1 MB
+- Accuracy: 99.0% held-out / 99.1% CV
+- EMERGENCY recall (model alone): 98.8% held-out / 98.5% CV
+- Expected Calibration Error: 0.0020 (class-balanced), 0.0050 (realistic
+  ~85/12/3 ROUTINE/URGENT/EMERGENCY prevalence — see MODEL_CARD.md)
+- Model size: ~6.7 MB (`.pkl`, carries the SHAP explainer), ~1.2 MB
   (`triage_trees.json`, gzips far smaller)
 
 The model-alone EMERGENCY false negatives are borderline URGENT/EMERGENCY cases;
@@ -157,6 +163,34 @@ risk scores (adult cardiac, pediatric fever, obstetric/pregnancy) on a
 clamped-to-40 age value, so a real newborn (age 0) was silently scored as a
 40-year-old adult in the offline path only — CI now fails immediately if this
 class of bug recurs.
+
+## Fairness audit and drift monitoring (operator-run, not scheduled)
+
+Two diagnostic scripts, neither wired into CI or a schedule — each prints a
+report for a human to read; neither takes automatic action.
+
+```bash
+# Subgroup performance (age band × sex) on a fresh synthetic evaluation set,
+# run through the FULL pipeline (safety net + model + NEWS2 floor):
+PYTHONPATH=. python scripts/fairness_audit.py [--n 6000] [--flag-gap 0.10]
+
+# Feature-distribution drift (Population Stability Index) between the
+# synthetic training distribution and live case_records — needs a real
+# Supabase project configured (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY):
+PYTHONPATH=. python scripts/drift_monitor.py [--reference-n 4000] [--live-n 500] [--since-days 90]
+```
+
+Both are **synthetic-data diagnostics**, not real-world bias/drift audits —
+VitalNet has no real patient data to check either against (see
+`MODEL_CARD.md`'s training-data caveat). `fairness_audit.py` tells you
+whether the model behaves consistently across the synthetic generator's
+age/sex distribution (a large gap would mean the model learned some
+age/sex-correlated shortcut, worth understanding before trusting it on any
+subgroup). `drift_monitor.py` tells you whether the population VitalNet is
+*actually seeing* has drifted from what the model was trained on. Re-run
+both whenever the model is retrained
+(`scripts/retrain_from_outcomes.py`) or before a real deployment — see
+`docs/CLINICAL_GOVERNANCE.md`'s model lifecycle governance section.
 
 ## Why scikit-learn is pinned exactly (not `>=`)
 

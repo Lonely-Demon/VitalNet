@@ -1,26 +1,38 @@
-// frontend/src/components/VoiceInputButton.jsx
-// Mic button for a free-text field — always shows the transcript in the
-// field for the worker to review/edit before submit (FEATURES_ROADMAP §2.2:
-// never auto-submit voice input directly, given transcription error risk in
-// a clinical context). Renders nothing on browsers without SpeechRecognition
-// support (e.g. Firefox) rather than showing a dead button.
+import { useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useVoiceInput } from '../hooks/useVoiceInput'
 
-export default function VoiceInputButton({ onTranscript, lang }) {
+export default function VoiceInputButton({ onTranscript, lang, value = '' }) {
   const { t } = useTranslation()
+  const baseTextRef = useRef('')
+  const containerRef = useRef(null)
+
+  const handleResult = useCallback((sessionTranscript) => {
+    const base = baseTextRef.current
+    const updated = base
+      ? `${base.trim()} ${sessionTranscript.trim()}`.trim()
+      : sessionTranscript.trim()
+    onTranscript?.(updated)
+  }, [onTranscript])
+
   const { start, stop, listening, error, supported, available } = useVoiceInput({
     lang,
-    onResult: onTranscript,
+    onResult: handleResult,
+    containerRef,
   })
+
+  const handleStart = () => {
+    baseTextRef.current = value || ''
+    start()
+  }
 
   if (!supported) return null
 
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span className="inline-flex items-center gap-1.5" ref={containerRef}>
       <button
         type="button"
-        onClick={listening ? stop : start}
+        onClick={listening ? stop : handleStart}
         disabled={!available}
         title={!available ? t('intakeForm.voice.offline') : t(listening ? 'intakeForm.voice.stop' : 'intakeForm.voice.start')}
         aria-label={t(listening ? 'intakeForm.voice.stop' : 'intakeForm.voice.start')}

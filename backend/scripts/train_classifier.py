@@ -25,7 +25,7 @@ Why a single HistGradientBoostingClassifier instead of an ensemble:
     compute (the old ensemble ran three separate models twice per
     prediction — once inside CalibratedClassifierCV's internal folds and
     again explicitly for "uncertainty" — for no measurable accuracy gain
-    over a single well-tuned model in a 45-feature clinical space).
+    over a single well-tuned model in a 43-feature clinical space).
   - It loads and predicts fast enough for a decade-old laptop or a
     Raspberry-Pi-class rural clinic server, and the .onnx export is small
     enough (<1 MB) for slow/metered rural connections.
@@ -49,7 +49,7 @@ The scorer is loosely modelled on:
 This is a heuristic label generator for a synthetic training set, not a
 validated clinical scoring instrument — see backend/app/ml/README.md for
 the full explanation and limitations. The output labels are then learned
-by the classifier from the full 45-feature representation (not just the
+by the classifier from the full 43-feature representation (not just the
 handful of features the scorer directly reads), so the trained model can
 generalise beyond the scorer's exact rule boundaries.
 
@@ -93,12 +93,12 @@ sys.path.insert(0, BACKEND_DIR)
 sys.path.insert(0, os.path.dirname(__file__))  # for tree_export
 
 from app.ml.clinical_features import ClinicalFeatureEngineer  # noqa: E402
+from app.ml.classifier import CRITICAL_SYMPTOMS_OVERRIDE  # noqa: E402
 from tree_export import onnx_to_tree_json, evaluate_tree_json  # noqa: E402
 
 MODELS_DIR = os.path.join(BACKEND_DIR, "app", "ml", "models")
 PKL_PATH = os.path.join(MODELS_DIR, "triage_classifier.pkl")
 FRONTEND_MODELS_DIR = os.path.join(PROJECT_ROOT, "frontend", "public", "models")
-ONNX_DIR = FRONTEND_MODELS_DIR  # retained name; used only as the models output dir
 FEATURES_CONFIG_PATH = os.path.join(FRONTEND_MODELS_DIR, "features_config.json")
 # Offline inference (Option 6): the browser loads this compact tree JSON and
 # evaluates it in pure JS — no onnxruntime-web WASM. See scripts/tree_export.py.
@@ -110,7 +110,7 @@ GOLDEN_PATH = os.path.join(GOLDEN_DIR, "golden_vectors.json")
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
-MODEL_VERSION = "3.0.0"
+MODEL_VERSION = "3.1.0"
 LABEL_MAP = {0: "ROUTINE", 1: "URGENT", 2: "EMERGENCY"}
 
 engineer = ClinicalFeatureEngineer()
@@ -145,12 +145,6 @@ COMPLAINTS_EMERGENCY = [
     "Altered consciousness / confusion", "Seizure", "Severe bleeding", "Injury / trauma",
 ]
 CONDITIONS_POOL = ["", "", "", "diabetes", "hypertension", "asthma", "heart disease", "copd", "kidney disease"]
-
-CRITICAL_SYMPTOMS_OVERRIDE = {"altered_consciousness", "seizure", "severe_bleeding", "swelling_face_throat"}
-
-
-def clip(val, lo, hi):
-    return max(lo, min(hi, val))
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +218,38 @@ def _pediatric_hr_score(age, hr):
     return 3
 
 
+def _pediatric_bp_score(age, bp_sys):
+    """Age-banded systolic-BP scoring. A normal infant's systolic BP (~80-95)
+    is 'hypotensive' by adult bands, so scoring it with _bp_sys_score labels a
+    perfectly healthy infant EMERGENCY (the documented over-triage in
+    MODEL_CARD.md / DECISIONS.md §30). Thresholds use the standard PALS
+    5th-percentile hypotension definition:
+        neonate (<1mo):  SBP < 60
+        infant (1-12mo): SBP < 70
+        child (1-<12yr): SBP < 70 + 2*age
+    Adolescents (>=12) fall back to the adult bands (adult hypotension applies).
+    """
+    if bp_sys is None:
+        return 0
+    if age >= 12:
+        return _bp_sys_score(bp_sys)
+    if age < 1 / 12:
+        hypo = 60
+    elif age < 1:
+        hypo = 70
+    else:
+        hypo = 70 + 2 * age
+    if bp_sys < hypo:
+        return 3            # frank hypotension for age
+    if bp_sys < hypo + 8:
+        return 2            # borderline-low for age
+    if bp_sys < hypo + 15:
+        return 1
+    if bp_sys >= 140:
+        return 2            # paediatric hypertension is genuinely concerning
+    return 0
+
+
 def _pediatric_temp_score(age, temp):
     """Fever in infants is weighted more heavily — same clinical principle as
     ClinicalFeatureEngineer._pediatric_fever_assessment (neonatal fever is a
@@ -240,7 +266,7 @@ def _pediatric_temp_score(age, temp):
 def news2_like_score(age, bp_sys, hr, spo2, temp):
     """Aggregate 0-15+ vital-derangement score. Age-adjusted for paediatrics."""
     spo2_s = _spo2_score(spo2)
-    bp_s = _bp_sys_score(bp_sys)
+    bp_s = _pediatric_bp_score(age, bp_sys) if age < 18 else _bp_sys_score(bp_sys)
     temp_s = _pediatric_temp_score(age, temp) if age < 18 else _temp_score(temp)
     hr_s = _pediatric_hr_score(age, hr) if age < 18 else _adult_hr_score(hr)
 
@@ -254,11 +280,14 @@ def news2_like_score(age, bp_sys, hr, spo2, temp):
     return spo2_s + bp_s + temp_s + hr_s, max(spo2_s, bp_s, temp_s, hr_s)
 
 
-def qsofa_score(bp_sys, altered_consciousness):
+def qsofa_score(bp_sys, altered_consciousness, age=40):
     """Simplified qSOFA (respiratory rate is not collected by VitalNet's
-    intake form, so this uses the two available qSOFA criteria)."""
+    intake form, so this uses the two available qSOFA criteria). qSOFA is
+    validated for ADULTS; SBP<=100 is normal for a young child, so the
+    hypotension criterion is only applied at age>=12 (altered mentation is
+    concerning at any age)."""
     score = 0
-    if bp_sys is not None and bp_sys <= 100:
+    if age >= 12 and bp_sys is not None and bp_sys <= 100:
         score += 1
     if altered_consciousness:
         score += 1
@@ -281,7 +310,7 @@ def assign_triage_label(patient: dict) -> int:
         return 2
 
     aggregate, worst_single = news2_like_score(age, bp_sys, hr, spo2, temp)
-    qsofa = qsofa_score(bp_sys, "altered_consciousness" in symptoms)
+    qsofa = qsofa_score(bp_sys, "altered_consciousness" in symptoms, age)
 
     concerning_symptom_count = len(symptoms & {
         "chest_pain", "breathlessness", "high_fever", "severe_abdominal_pain",
@@ -320,7 +349,11 @@ def _correlated_vitals(age, severity):
     low BP + high HR together, not independently sampled). The TRUE label is
     computed afterwards by assign_triage_label(), independent of this hint."""
     base_hr = 75 + max(0, 18 - age) * 2 - max(0, age - 60) * 0.15
-    base_bp = 118 + max(0, age - 40) * 0.4
+    # Age-appropriate baseline systolic BP: children run LOWER than adults
+    # (~85 in infancy rising ~2/yr), so anchoring to the adult ~118 would make
+    # the generator emit physiologically-impossible infants and the model would
+    # never see the normal-low-BP-infant pattern it must learn (DECISIONS.md §30).
+    base_bp = (85 + 2.0 * age) if age < 12 else (118 + max(0, age - 40) * 0.4)
 
     if severity == "healthy":
         hr = np.random.normal(base_hr, 10)
@@ -369,11 +402,11 @@ def _correlated_vitals(age, severity):
         temp = {"hyperthermia": 41.2, "hypothermia": 33.5}.get(pattern, np.random.normal(37.5, 1.2))
 
     return dict(
-        hr=int(clip(hr, 25, 220)),
-        bp_sys=int(clip(bp_sys, 50, 260)),
-        bp_dia=int(clip(bp_dia, 25, 160)),
-        spo2=int(clip(spo2, 60, 100)),
-        temp=round(float(clip(temp, 30.0, 43.0)), 1),
+        hr=int(np.clip(hr, 25, 220)),
+        bp_sys=int(np.clip(bp_sys, 50, 260)),
+        bp_dia=int(np.clip(bp_dia, 25, 160)),
+        spo2=int(np.clip(spo2, 60, 100)),
+        temp=round(float(np.clip(temp, 30.0, 43.0)), 1),
     )
 
 
@@ -394,8 +427,28 @@ SEVERITY_SYMPTOM_PROBS = {
 }
 
 
-def _sample_symptoms(severity):
-    probs = SEVERITY_SYMPTOM_PROBS[severity]
+# Monsoon months (India's dengue/malaria/leptospirosis/cholera season) and
+# the rural/tribal location terms that carry the higher exposure — mirrors
+# ClinicalFeatureEngineer._seasonal_disease_risk / _geographic_disease_risk
+# (docs/DECISIONS.md §23). Used here to give those two features a REAL,
+# learnable correlation with the resulting label, via the symptom mix a
+# patient presents with — not by referencing month/location directly in
+# assign_triage_label(), which stays decoupled from generation context.
+MONSOON_MONTHS = (6, 7, 8, 9)
+RURAL_LOCATION_TERMS = ("village", "rural", "remote", "tribal")
+
+
+def _is_rural(location: str) -> bool:
+    loc = location.lower()
+    return any(term in loc for term in RURAL_LOCATION_TERMS)
+
+
+def _sample_symptoms(severity, reference_month=None, location=""):
+    probs = dict(SEVERITY_SYMPTOM_PROBS[severity])
+    if reference_month in MONSOON_MONTHS and _is_rural(location):
+        for key in ("high_fever", "severe_headache", "persistent_vomiting"):
+            if key in probs:
+                probs[key] = min(probs[key] * 1.6, 0.65)
     return [s for s, p in probs.items() if np.random.random() < p]
 
 
@@ -453,10 +506,25 @@ def _apply_missing_vitals(vitals: dict) -> dict:
     return v
 
 
-def generate_patient(severity, allow_missing=True):
-    age = int(clip(np.random.exponential(32) + (5 if severity in ("severe", "critical") else 0), 0, 95))
+def _sample_age(severity, pediatric):
+    """Adult ages follow an exponential (most patients are working-age adults).
+    When `pediatric`, draw a child age skewed young (infants/toddlers) so the
+    model sees enough normal-for-age paediatric physiology to learn the age
+    interaction — the fix for the documented infant over-triage
+    (MODEL_CARD.md / DECISIONS.md §30). Roughly half of paediatric draws are
+    under 2, where adult vital bands are most wrong."""
+    if pediatric:
+        # Mixture: heavy under-2 mass, tapering to 17.
+        return float(np.clip(np.random.exponential(3.5), 0, 17))
+    return int(np.clip(np.random.exponential(32) + (5 if severity in ("severe", "critical") else 0), 0, 95))
+
+
+def generate_patient(severity, allow_missing=True, pediatric=False):
+    age = _sample_age(severity, pediatric)
     sex = np.random.choice(["male", "female"], p=[0.49, 0.51])
     vitals = _correlated_vitals(age, severity)
+    reference_month = int(np.random.randint(1, 13))
+    location = np.random.choice(LOCATIONS)
 
     # Edge syndromes the base severity bands under-represent — added as targeted
     # perturbations so the model sees them during training:
@@ -471,19 +539,18 @@ def generate_patient(severity, allow_missing=True):
         conditions = np.random.choice(["diabetes", "heart disease", "hypertension"])
     elif severity in ("severe", "critical") and edge < 0.16:
         # sepsis-without-fever pattern
-        vitals["bp_sys"] = int(clip(np.random.normal(92, 8), 78, 104))
-        vitals["hr"] = int(clip(np.random.normal(116, 10), 100, 140))
-        vitals["temp"] = round(float(clip(np.random.normal(36.6, 0.5), 35.5, 37.6)), 1)
-        symptoms = _sample_symptoms(severity)
+        vitals["bp_sys"] = int(np.clip(np.random.normal(92, 8), 78, 104))
+        vitals["hr"] = int(np.clip(np.random.normal(116, 10), 100, 140))
+        vitals["temp"] = round(float(np.clip(np.random.normal(36.6, 0.5), 35.5, 37.6)), 1)
+        symptoms = _sample_symptoms(severity, reference_month, location)
     else:
-        symptoms = _sample_symptoms(severity)
+        symptoms = _sample_symptoms(severity, reference_month, location)
 
     if allow_missing:
         vitals = _apply_missing_vitals(vitals)
 
     complaint = _pick_complaint(symptoms, severity)
     duration = _pick_duration(severity)
-    location = np.random.choice(LOCATIONS)
 
     return {
         "patient_age": age,
@@ -500,6 +567,11 @@ def generate_patient(severity, allow_missing=True):
         "known_conditions": conditions,
         "observations": "",
         "current_medications": "",
+        # Training-only context (never present on a real IntakeForm submission
+        # — engineer_features()/_engineer_contextual_features() falls back to
+        # the real current month when absent). Lets seasonal_risk vary across
+        # the synthetic training set instead of being constant (docs/DECISIONS.md §23).
+        "_reference_month": reference_month,
     }
 
 
@@ -514,13 +586,21 @@ def build_dataset():
     severities = ["healthy", "mild", "moderate", "severe", "critical"]
     severity_weights = [0.30, 0.22, 0.22, 0.16, 0.10]  # oversample severe/critical for label yield
 
+    # Fraction of draws forced to paediatric ages (<18, skewed to infants).
+    # The natural adult-exponential age draw yields only ~1.7% infants, far too
+    # few for the model to learn age-normalised vitals — the root cause of the
+    # documented infant over-triage. Oversampling here (paired with the
+    # age-aware label scorer + age-appropriate BP generation above) is the fix.
+    PEDIATRIC_FRACTION = 0.22
+
     print(f"[1/9] Generating synthetic patients (target {N_PER_CLASS}/class, "
-          f"{NUM_FEATURES} features)...")
+          f"{NUM_FEATURES} features, ~{int(PEDIATRIC_FRACTION*100)}% paediatric)...")
     attempts = 0
     while min(len(v) for v in buckets.values()) < N_PER_CLASS:
         attempts += 1
         severity = np.random.choice(severities, p=severity_weights)
-        patient = generate_patient(severity)
+        pediatric = np.random.random() < PEDIATRIC_FRACTION
+        patient = generate_patient(severity, pediatric=pediatric)
         label = assign_triage_label(patient)
         if len(buckets[label]) < N_PER_CLASS:
             buckets[label].append(patient)
@@ -556,17 +636,31 @@ def main():
     print("[3/9] Training HistGradientBoostingClassifier ...")
     # Class weights favour EMERGENCY recall — a missed emergency is far more
     # costly than a false-positive urgent flag in this clinical context.
-    clf = HistGradientBoostingClassifier(
+    # max_leaf_nodes caps each tree's size — the primary lever on the shipped
+    # triage_trees.json footprint (what a decade-old phone downloads and parses
+    # offline). 24 leaves keeps accuracy within noise of the default 31 while
+    # shrinking the JSON meaningfully; the safety net + NEWS2 floor still
+    # guarantee the unambiguous emergencies independent of model capacity.
+    HGB_PARAMS = dict(
         max_iter=450,
         max_depth=7,
-        learning_rate=0.06,
+        max_leaf_nodes=24,
+        # A slightly higher learning rate converges in materially FEWER boosting
+        # iterations, so the shipped triage_trees.json (what a decade-old phone
+        # downloads and parses) is smaller — the primary efficiency lever here.
+        # Paired with a tighter early-stopping patience so training stops as
+        # soon as the held-out loss plateaus rather than padding out more trees.
+        learning_rate=0.09,
         l2_regularization=0.5,
-        class_weight={0: 1.0, 1: 2.0, 2: 6.0},
+        # EMERGENCY weight bumped 6->7 to protect emergency recall against the
+        # faster/shorter fit and the harder age-conditional boundaries.
+        class_weight={0: 1.0, 1: 2.0, 2: 7.0},
         random_state=RANDOM_SEED,
         early_stopping=True,
         validation_fraction=0.1,
-        n_iter_no_change=25,
+        n_iter_no_change=18,
     )
+    clf = HistGradientBoostingClassifier(**HGB_PARAMS)
     clf.fit(X_train, y_train)
 
     print("[4/9] Evaluating on held-out test set ...")
@@ -589,11 +683,7 @@ def main():
     print("[4b/9] Stratified 5-fold cross-validation (robustness beyond one split) ...")
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_SEED)
     cv_pred = cross_val_predict(
-        HistGradientBoostingClassifier(
-            max_iter=450, max_depth=7, learning_rate=0.06, l2_regularization=0.5,
-            class_weight={0: 1.0, 1: 2.0, 2: 6.0}, random_state=RANDOM_SEED,
-            early_stopping=True, validation_fraction=0.1, n_iter_no_change=25,
-        ),
+        HistGradientBoostingClassifier(**HGB_PARAMS),
         X, y, cv=skf,
     )
     cv_acc = accuracy_score(y, cv_pred)
@@ -611,6 +701,28 @@ def main():
     print("       would have to be mirrored exactly in the JS offline evaluator to")
     print("       preserve online/offline parity; the abstention flag (low_confidence)")
     print("       is the shipped mechanism for surfacing uncertainty. See MODEL_CARD.md.")
+
+    print("[4d/9] Realistic-prevalence calibration check (~85% ROUTINE / 12% URGENT / "
+          "3% EMERGENCY, subsampled from the held-out test set — not the balanced "
+          "training/test split) ...")
+    from app.ml.classifier import LOW_CONFIDENCE_PROBA, LOW_CONFIDENCE_MARGIN
+    rng = np.random.default_rng(RANDOM_SEED)
+    X_real, y_real = _realistic_prevalence_sample(X_test, y_test, rng)
+    proba_real = clf.predict_proba(X_real)
+    ece_real = _expected_calibration_error(proba_real, y_real)
+    sorted_proba_real = np.sort(proba_real, axis=1)
+    conf_real = sorted_proba_real[:, -1]
+    margin_real = sorted_proba_real[:, -1] - sorted_proba_real[:, -2]
+    low_conf_rate_real = float(np.mean((conf_real < LOW_CONFIDENCE_PROBA) | (margin_real < LOW_CONFIDENCE_MARGIN)))
+    acc_real = accuracy_score(y_real, proba_real.argmax(axis=1))
+    n_by_class_real = {LABEL_MAP[c]: int((y_real == c).sum()) for c in (0, 1, 2)}
+    print(f"       n={len(y_real)} {n_by_class_real}")
+    print(f"       Accuracy under realistic prevalence: {acc_real:.4f}")
+    print(f"       ECE under realistic prevalence: {ece_real:.4f} (balanced-set ECE was {ece:.4f})")
+    print(f"       low_confidence abstention rate under realistic prevalence: {low_conf_rate_real:.4f}")
+    print("       This validates the SAME fixed abstention thresholds (0.55 proba / 0.15")
+    print("       margin) against the class distribution VitalNet actually sees in the")
+    print("       field, not just the class-balanced training/test split above.")
 
     print("[5/9] Building SHAP TreeExplainer ...")
     import shap
@@ -633,6 +745,10 @@ def main():
             "cv_accuracy": float(cv_acc),
             "cv_emergency_recall": float(cv_emerg_recall),
             "expected_calibration_error": float(ece),
+            "realistic_prevalence_accuracy": float(acc_real),
+            "realistic_prevalence_ece": float(ece_real),
+            "realistic_prevalence_low_confidence_rate": float(low_conf_rate_real),
+            "realistic_prevalence_n_by_class": n_by_class_real,
             "n_train": len(X_train),
             "n_test": len(X_test),
         },
@@ -730,6 +846,32 @@ def main():
 
     print("\nDone. Backend loads the .pkl; the browser loads triage_trees.json + "
           "features_config.json and evaluates in pure JS (no onnxruntime).")
+
+
+def _realistic_prevalence_sample(X: np.ndarray, y: np.ndarray, rng: np.random.Generator,
+                                  routine_frac: float = 0.85, urgent_frac: float = 0.12,
+                                  emergency_frac: float = 0.03):
+    """
+    Subsamples the (class-balanced) held-out test set down to a realistic
+    rural-PHC class prevalence — mostly ROUTINE, a minority URGENT, a small
+    EMERGENCY tail — WITHOUT touching training data or introducing any new
+    generated patients. All available ROUTINE rows are kept (they're the
+    scarce resource once inverted); URGENT/EMERGENCY are subsampled down to
+    match the target proportions relative to that ROUTINE count. Used to
+    validate calibration/abstention thresholds against the distribution
+    VitalNet actually sees in the field, not just the balanced test split
+    used for the primary accuracy/recall numbers (docs/DECISIONS.md §23).
+    """
+    idx_by_class = {c: np.where(y == c)[0] for c in (0, 1, 2)}
+    n_routine = len(idx_by_class[0])
+    total = int(n_routine / routine_frac)
+    n_urgent = min(len(idx_by_class[1]), int(total * urgent_frac))
+    n_emergency = min(len(idx_by_class[2]), int(total * emergency_frac))
+    sel_urgent = rng.choice(idx_by_class[1], size=n_urgent, replace=False)
+    sel_emergency = rng.choice(idx_by_class[2], size=n_emergency, replace=False)
+    idx = np.concatenate([idx_by_class[0], sel_urgent, sel_emergency])
+    rng.shuffle(idx)
+    return X[idx], y[idx]
 
 
 def _expected_calibration_error(proba: np.ndarray, y_true: np.ndarray, n_bins: int = 10) -> float:

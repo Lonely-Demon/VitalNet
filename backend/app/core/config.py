@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     supabase_service_role_key: str           # Used ONLY for admin/global operations (bypasses RLS)
     groq_api_key: str
     gemini_api_key: str = ""   # Optional — fallback tier 3 and 4; app starts without it
+    # Sarvam AI (app/services/voice.py) — specialised Indian-language speech-
+    # to-text (saaras:v3), preferred for hi/ta voice input. Optional: empty
+    # disables it and voice transcription falls back to Groq Whisper alone.
+    sarvam_api_key: str = ""
     frontend_url: str = ""
     # Comma-separated extra CORS origins (e.g. additional staging domains),
     # combined with frontend_url and — in development — localhost. Lets ops
@@ -60,6 +64,14 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:admin@example.com"
+
+    # ── Data retention (docs/COMPLIANCE_DPDP.md) ──────────────────────────────
+    # POST /api/admin/cases/purge-expired anonymises (not hard-deletes)
+    # case_records older than this window, applying the same redaction as
+    # POST /api/admin/cases/{id}/erase. Not wired to an automatic cron here —
+    # an operator or external scheduler hits the endpoint, same pattern as
+    # the existing re-alert job (push_routes.py). 0 disables the endpoint.
+    data_retention_days: int = 0
 
     @property
     def allowed_origins(self) -> list[str]:

@@ -8,6 +8,11 @@ import { useLocalTriage } from '../hooks/useLocalTriage'
 import { useDraftSave } from '../hooks/useDraftSave'
 import { validateForm } from '../utils/validation'
 import VoiceInputButton from '../components/VoiceInputButton'
+import { EmergencySmsAlert } from '../components/EmergencySmsAlert'
+import { AmbulanceCallButton } from '../components/AmbulanceCallButton'
+import { PatientKeyCard } from '../components/PatientKeyCard'
+import { generatePatientKey, normalizePatientKey } from '../utils/patientKey'
+import { getCaseHistoryByPatientKey } from '../api/cases'
 
 // Stable English identifiers — these are the actual values submitted to the
 // API (chief_complaint is a free-text-ish field, not a coded enum server-
@@ -91,6 +96,16 @@ const BADGE_COLORS = {
   ROUTINE: "bg-routine/10 text-routine border border-routine/30",
 }
 
+// Preliminary-result card styling — container (border + faint bg) and badge
+// (bg + text, no border) classes per tier, keyed the same way as BADGE_COLORS
+// but distinct shapes, so not reused from it. Unrecognized tiers fall back to
+// ROUTINE styling (matches the previous ternary chains' behavior).
+const PRELIM_RESULT_STYLES = {
+  EMERGENCY: { container: "border-emergency/30 bg-emergency/5", badge: "bg-emergency/10 text-emergency" },
+  URGENT: { container: "border-urgent/30 bg-urgent/5", badge: "bg-urgent/10 text-urgent" },
+  ROUTINE: { container: "border-routine/30 bg-routine/5", badge: "bg-routine/10 text-routine" },
+}
+
 const emptyForm = {
   patient_name: "",
   patient_age: "",
@@ -108,9 +123,11 @@ const emptyForm = {
   observations: "",
   known_conditions: "",
   current_medications: "",
+  is_pregnant: false,
   human_review_requested: false,
   human_review_reason: "",
   consent_captured: false,
+  patient_key: "",
 }
 
 export default function IntakeForm() {
@@ -124,6 +141,9 @@ export default function IntakeForm() {
   const [error, setError] = useState(null)
   const [fieldErrors, setFieldErrors] = useState({})
   const [localResult, setLocalResult] = useState(null)
+  const [newPatientKey, setNewPatientKey] = useState(null)
+  const [historyLookup, setHistoryLookup] = useState(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   const { profile } = useAuth()
   const { showToast } = useToast()
@@ -186,11 +206,27 @@ export default function IntakeForm() {
     }))
   }
 
+  const handleCheckPatientHistory = async () => {
+    const key = normalizePatientKey(form.patient_key)
+    if (!key) return
+    setHistoryLoading(true)
+    setHistoryLookup(null)
+    try {
+      const data = await getCaseHistoryByPatientKey(key)
+      setHistoryLookup({ cases: data.cases || [] })
+    } catch {
+      setHistoryLookup({ error: true })
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
   const handleSubmit = async (e) => {
     if (e?.preventDefault) e.preventDefault()
     setError(null)
     setFieldErrors({})
     setLocalResult(null)
+    setNewPatientKey(null)
     setLoading(true)
 
     if (!form.consent_captured) {
@@ -200,8 +236,24 @@ export default function IntakeForm() {
       return
     }
 
+    let patientKey = null
+    let isNewPatientKey = false
+    if (form.patient_key?.trim()) {
+      patientKey = normalizePatientKey(form.patient_key)
+      if (!patientKey) {
+        setError(t('intakeForm.errors.validationFailed'))
+        setFieldErrors({ patient_key: t('intakeForm.errors.patientKeyInvalid') })
+        setLoading(false)
+        return
+      }
+    } else {
+      patientKey = generatePatientKey()
+      isNewPatientKey = true
+    }
+
     const payload = {
       ...form,
+      patient_key: patientKey,
       chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint?.trim() || "" : form.chief_complaint,
       patient_name: form.patient_name?.trim() || "",
       patient_age: form.patient_age ? parseInt(form.patient_age) : undefined,
@@ -210,6 +262,7 @@ export default function IntakeForm() {
       spo2: form.spo2 ? parseInt(form.spo2) : null,
       heart_rate: form.heart_rate ? parseInt(form.heart_rate) : null,
       temperature: form.temperature ? parseFloat(form.temperature) : null,
+      is_pregnant: Boolean(form.is_pregnant),
       human_review_requested: Boolean(form.human_review_requested),
       human_review_reason: form.human_review_reason?.trim() || null,
       consent_captured_at: new Date().toISOString(),
@@ -235,6 +288,9 @@ export default function IntakeForm() {
 
       // Clear draft since it is successfully saved or queued
       await clearDraft().catch(console.error)
+
+      if (isNewPatientKey) setNewPatientKey(patientKey)
+      setHistoryLookup(null)
 
       if (data.queued) {
         setResult({ ...data, localTriage: local })
@@ -272,7 +328,21 @@ export default function IntakeForm() {
                   {offlineTriage.lowConfidence && (
                     <p className="text-xs text-urgent mt-2 font-mono">{t('intakeForm.result.lowConfidenceShort')}</p>
                   )}
+                  {offlineTriage.contraindicationFlags?.length > 0 && (
+                    <div className="mt-3 text-left text-xs text-urgent bg-urgent/5 border border-urgent/20 rounded-lg p-3">
+                      <p className="font-semibold mb-1">{t('intakeForm.result.contraindicationTitle')}</p>
+                      <ul className="list-disc ml-4 space-y-1">
+                        {offlineTriage.contraindicationFlags.map((flag) => <li key={flag}>{flag}</li>)}
+                      </ul>
+                    </div>
+                  )}
                 </div>
+              )}
+              {offlineTriage?.triageLevel === 'EMERGENCY' && (
+                <>
+                  <AmbulanceCallButton />
+                  <EmergencySmsAlert />
+                </>
               )}
               <div className="mb-6">
                 <span className="inline-block px-5 py-2 rounded-pill font-bold text-lg tracking-wide shadow-sm bg-sand text-urgent border border-urgent/20 font-mono">
@@ -285,6 +355,7 @@ export default function IntakeForm() {
                   ? t('intakeForm.result.savedLocallyWithTriage')
                   : t('intakeForm.result.savedLocallyNoTriage')}
               </p>
+              <PatientKeyCard patientKey={newPatientKey} />
             </>
           ) : (
             <>
@@ -293,12 +364,22 @@ export default function IntakeForm() {
                   {result.triage_level}
                 </span>
               </div>
+              {result.contraindication_flags?.length > 0 && (
+                <div className="mb-4 text-left text-xs text-urgent bg-urgent/5 border border-urgent/20 rounded-lg p-3">
+                  <p className="font-semibold mb-1">{t('intakeForm.result.contraindicationTitle')}</p>
+                  <ul className="list-disc ml-4 space-y-1">
+                    {result.contraindication_flags.map((flag) => <li key={flag}>{flag}</li>)}
+                  </ul>
+                </div>
+              )}
+              {result.triage_level === 'EMERGENCY' && <AmbulanceCallButton />}
               <h2 className="text-text text-xl font-bold tracking-tight mb-2 font-display italic">{t('intakeForm.result.successTitle')}</h2>
               <p className="text-text2 leading-relaxed mb-8">{result.risk_driver}</p>
+              <PatientKeyCard patientKey={newPatientKey} />
             </>
           )}
           <button
-            onClick={() => setResult(null)}
+            onClick={() => { setResult(null); setNewPatientKey(null) }}
             className="bg-forest text-white px-8 py-3 rounded-pill font-medium cursor-pointer shadow-btn hover:shadow-card-hover transition-all active:scale-[0.98]"
           >
             {t('intakeForm.actions.submitAnother')}
@@ -308,8 +389,12 @@ export default function IntakeForm() {
     )
   }
 
+  const prelimStyle = localResult
+    ? (PRELIM_RESULT_STYLES[localResult.triageLevel] || PRELIM_RESULT_STYLES.ROUTINE)
+    : null
+
   return (
-    <form onSubmit={handleSubmit} className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300 relative pb-32">
+    <form onSubmit={handleSubmit} className="max-w-xl mx-auto p-6 md:p-8 mt-6 mb-20 bg-surface shadow-card border border-leaf/40 rounded-xl hover:shadow-card-hover transition-shadow duration-300">
       <h1 className="text-2xl font-display italic text-forest tracking-tight mb-8 text-center">{t('intakeForm.title')}</h1>
 
       {error && (
@@ -320,26 +405,29 @@ export default function IntakeForm() {
 
       {/* Patient Location */}
       <Section title={t('intakeForm.sections.location')}>
-        <Field label={t('intakeForm.fields.location')} error={fieldErrors.location}>
-          <input name="location" value={form.location} onChange={handleChange} required
+        <Field label={t('intakeForm.fields.location')} error={fieldErrors.location} id="location">
+          <input id="location" name="location" value={form.location} onChange={handleChange} required
+            aria-describedby={fieldErrors.location ? "location-error" : undefined}
             placeholder={t('intakeForm.placeholders.location')} maxLength={200} className={`${inputClass} ${fieldErrors.location ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
       </Section>
 
       {/* Patient */}
       <Section title={t('intakeForm.sections.patientDetails')}>
-        <Field label={t('intakeForm.fields.patientName')} error={fieldErrors.patient_name}>
-          <input name="patient_name" value={form.patient_name} onChange={handleChange}
+        <Field label={t('intakeForm.fields.patientName')} error={fieldErrors.patient_name} id="patient_name">
+          <input id="patient_name" name="patient_name" value={form.patient_name} onChange={handleChange}
+            aria-describedby={fieldErrors.patient_name ? "patient_name-error" : undefined}
             placeholder={t('intakeForm.placeholders.patientName')} className={`${inputClass} ${fieldErrors.patient_name ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} maxLength={100} />
         </Field>
-        <Field label={t('intakeForm.fields.patientAge')} error={fieldErrors.patient_age}>
-          <input name="patient_age" type="number" value={form.patient_age}
-            onChange={handleChange} placeholder={t('intakeForm.placeholders.patientAge')} className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+        <Field label={t('intakeForm.fields.patientAge')} error={fieldErrors.patient_age} id="patient_age">
+          <input id="patient_age" name="patient_age" type="number" value={form.patient_age}
+            onChange={handleChange} aria-describedby={fieldErrors.patient_age ? "patient_age-error" : undefined}
+            placeholder={t('intakeForm.placeholders.patientAge')} className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
-        <Field label={t('intakeForm.fields.patientSex')} error={fieldErrors.patient_sex}>
+        <Field label={t('intakeForm.fields.patientSex')} error={fieldErrors.patient_sex} id="patient_sex">
           <fieldset className="mt-1">
             <legend className="sr-only">{t('intakeForm.fields.patientSex')}</legend>
-            <div className="flex gap-4" aria-describedby={fieldErrors.patient_sex ? "patient_sex_error" : undefined}>
+            <div className="flex gap-4" aria-describedby={fieldErrors.patient_sex ? "patient_sex-error" : undefined}>
               {SEX_OPTIONS.map(s => (
                 <label key={s} className="flex items-center gap-2 cursor-pointer group p-2 min-w-[44px] min-h-[44px]">
                   <input type="radio" name="patient_sex" value={s}
@@ -351,13 +439,63 @@ export default function IntakeForm() {
             </div>
           </fieldset>
         </Field>
+        {form.patient_sex === "female" && (
+          <label htmlFor="is_pregnant" className="flex items-center gap-2 cursor-pointer p-2 min-w-[44px] min-h-[44px]">
+            <input id="is_pregnant" type="checkbox" name="is_pregnant" checked={form.is_pregnant}
+              onChange={(e) => setForm(prev => ({ ...prev, is_pregnant: e.target.checked }))}
+              className="accent-forest w-5 h-5 rounded" />
+            <span className="text-sm text-text2">{t('intakeForm.fields.isPregnant')}</span>
+          </label>
+        )}
+      </Section>
+
+      {/* Returning Patient */}
+      <Section title={t('intakeForm.sections.returningPatient')}>
+        <Field label={t('intakeForm.fields.patientKey')} error={fieldErrors.patient_key} id="patient_key">
+          <div className="flex items-center gap-2">
+            <input id="patient_key" name="patient_key" value={form.patient_key}
+              onChange={(e) => setForm(prev => ({ ...prev, patient_key: e.target.value.toUpperCase() }))}
+              aria-describedby={fieldErrors.patient_key ? "patient_key-error" : undefined}
+              placeholder={t('intakeForm.placeholders.patientKey')} maxLength={9}
+              className={`${inputClass} flex-1 font-mono tracking-widest ${fieldErrors.patient_key ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+            <button
+              type="button"
+              onClick={handleCheckPatientHistory}
+              disabled={!normalizePatientKey(form.patient_key) || historyLoading}
+              className="px-4 py-3 rounded-md text-sm font-medium bg-surface2 border border-surface3 text-text2 hover:border-sage disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-all"
+            >
+              {historyLoading ? t('intakeForm.actions.checking') : t('intakeForm.actions.checkHistory')}
+            </button>
+          </div>
+          <p className="text-xs text-text3 mt-1.5 ml-1">{t('intakeForm.hints.patientKey')}</p>
+        </Field>
+        {historyLookup && (
+          historyLookup.error ? (
+            <p className="text-xs text-text3 italic">{t('intakeForm.result.historyUnavailable')}</p>
+          ) : historyLookup.cases.length === 0 ? (
+            <p className="text-xs text-text3 italic">{t('intakeForm.result.historyNone')}</p>
+          ) : (
+            <div className="text-xs bg-surface2 border border-surface3 rounded-lg p-3 space-y-1.5">
+              <p className="font-semibold text-text2">{t('intakeForm.result.historyFound', { count: historyLookup.cases.length })}</p>
+              <ul className="space-y-1">
+                {historyLookup.cases.slice(0, 5).map(c => (
+                  <li key={c.id} className="flex items-center justify-between text-text3">
+                    <span>{new Date(c.created_at).toLocaleDateString()} — {c.chief_complaint}</span>
+                    <span className={`ml-2 px-2 py-0.5 rounded-pill text-[10px] font-bold font-mono ${BADGE_COLORS[c.triage_level] || ''}`}>{c.triage_level}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        )}
       </Section>
 
       {/* Complaint */}
       <Section title={t('intakeForm.sections.chiefComplaint')}>
-        <Field label={t('intakeForm.fields.chiefComplaint')} error={fieldErrors.chief_complaint}>
-          <select name="chief_complaint" value={form.chief_complaint}
-            onChange={handleChange} className={`${inputClass} ${fieldErrors.chief_complaint ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
+        <Field label={t('intakeForm.fields.chiefComplaint')} error={fieldErrors.chief_complaint} id="chief_complaint">
+          <select id="chief_complaint" name="chief_complaint" value={form.chief_complaint}
+            onChange={handleChange} aria-describedby={fieldErrors.chief_complaint ? "chief_complaint-error" : undefined}
+            className={`${inputClass} ${fieldErrors.chief_complaint ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
             <option value="">{t('intakeForm.placeholders.selectComplaint')}</option>
             {COMPLAINT_IDS.map(id => (
               <option key={id} value={id}>{t(`intakeForm.complaints.${COMPLAINT_LABEL_KEYS[id]}`)}</option>
@@ -365,20 +503,23 @@ export default function IntakeForm() {
           </select>
         </Field>
         {form.chief_complaint === "Other" && (
-          <Field label={t('intakeForm.fields.customComplaint')} error={fieldErrors.chief_complaint}>
+          <Field label={t('intakeForm.fields.customComplaint')} error={fieldErrors.chief_complaint} id="custom_complaint">
             <input
+              id="custom_complaint"
               name="custom_complaint"
               value={form.custom_complaint}
               onChange={handleChange}
+              aria-describedby={fieldErrors.chief_complaint ? "custom_complaint-error" : undefined}
               placeholder={t('intakeForm.placeholders.customComplaint')}
               className={inputClass}
               maxLength={200}
             />
           </Field>
         )}
-        <Field label={t('intakeForm.fields.duration')} error={fieldErrors.complaint_duration}>
-          <select name="complaint_duration" value={form.complaint_duration}
-            onChange={handleChange} className={`${inputClass} ${fieldErrors.complaint_duration ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
+        <Field label={t('intakeForm.fields.duration')} error={fieldErrors.complaint_duration} id="complaint_duration">
+          <select id="complaint_duration" name="complaint_duration" value={form.complaint_duration}
+            onChange={handleChange} aria-describedby={fieldErrors.complaint_duration ? "complaint_duration-error" : undefined}
+            className={`${inputClass} ${fieldErrors.complaint_duration ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`}>
             <option value="">{t('intakeForm.placeholders.selectDuration')}</option>
             {DURATION_IDS.map(id => (
               <option key={id} value={id}>{t(`intakeForm.durations.${DURATION_LABEL_KEYS[id]}`)}</option>
@@ -390,25 +531,30 @@ export default function IntakeForm() {
       {/* Vitals */}
       <Section title={t('intakeForm.sections.vitals')}>
         <div className="grid grid-cols-2 gap-3">
-          <Field label={t('intakeForm.fields.bpSystolic')} error={fieldErrors.bp_systolic}>
-            <input name="bp_systolic" type="number" value={form.bp_systolic}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.bpSystolic')} className={`${inputClass} ${fieldErrors.bp_systolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.bpSystolic')} error={fieldErrors.bp_systolic} id="bp_systolic">
+            <input id="bp_systolic" name="bp_systolic" type="number" value={form.bp_systolic}
+              onChange={handleChange} aria-describedby={fieldErrors.bp_systolic ? "bp_systolic-error" : undefined}
+              placeholder={t('intakeForm.placeholders.bpSystolic')} className={`${inputClass} ${fieldErrors.bp_systolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label={t('intakeForm.fields.bpDiastolic')} error={fieldErrors.bp_diastolic}>
-            <input name="bp_diastolic" type="number" value={form.bp_diastolic}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.bpDiastolic')} className={`${inputClass} ${fieldErrors.bp_diastolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.bpDiastolic')} error={fieldErrors.bp_diastolic} id="bp_diastolic">
+            <input id="bp_diastolic" name="bp_diastolic" type="number" value={form.bp_diastolic}
+              onChange={handleChange} aria-describedby={fieldErrors.bp_diastolic ? "bp_diastolic-error" : undefined}
+              placeholder={t('intakeForm.placeholders.bpDiastolic')} className={`${inputClass} ${fieldErrors.bp_diastolic ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label={t('intakeForm.fields.spo2')} error={fieldErrors.spo2}>
-            <input name="spo2" type="number" value={form.spo2}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.spo2')} className={`${inputClass} ${fieldErrors.spo2 ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.spo2')} error={fieldErrors.spo2} id="spo2">
+            <input id="spo2" name="spo2" type="number" value={form.spo2}
+              onChange={handleChange} aria-describedby={fieldErrors.spo2 ? "spo2-error" : undefined}
+              placeholder={t('intakeForm.placeholders.spo2')} className={`${inputClass} ${fieldErrors.spo2 ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label={t('intakeForm.fields.heartRate')} error={fieldErrors.heart_rate}>
-            <input name="heart_rate" type="number" value={form.heart_rate}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.heartRate')} className={`${inputClass} ${fieldErrors.heart_rate ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.heartRate')} error={fieldErrors.heart_rate} id="heart_rate">
+            <input id="heart_rate" name="heart_rate" type="number" value={form.heart_rate}
+              onChange={handleChange} aria-describedby={fieldErrors.heart_rate ? "heart_rate-error" : undefined}
+              placeholder={t('intakeForm.placeholders.heartRate')} className={`${inputClass} ${fieldErrors.heart_rate ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
-          <Field label={t('intakeForm.fields.temperature')} error={fieldErrors.temperature}>
-            <input name="temperature" type="number" step="0.1" value={form.temperature}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.temperature')} className={`${inputClass} ${fieldErrors.temperature ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+          <Field label={t('intakeForm.fields.temperature')} error={fieldErrors.temperature} id="temperature">
+            <input id="temperature" name="temperature" type="number" step="0.1" value={form.temperature}
+              onChange={handleChange} aria-describedby={fieldErrors.temperature ? "temperature-error" : undefined}
+              placeholder={t('intakeForm.placeholders.temperature')} className={`${inputClass} ${fieldErrors.temperature ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
           </Field>
         </div>
       </Section>
@@ -440,26 +586,28 @@ export default function IntakeForm() {
 
       {/* Observations */}
       <Section title={t('intakeForm.sections.observations')}>
-        <div className="flex items-start gap-2">
-          <textarea name="observations" value={form.observations} onChange={handleChange}
-            placeholder={t('intakeForm.placeholders.observations')}
-            rows={3} className={`${inputClass} resize-none flex-1`} maxLength={500} />
-          <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('observations')} />
-        </div>
-        <Field label={t('intakeForm.fields.knownConditions')}>
-          <div className="flex items-center gap-2">
-            <input name="known_conditions" value={form.known_conditions}
-              onChange={handleChange} placeholder={t('intakeForm.placeholders.knownConditions')}
-              maxLength={300} className={`${inputClass} flex-1`} />
-            <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('known_conditions')} />
+        <Field label={t('intakeForm.fields.observations')} id="observations">
+          <div className="flex items-start gap-2">
+            <textarea id="observations" name="observations" value={form.observations} onChange={handleChange}
+              placeholder={t('intakeForm.placeholders.observations')}
+              rows={3} className={`${inputClass} resize-none flex-1`} maxLength={500} />
+            <VoiceInputButton lang={speechLang} value={form.observations} onTranscript={(val) => setForm(prev => ({ ...prev, observations: val }))} />
           </div>
         </Field>
-        <Field label={t('intakeForm.fields.currentMedications')}>
+        <Field label={t('intakeForm.fields.knownConditions')} id="known_conditions">
           <div className="flex items-center gap-2">
-            <input name="current_medications" value={form.current_medications}
+            <input id="known_conditions" name="known_conditions" value={form.known_conditions}
+              onChange={handleChange} placeholder={t('intakeForm.placeholders.knownConditions')}
+              maxLength={300} className={`${inputClass} flex-1`} />
+            <VoiceInputButton lang={speechLang} value={form.known_conditions} onTranscript={(val) => setForm(prev => ({ ...prev, known_conditions: val }))} />
+          </div>
+        </Field>
+        <Field label={t('intakeForm.fields.currentMedications')} id="current_medications">
+          <div className="flex items-center gap-2">
+            <input id="current_medications" name="current_medications" value={form.current_medications}
               onChange={handleChange} placeholder={t('intakeForm.placeholders.currentMedications')}
               maxLength={300} className={`${inputClass} flex-1`} />
-            <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('current_medications')} />
+            <VoiceInputButton lang={speechLang} value={form.current_medications} onTranscript={(val) => setForm(prev => ({ ...prev, current_medications: val }))} />
           </div>
         </Field>
       </Section>
@@ -473,6 +621,7 @@ export default function IntakeForm() {
               name="consent_captured"
               checked={form.consent_captured}
               onChange={(e) => setForm(prev => ({ ...prev, consent_captured: e.target.checked }))}
+              aria-describedby={fieldErrors.consent_captured ? "consent_captured-error" : undefined}
               className="mt-1 w-5 h-5 accent-forest rounded"
             />
             <span className="text-sm text-text2 leading-relaxed">
@@ -487,7 +636,7 @@ export default function IntakeForm() {
             </span>
           </label>
           {fieldErrors.consent_captured && (
-            <p className="text-emergency text-xs mt-2 font-medium">{fieldErrors.consent_captured}</p>
+            <p id="consent_captured-error" role="alert" className="text-emergency text-xs mt-2 font-medium">{fieldErrors.consent_captured}</p>
           )}
         </div>
       </Section>
@@ -515,6 +664,7 @@ export default function IntakeForm() {
               value={form.human_review_reason}
               onChange={handleChange}
               placeholder={t('intakeForm.placeholders.reviewReason')}
+              aria-label={t('intakeForm.placeholders.reviewReason')}
               rows={2}
               maxLength={500}
               className={`${inputClass} mt-3 resize-none`}
@@ -524,7 +674,7 @@ export default function IntakeForm() {
       </Section>
 
       {/* Submit */}
-      <div className="fixed sm:absolute bottom-0 left-0 right-0 sm:left-auto sm:right-auto sm:w-full p-4 bg-surface sm:bg-transparent border-t border-surface3 sm:border-none shadow-[0_-4px_10px_rgba(0,0,0,0.1)] sm:shadow-none z-20">
+      <div className="mt-8 pt-4 border-t border-surface3 flex justify-center w-full">
         <button
           type="submit"
           disabled={loading}
@@ -536,21 +686,9 @@ export default function IntakeForm() {
 
       {/* Preliminary Triage Result Display */}
       {localResult && (
-        <div className={`mt-4 rounded-lg border p-4 animate-fade-up ${
-          localResult.triageLevel === 'EMERGENCY'
-            ? 'border-emergency/30 bg-emergency/5'
-            : localResult.triageLevel === 'URGENT'
-            ? 'border-urgent/30 bg-urgent/5'
-            : 'border-routine/30 bg-routine/5'
-        }`}>
+        <div className={`mt-4 rounded-lg border p-4 animate-fade-up ${prelimStyle.container}`}>
           <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center rounded-pill px-3 py-1 text-xs font-bold tracking-widest uppercase font-mono ${
-              localResult.triageLevel === 'EMERGENCY'
-                ? 'bg-emergency/10 text-emergency'
-                : localResult.triageLevel === 'URGENT'
-                ? 'bg-urgent/10 text-urgent'
-                : 'bg-routine/10 text-routine'
-            }`}>
+            <span className={`inline-flex items-center rounded-pill px-3 py-1 text-xs font-bold tracking-widest uppercase font-mono ${prelimStyle.badge}`}>
               {localResult.triageLevel}
             </span>
             <span className="text-sm font-medium text-text2">
@@ -588,12 +726,16 @@ function Section({ title, children }) {
   )
 }
 
-function Field({ label, error, children }) {
+function Field({ label, error, id, children }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-text2 mb-2 ml-1">{label}</label>
+      <label htmlFor={id} className="block text-sm font-medium text-text2 mb-2 ml-1">{label}</label>
       {children}
-      {error && <p className="text-emergency text-xs mt-1.5 ml-1 animate-fade-up font-medium">{error}</p>}
+      {error && (
+        <p id={id ? `${id}-error` : undefined} role="alert" className="text-emergency text-xs mt-1.5 ml-1 animate-fade-up font-medium">
+          {error}
+        </p>
+      )}
     </div>
   )
 }

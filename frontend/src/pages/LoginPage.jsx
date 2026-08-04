@@ -39,15 +39,16 @@ export default function LoginPage() {
           <h2 className="text-lg font-bold text-text tracking-tight mb-6 text-center font-body">Sign In</h2>
 
           {error && (
-            <div className="bg-emergency/10 border border-emergency/30 text-emergency px-4 py-3 rounded-md mb-5 text-sm">
+            <div role="alert" aria-live="assertive" className="bg-emergency/10 border border-emergency/30 text-emergency px-4 py-3 rounded-md mb-5 text-sm">
               {error}
             </div>
           )}
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-text2 mb-2 ml-1 font-mono text-xs uppercase tracking-wider">Email</label>
+              <label htmlFor="login-email" className="block text-sm font-medium text-text2 mb-2 ml-1 font-mono text-xs uppercase tracking-wider">Email</label>
               <input
+                id="login-email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -58,8 +59,9 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-text2 mb-2 ml-1 font-mono text-xs uppercase tracking-wider">Password</label>
+              <label htmlFor="login-password" className="block text-sm font-medium text-text2 mb-2 ml-1 font-mono text-xs uppercase tracking-wider">Password</label>
               <input
+                id="login-password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

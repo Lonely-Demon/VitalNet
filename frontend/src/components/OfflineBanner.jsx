@@ -30,7 +30,7 @@ export default function OfflineBanner() {
 
   if (!online) {
     return (
-      <div className="bg-urgent/10 border-b border-urgent/30 px-4 py-2 text-center text-sm text-urgent">
+      <div role="status" aria-live="polite" className="bg-urgent/10 border-b border-urgent/30 px-4 py-2 text-center text-sm text-urgent">
         You are offline. Submissions will be saved and synced when connected.
         {queueCount > 0 && (
           <span className="ml-2 font-medium font-mono">{queueCount} pending</span>
@@ -42,7 +42,7 @@ export default function OfflineBanner() {
   // Online but has queued items (syncing in progress)
   if (online && queueCount > 0) {
     return (
-      <div className="bg-forest/10 border-b border-forest/30 px-4 py-2 text-center text-sm text-forest">
+      <div role="status" aria-live="polite" className="bg-forest/10 border-b border-forest/30 px-4 py-2 text-center text-sm text-forest">
         Syncing {queueCount} offline submission{queueCount > 1 ? 's' : ''}…
       </div>
     )

@@ -5,7 +5,7 @@ Extracted from main.py as part of Phase 12 architectural modularisation.
 import logging
 import re
 import uuid as uuid_lib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
@@ -14,10 +14,11 @@ from slowapi import Limiter
 from app.core.auth import require_role, verify_sub_for_rate_limit
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
-from app.core.database import get_supabase_for_user
-from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput
-from app.ml.classifier import run_triage
-from app.services.llm import generate_briefing
+from app.core.database import get_supabase_for_user, supabase_admin, extract_bearer_token
+from app.core.metrics import record_triage_classification
+from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput, PATIENT_KEY_RE
+from app.ml.classifier import predict_triage
+from app.services.llm import generate_briefing, generate_patient_summary
 from app.services.push import push_emergency_alert
 
 logger = logging.getLogger("vitalnet")
@@ -71,7 +72,7 @@ def _parse_uuid(value: str, field: str = "id") -> str:
 
 def _normalized_iso_ts(value: str, field: str) -> str:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc).isoformat()
@@ -85,6 +86,43 @@ def _resolved_role(user: dict) -> str:
 
 def _resolved_facility(user: dict) -> str | None:
     return user.get("resolved_facility_id")
+
+
+# Cross-visit deterioration pattern: a repeated URGENT/EMERGENCY presentation
+# from the same patient within this trailing window is a signal worth a
+# clinician's eyes even if today's reading alone wouldn't trigger review.
+_DETERIORATION_WINDOW_DAYS = 7
+_DETERIORATION_QUALIFYING_TIERS = ("URGENT", "EMERGENCY")
+
+
+def _check_deterioration_pattern(patient_key: str | None, current_triage_level: str) -> tuple[bool, int | None]:
+    """
+    Counts prior URGENT/EMERGENCY visits sharing patient_key within the
+    trailing window, using supabase_admin for exactly one count-only
+    query — the same narrow, documented exception as the referral
+    load-balancing aggregate (docs/DECISIONS.md §20, §22): a patient_key
+    carries no PII, and an ASHA worker submitting THIS case is already
+    trusted to reason about whether this same patient has recently had
+    repeated severe visits, regardless of which worker saw them each time
+    (RLS would otherwise silently restrict an asha_worker's own query to
+    only their own past submissions, undercounting cross-worker visits).
+    """
+    if not patient_key:
+        return False, None
+
+    window_start = (datetime.now(timezone.utc) - timedelta(days=_DETERIORATION_WINDOW_DAYS)).isoformat()
+    result = (
+        supabase_admin.table("case_records")
+        .select("id", count="exact")
+        .eq("patient_key", patient_key)
+        .gte("created_at", window_start)
+        .in_("triage_level", _DETERIORATION_QUALIFYING_TIERS)
+        .is_("deleted_at", "null")
+        .execute()
+    )
+    prior_count = result.count if result.count is not None else len(result.data or [])
+    total = prior_count + (1 if current_triage_level in _DETERIORATION_QUALIFYING_TIERS else 0)
+    return total >= 2, (total if total >= 2 else None)
 
 
 def _authorize_case_row_access(user: dict, row: dict) -> None:
@@ -104,6 +142,28 @@ def _authorize_case_row_access(user: dict, row: dict) -> None:
     if role == "asha_worker" and row.get("submitted_by") == user_id:
         return
     raise HTTPException(status_code=403, detail="Not authorized for this case")
+
+
+def _fetch_authorized_case(db, case_uuid: str, user: dict) -> dict:
+    """
+    Fetch a non-deleted case row by id (404 if missing/deleted), then apply
+    _authorize_case_row_access (403 if not authorized). Shared by every
+    endpoint that acts on a single existing case (review, triage-override,
+    outcome, soft-delete).
+    """
+    result = (
+        db.table("case_records")
+        .select("id, facility_id, submitted_by, deleted_at")
+        .eq("id", case_uuid)
+        .maybe_single()
+        .execute()
+    )
+    row = (result.data if result else None) or {}
+    if not row or row.get("deleted_at") is not None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    _authorize_case_row_access(user, row)
+    return row
 
 
 # ── Submit Case ────────────────────────────────────────────────────────────────
@@ -134,10 +194,14 @@ async def submit_case(
 
     # Step 1: Classifier + SHAP (always runs — LLM-independent)
     try:
-        triage_result = run_triage(form_data)
+        triage_result = predict_triage(form_data)
         briefing = await generate_briefing(form_data, triage_result)
-        raw_token = (authorization or "").split(" ", 1)[-1]
+        raw_token = extract_bearer_token(authorization)
         db = get_supabase_for_user(raw_token)
+
+        deterioration_alert, deterioration_visit_count = _check_deterioration_pattern(
+            form.patient_key, triage_result["triage_level"]
+        )
 
         record = {
             "client_id": str(form.client_id or uuid_lib.uuid4()),
@@ -154,6 +218,7 @@ async def submit_case(
             "temperature": float(form.temperature)
             if form.temperature is not None
             else None,
+            "is_pregnant": form.is_pregnant,
             "chief_complaint": form_data.get("chief_complaint", form.chief_complaint),
             "complaint_duration": form.complaint_duration,
             "symptoms": form.symptoms or [],
@@ -162,6 +227,7 @@ async def submit_case(
             "current_medications": form_data.get("current_medications", form.current_medications),
             "human_review_requested": form.human_review_requested,
             "human_review_reason": form.human_review_reason,
+            "patient_key": form.patient_key,
             "consent_captured": form.consent_captured,
             "consent_captured_at": form.consent_captured_at.isoformat()
             if form.consent_captured_at
@@ -171,8 +237,16 @@ async def submit_case(
             "risk_driver": triage_result["risk_driver"],
             "triage_model_version": triage_result.get("model_version"),
             "low_confidence": bool(triage_result.get("low_confidence")),
+            "contraindication_flags": triage_result.get("contraindication_flags") or [],
+            "deterioration_alert": deterioration_alert,
+            "deterioration_visit_count": deterioration_visit_count,
             "llm_status": briefing.get("llm_status", "generated"),
-            "needs_review": bool(briefing.get("needs_review") or form.human_review_requested),
+            "needs_review": bool(
+                briefing.get("needs_review")
+                or form.human_review_requested
+                or triage_result.get("contraindication_flags")
+                or deterioration_alert
+            ),
             "briefing": briefing,
             "llm_model_used": briefing.get("_model_used", "unknown"),
             "created_offline": form.created_offline,
@@ -211,6 +285,11 @@ async def submit_case(
             ip_address=get_client_ip(request),
             details={"created_offline": bool(form.created_offline), "needs_review": bool(record.get("needs_review"))},
         )
+
+        # Genuinely new submission (not a retried duplicate) — record the
+        # business metric once, not on every retry (docs/SLO.md).
+        if bool(result.data):
+            record_triage_classification(triage_result["triage_level"])
 
         # Genuinely new EMERGENCY case (not a retried duplicate) — notify the
         # facility's subscribed doctors. Background task: never adds latency
@@ -268,7 +347,7 @@ async def get_cases(
     facility_id assigned see all cases (unscoped), same as before this
     endpoint had scoping.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
     facility_id = _resolved_facility(user)
@@ -287,6 +366,7 @@ async def get_cases(
             "id, patient_name, patient_age, patient_sex, patient_location, chief_complaint, "
             "triage_level, triage_priority, triage_confidence, risk_driver, briefing, "
             "low_confidence, needs_review, human_review_requested, human_review_reason, "
+            "contraindication_flags, deterioration_alert, deterioration_visit_count, "
             "triage_model_version, overridden_triage, override_reason, overridden_by, overridden_at, "
             "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
         )
@@ -348,22 +428,11 @@ async def review_case(
     if they somehow obtained its id).
     """
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
 
-    case_result = (
-        db.table("case_records")
-        .select("id, facility_id, submitted_by, deleted_at")
-        .eq("id", case_uuid)
-        .maybe_single()
-        .execute()
-    )
-    case_row = (case_result.data if case_result else None) or {}
-    if not case_row or case_row.get("deleted_at") is not None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    _authorize_case_row_access(user, case_row)
+    case_row = _fetch_authorized_case(db, case_uuid, user)
 
     update_result = db.table("case_records").update(
         {
@@ -418,22 +487,11 @@ async def override_triage(
     Scoped the same way as review_case.
     """
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
 
-    case_result = (
-        db.table("case_records")
-        .select("id, facility_id, submitted_by, deleted_at")
-        .eq("id", case_uuid)
-        .maybe_single()
-        .execute()
-    )
-    case_row = (case_result.data if case_result else None) or {}
-    if not case_row or case_row.get("deleted_at") is not None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    _authorize_case_row_access(user, case_row)
+    case_row = _fetch_authorized_case(db, case_uuid, user)
 
     update_result = db.table("case_records").update(
         {
@@ -486,22 +544,11 @@ async def record_case_outcome(
     Scoped the same way as review_case.
     """
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     role = _resolved_role(user)
 
-    case_result = (
-        db.table("case_records")
-        .select("id, facility_id, submitted_by, deleted_at")
-        .eq("id", case_uuid)
-        .maybe_single()
-        .execute()
-    )
-    case_row = (case_result.data if case_result else None) or {}
-    if not case_row or case_row.get("deleted_at") is not None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    _authorize_case_row_access(user, case_row)
+    case_row = _fetch_authorized_case(db, case_uuid, user)
 
     result = db.table("case_outcomes").insert(
         {
@@ -549,7 +596,7 @@ async def get_my_cases(
     RLS enforces ownership at DB level; the explicit filter is for clarity.
     Returns a limited column set — full briefing JSONB is doctor-facing only.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
     limit = max(1, min(limit, 100))
 
@@ -589,6 +636,68 @@ async def get_my_cases(
     }
 
 
+# ── Get Case History By Patient Key ───────────────────────────────────────────
+
+
+@router.get("/api/cases/by-patient-key/{patient_key}")
+@limiter.limit("60/minute")
+async def get_cases_by_patient_key(
+    request: Request,
+    patient_key: str,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin")),
+):
+    """
+    Returns a summary of prior visits sharing the given patient continuity
+    key, newest first. Purely a lookup for recognizing a returning patient —
+    RLS enforces the same visibility boundary as every other case view here:
+    'admin' sees all matches, 'doctor' with a facility_id is scoped to their
+    facility (via RLS + the explicit filter below, matching GET /api/cases),
+    and 'asha_worker' sees only visits they personally submitted (RLS
+    enforces ownership, same as GET /api/cases/mine). The key itself carries
+    no PII — it is only ever useful joined against case_records.
+    """
+    key = (patient_key or "").strip().upper()
+    if not PATIENT_KEY_RE.match(key):
+        raise HTTPException(status_code=400, detail="Invalid patient_key format")
+
+    raw_token = extract_bearer_token(authorization)
+    db = get_supabase_for_user(raw_token)
+    role = _resolved_role(user)
+    facility_id = _resolved_facility(user)
+
+    query = (
+        db.table("case_records")
+        .select(
+            "id, chief_complaint, triage_level, created_at, reviewed_at, "
+            "patient_age, patient_sex, facility_id"
+        )
+        .eq("patient_key", key)
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True)
+        .limit(50)
+    )
+
+    if role == "doctor" and facility_id:
+        query = query.eq("facility_id", facility_id)
+
+    result = query.execute()
+    rows = result.data or []
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_READ,
+        user_id=user.get("sub", "unknown"),
+        user_role=role,
+        resource_type="case_records",
+        resource_id=None,
+        facility_id=facility_id,
+        ip_address=get_client_ip(request),
+        details={"view": "patient_key_history", "match_count": len(rows)},
+    )
+
+    return {"cases": rows}
+
+
 # ── Get Case Detail ───────────────────────────────────────────────────────────────
 
 
@@ -602,7 +711,7 @@ async def get_case_detail(
 ):
     """Returns the full record including briefing JSONB for one case after ownership/facility authorization checks."""
     case_uuid = _parse_uuid(case_id, "case_id")
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
     result = (
@@ -631,3 +740,44 @@ async def get_case_detail(
     )
 
     return row
+
+
+@router.post("/api/cases/{case_id}/patient-summary")
+@limiter.limit("20/minute")
+async def case_patient_summary(
+    request: Request,
+    case_id: str,
+    language: str = "en",
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin")),
+):
+    """
+    On-demand, patient-facing plain-language restatement of an already-
+    complete case's briefing — for the ASHA worker to read aloud in the
+    patient's own language. Never regenerates or re-derives the triage
+    itself; purely a restatement (app/services/llm.py::generate_patient_summary).
+    Not persisted — computed fresh on each call, since it's a UX nicety
+    layered on the case, not part of the clinical record.
+    """
+    case_uuid = _parse_uuid(case_id, "case_id")
+    raw_token = extract_bearer_token(authorization)
+    db = get_supabase_for_user(raw_token)
+
+    result = (
+        db.table("case_records")
+        .select("id, facility_id, submitted_by, triage_level, risk_driver, briefing, deleted_at")
+        .eq("id", case_uuid)
+        .maybe_single()
+        .execute()
+    )
+    row = (result.data if result else None) or {}
+    if not row or row.get("deleted_at") is not None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    _authorize_case_row_access(user, row)
+
+    triage_result = {"triage_level": row["triage_level"], "risk_driver": row.get("risk_driver") or ""}
+    briefing = row.get("briefing") or {}
+    summary = await generate_patient_summary(briefing, triage_result, language=language)
+
+    return summary

@@ -12,9 +12,10 @@ import { purgeExpiredDrafts } from './hooks/useDraftSave'
 // they will never use. This matters on the low-end Android tablets ASHA
 // workers use in the field: smaller main bundle = faster first interactive
 // paint, especially over rural 2G/3G connections.
-const ASHAPanel   = lazy(() => import('./panels/ASHAPanel'))
-const DoctorPanel = lazy(() => import('./panels/DoctorPanel'))
-const AdminPanel  = lazy(() => import('./panels/AdminPanel'))
+const ASHAPanel       = lazy(() => import('./panels/ASHAPanel'))
+const DoctorPanel     = lazy(() => import('./panels/DoctorPanel'))
+const AdminPanel      = lazy(() => import('./panels/AdminPanel'))
+const SupervisorPanel = lazy(() => import('./panels/SupervisorPanel'))
 
 function PanelLoadingFallback() {
   return (
@@ -50,6 +51,7 @@ function AppInner() {
       {profile?.role === 'admin'       && <AdminPanel />}
       {profile?.role === 'doctor'      && <DoctorPanel />}
       {profile?.role === 'asha_worker' && <ASHAPanel />}
+      {profile?.role === 'supervisor'  && <SupervisorPanel />}
     </Suspense>
   )
 }
