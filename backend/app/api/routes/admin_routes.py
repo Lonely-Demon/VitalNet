@@ -48,7 +48,7 @@ class CreateUserRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=12, max_length=128)
     full_name: str = Field(min_length=1, max_length=100)
-    role: Literal['asha_worker', 'doctor', 'admin']
+    role: Literal['asha_worker', 'doctor', 'admin', 'supervisor']
     facility_id: Optional[str] = None
     asha_id: Optional[str] = Field(None, max_length=50)
 
@@ -58,7 +58,7 @@ class BulkCreateUsersRequest(BaseModel):
 
 
 class UpdateUserRequest(BaseModel):
-    role: Optional[Literal['asha_worker', 'doctor', 'admin']] = None
+    role: Optional[Literal['asha_worker', 'doctor', 'admin', 'supervisor']] = None
     facility_id: Optional[str] = None
     asha_id: Optional[str] = Field(None, max_length=50)
     is_active: Optional[bool] = None
@@ -150,7 +150,7 @@ def _provision_user(body: CreateUserRequest) -> dict:
     """
     _validate_password(body.password)
 
-    if body.role in {"asha_worker", "doctor"} and not body.facility_id:
+    if body.role in {"asha_worker", "doctor", "supervisor"} and not body.facility_id:
         raise HTTPException(status_code=400, detail="facility_id is required for this role")
 
     response = supabase_admin.auth.admin.create_user({

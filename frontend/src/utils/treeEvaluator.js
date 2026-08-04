@@ -49,9 +49,14 @@ export function evaluateTrees(treeJson, x) {
   for (let t = 0; t < trees.length; t++) {
     const { feat, thr, left, right, leaf } = trees[t]
     let node = 0
-    // Walk until a leaf (feat === -1).
+    // Walk until a leaf (feat === -1). Both operands are cast to float32 via
+    // Math.fround so the comparison is bit-identical to the server's float32
+    // model (the backend casts features to np.float32 before predict; the
+    // Python reference evaluator in tree_export.py mirrors this). Without the
+    // cast, a feature value landing exactly on a split threshold could take a
+    // different branch offline vs online. See tree_export.py / DECISIONS §31.
     while (feat[node] !== -1) {
-      node = x[feat[node]] <= thr[node] ? left[node] : right[node]
+      node = Math.fround(x[feat[node]]) <= Math.fround(thr[node]) ? left[node] : right[node]
     }
     const contribs = leaf[node]
     if (contribs) {

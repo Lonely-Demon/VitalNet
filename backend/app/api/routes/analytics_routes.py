@@ -18,8 +18,8 @@ from fastapi.responses import StreamingResponse
 
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.auth import require_role
-from app.core.database import get_supabase_for_user
-from app.api.routes.cases import limiter
+from app.core.database import get_supabase_for_user, extract_bearer_token
+from app.api.routes.cases import limiter, _resolved_role, _resolved_facility
 
 logger = logging.getLogger("vitalnet")
 
@@ -33,6 +33,15 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 GLOBAL_SCOPE_ROLE = "admin"
 
 QUERY_TIMEOUT_SECONDS = 10
+
+
+def _resolve_scope(user: dict) -> tuple[str, str | None, bool]:
+    """Returns (role, facility_id, scoped) — scoped is True unless the role
+    is global (admin) or has no facility_id, matching every analytics
+    endpoint's dashboard scoping."""
+    role = _resolved_role(user)
+    facility_id = _resolved_facility(user)
+    return role, facility_id, role != GLOBAL_SCOPE_ROLE and bool(facility_id)
 
 
 async def _run_query(query_fn, label: str, failures: list[str]):
@@ -63,12 +72,10 @@ async def get_summary(
     admin accounts get system-wide stats (global scope), matching
     the admin dashboard's other endpoints.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
-    role = user.get("resolved_role") or ""
-    facility_id = user.get("resolved_facility_id")
-    scoped = role != GLOBAL_SCOPE_ROLE and facility_id
+    role, facility_id, scoped = _resolve_scope(user)
 
     since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     month_since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
@@ -158,12 +165,10 @@ async def get_emergency_rate(
     Returns EMERGENCY case rate over the last 30 days, grouped by week.
     Used for the trend indicator in the admin analytics view.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
-    role = user.get("resolved_role") or ""
-    facility_id = user.get("resolved_facility_id")
-    scoped = role != GLOBAL_SCOPE_ROLE and facility_id
+    role, facility_id, scoped = _resolve_scope(user)
 
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 
@@ -183,7 +188,7 @@ async def get_emergency_rate(
     # Group by ISO week
     weeks = {}
     for row in rows:
-        dt = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(row["created_at"])
         week_key = dt.strftime("%Y-W%W")
         if week_key not in weeks:
             weeks[week_key] = {"total": 0, "emergency": 0}
@@ -234,12 +239,10 @@ async def get_response_times(
     plus a count of cases still unreviewed past each tier's SLA threshold —
     the number that should visually demand attention on the dashboard.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
-    role = user.get("resolved_role") or ""
-    facility_id = user.get("resolved_facility_id")
-    scoped = role != GLOBAL_SCOPE_ROLE and facility_id
+    role, facility_id, scoped = _resolve_scope(user)
 
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 
@@ -264,12 +267,12 @@ async def get_response_times(
         tier = row.get("triage_level")
         if tier not in minutes_by_tier:
             continue
-        created = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+        created = datetime.fromisoformat(row["created_at"])
         reviewed_at = row.get("reviewed_at")
         threshold_min = OVERDUE_THRESHOLDS_MIN[tier]
 
         if reviewed_at:
-            reviewed = datetime.fromisoformat(reviewed_at.replace("Z", "+00:00"))
+            reviewed = datetime.fromisoformat(reviewed_at)
             minutes_by_tier[tier].append((reviewed - created).total_seconds() / 60)
         elif (now - created).total_seconds() / 60 > threshold_min:
             overdue_by_tier[tier] += 1
@@ -306,12 +309,10 @@ async def get_ml_agreement(
     an admin when it's time to retrain (FEATURES_ROADMAP §1.3), and an
     ongoing model-quality monitor even before the first retrain.
     """
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
-    role = user.get("resolved_role") or ""
-    facility_id = user.get("resolved_facility_id")
-    scoped = role != GLOBAL_SCOPE_ROLE and facility_id
+    role, facility_id, scoped = _resolve_scope(user)
 
     def build_query():
         q = db.table("case_outcomes").select("actual_severity, case_records!inner(triage_level, facility_id)")
@@ -384,8 +385,8 @@ async def export_cases(
     is logged via the PHI audit trail (this is bulk PHI egress).
     """
     try:
-        parsed_from = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-        parsed_to = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+        parsed_from = datetime.fromisoformat(date_from)
+        parsed_to = datetime.fromisoformat(date_to)
     except ValueError:
         raise HTTPException(status_code=400, detail="date_from/date_to must be ISO 8601 dates")
     if parsed_from.tzinfo is None:
@@ -397,12 +398,10 @@ async def export_cases(
     if (parsed_to - parsed_from).days > EXPORT_MAX_RANGE_DAYS:
         raise HTTPException(status_code=400, detail=f"Date range cannot exceed {EXPORT_MAX_RANGE_DAYS} days")
 
-    raw_token = (authorization or "").split(" ", 1)[-1]
+    raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
 
-    role = user.get("resolved_role") or ""
-    facility_id = user.get("resolved_facility_id")
-    scoped = role != GLOBAL_SCOPE_ROLE and facility_id
+    role, facility_id, scoped = _resolve_scope(user)
 
     def build_query():
         q = (

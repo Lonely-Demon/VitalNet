@@ -2,14 +2,16 @@ import { useState, useEffect } from 'react'
 import NavBar from '../components/NavBar'
 import IntakeForm from '../pages/IntakeForm'
 import OfflineBanner from '../components/OfflineBanner'
+import ProtocolAssistant from '../components/ProtocolAssistant'
 import { getMySubmissions, processQueue } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
 import { useAuth } from '../store/authStore'
 import { useRealtimeCases } from '../hooks/useRealtimeCases'
 
 const TABS = [
-  { id: 'new',     label: 'New Case' },
-  { id: 'history', label: 'My Submissions' },
+  { id: 'new',      label: 'New Case' },
+  { id: 'history',  label: 'My Submissions' },
+  { id: 'protocol', label: 'Ask a Question' },
 ]
 
 const TRIAGE_STYLES = {
@@ -20,7 +22,14 @@ const TRIAGE_STYLES = {
 
 export default function ASHAPanel() {
   const [activeTab,   setActiveTab]   = useState('new')
-  const [submissions, setSubmissions] = useState([])
+  const [submissions, setSubmissions] = useState(() => {
+    try {
+      const cached = localStorage.getItem('vn_my_submissions')
+      return cached ? JSON.parse(cached) : []
+    } catch {
+      return []
+    }
+  })
   const [loading,     setLoading]     = useState(false)
   const [error,       setError]       = useState(null)
   const { showToast } = useToast()
@@ -30,24 +39,19 @@ export default function ASHAPanel() {
 
   // Process any queued offline submissions on mount and on every 'online' event
   useEffect(() => {
-    processQueue().then(result => {
+    function notifySyncResult(result) {
       if (result.synced > 0) {
         showToast(`${result.synced} offline submission${result.synced > 1 ? 's' : ''} synced`, 'success')
       }
       if (result.requiresLogin) {
         showToast('Please sign in again to sync offline submissions', 'warning')
       }
-    })
+    }
+
+    processQueue().then(notifySyncResult)
 
     function handleOnline() {
-      processQueue().then(result => {
-        if (result.synced > 0) {
-          showToast(`${result.synced} submission${result.synced > 1 ? 's' : ''} synced`, 'success')
-        }
-        if (result.requiresLogin) {
-          showToast('Re-login required to sync offline submissions', 'warning')
-        }
-      })
+      processQueue().then(notifySyncResult)
     }
 
     window.addEventListener('online', handleOnline)
@@ -63,24 +67,29 @@ export default function ASHAPanel() {
     userId,
     onUpdate: (updatedCase) => {
       // Update the submission history when a queued offline case is processed
-      setSubmissions((prev) =>
-        prev.map((c) => (c.id === updatedCase.id ? {
+      setSubmissions((prev) => {
+        const next = prev.map((c) => (c.id === updatedCase.id ? {
           ...c,
           triage_level: updatedCase.triage_level,
           reviewed_at: updatedCase.reviewed_at,
         } : c))
-      )
+        try { localStorage.setItem('vn_my_submissions', JSON.stringify(next)) } catch {}
+        return next
+      })
     },
   })
 
   async function fetchSubmissions() {
-    setLoading(true)
+    if (submissions.length === 0) setLoading(true)
     setError(null)
     try {
       const data = await getMySubmissions()
-      setSubmissions(data)
+      if (Array.isArray(data.cases)) {
+        setSubmissions(data.cases)
+        try { localStorage.setItem('vn_my_submissions', JSON.stringify(data.cases)) } catch {}
+      }
     } catch (e) {
-      setError(e.message)
+      if (submissions.length === 0) setError(e.message)
     } finally {
       setLoading(false)
     }
@@ -149,6 +158,8 @@ export default function ASHAPanel() {
             ))}
           </div>
         )}
+
+        {activeTab === 'protocol' && <ProtocolAssistant canCurate={false} />}
       </main>
     </div>
   )

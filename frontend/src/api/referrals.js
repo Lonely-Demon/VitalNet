@@ -42,3 +42,13 @@ export async function updateReferralStatus(referralId, status) {
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
+
+export async function updateFacilityCapacity(facilityId, capacityStatus) {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE}/api/facilities/${facilityId}/capacity`, {
+    method: 'PATCH', headers,
+    body: JSON.stringify({ capacity_status: capacityStatus }),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}

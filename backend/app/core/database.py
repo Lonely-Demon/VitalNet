@@ -12,11 +12,26 @@ Supabase database clients.
                     users) AND cross-tenant reads/writes on profiles, facilities,
                     and case_records behind admin-only endpoints.
 
-   SECURITY NOTE: because supabase_admin bypasses RLS, every route that uses it
-   (all of app/api/routes/admin_routes.py) MUST be guarded by
-   require_role('admin') — that role check is the ONLY access-control boundary
-   on those endpoints; there is no RLS backstop. Do not use supabase_admin in
-   any route that isn't admin-gated. tests/test_admin_authz.py enforces this.
+   SECURITY NOTE: because supabase_admin bypasses RLS, every route in a module
+   meant to be admin-only end to end (admin_routes.py, dsr_routes.py,
+   metrics_routes.py) MUST be guarded by require_role('admin') ONLY — that
+   role check is the sole access-control boundary on those endpoints; there is
+   no RLS backstop. tests/test_admin_authz.py enforces this for exactly those
+   modules (see ADMIN_ROUTE_MODULES there).
+
+   NARROW AGGREGATE EXCEPTION: a small number of non-admin-gated endpoints
+   also use supabase_admin, each for exactly one deliberate reason — a role's
+   own RLS-scoped token structurally cannot see the aggregate it legitimately
+   needs (e.g. a doctor's facility-scoped referral picker needs another
+   facility's open-case *count*; a supervisor's team dashboard needs a
+   cross-worker aggregate that case_records' row-level policy was never
+   extended to grant them). Each is documented in docs/DECISIONS.md (§20
+   referral load-balancing, §22 deterioration alert, §25 supervisor team
+   metrics) and follows the same rule: only an aggregate (a count, rate, or
+   distribution) may cross the RLS boundary this way — never an individual
+   case row, patient field, or free text. Do not add a new supabase_admin call
+   outside admin_routes.py/dsr_routes.py/metrics_routes.py without that same
+   justification recorded in DECISIONS.md.
 """
 import hmac
 from typing import Optional

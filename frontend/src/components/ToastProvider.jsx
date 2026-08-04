@@ -29,8 +29,11 @@ export default function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      {/* Fixed bottom-right toast container */}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+      {/* Fixed bottom-right toast container. role="status" + aria-live="polite"
+          so a screen reader announces submission feedback (success/queued-
+          offline/error) without needing focus to already be here — this is
+          the confirmation feedback for the app's core action. */}
+      <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
         {toasts.map(t => (
           <div
             key={t.id}

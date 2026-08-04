@@ -42,14 +42,14 @@ function parseCsv(text) {
   return rows
 }
 
-const CSV_ROLE_OPTIONS = ['asha_worker', 'doctor', 'admin']
+const CSV_ROLE_OPTIONS = ['asha_worker', 'doctor', 'admin', 'supervisor']
 
 function validateCsvRow(row, facilitiesByName) {
   const errors = []
   if (!row.full_name) errors.push('missing full_name')
   if (!row.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push('invalid email')
   if (!row.password || row.password.length < 12) errors.push('password must be 12+ chars')
-  if (!CSV_ROLE_OPTIONS.includes(row.role)) errors.push('role must be asha_worker/doctor/admin')
+  if (!CSV_ROLE_OPTIONS.includes(row.role)) errors.push('role must be asha_worker/doctor/admin/supervisor')
 
   let facility_id = row.facility_id || ''
   if (row.facility && !facility_id) {
@@ -57,23 +57,25 @@ function validateCsvRow(row, facilitiesByName) {
     if (match) facility_id = match
     else errors.push(`unknown facility "${row.facility}"`)
   }
-  if ((row.role === 'asha_worker' || row.role === 'doctor') && !facility_id) {
+  if ((row.role === 'asha_worker' || row.role === 'doctor' || row.role === 'supervisor') && !facility_id) {
     errors.push('facility is required for this role')
   }
   return { errors, facility_id }
 }
 
-const ROLE_OPTIONS = ['asha_worker', 'doctor', 'admin']
+const ROLE_OPTIONS = ['asha_worker', 'doctor', 'supervisor', 'admin']
 
 const ROLE_LABELS = {
   asha_worker: 'ASHA Worker',
   doctor:      'Doctor',
+  supervisor:  'Supervisor',
   admin:       'Admin',
 }
 
 const ROLE_COLORS = {
   asha_worker: 'bg-leaf text-forest',
   doctor:      'bg-sand text-forest',
+  supervisor:  'bg-urgent/10 text-urgent',
   admin:       'bg-surface3 text-text',
 }
 
@@ -341,8 +343,9 @@ export default function AdminUsers() {
               { label: 'ASHA ID',   key: 'asha_id',   type: 'text', required: false },
             ].map(f => (
               <div key={f.key}>
-                <label className="block text-xs text-text3 mb-1 font-mono">{f.label}{f.required && ' *'}</label>
+                <label htmlFor={`create-${f.key}`} className="block text-xs text-text3 mb-1 font-mono">{f.label}{f.required && ' *'}</label>
                 <input
+                  id={`create-${f.key}`}
                   type={f.type}
                   required={f.required}
                   value={createData[f.key]}
@@ -352,8 +355,9 @@ export default function AdminUsers() {
               </div>
             ))}
             <div>
-              <label className="block text-xs text-text3 mb-1 font-mono">Role *</label>
+              <label htmlFor="create-role" className="block text-xs text-text3 mb-1 font-mono">Role *</label>
               <select
+                id="create-role"
                 required value={createData.role}
                 onChange={e => setCreateData(d => ({ ...d, role: e.target.value }))}
                 className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
@@ -362,8 +366,9 @@ export default function AdminUsers() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-text3 mb-1 font-mono">Facility</label>
+              <label htmlFor="create-facility" className="block text-xs text-text3 mb-1 font-mono">Facility</label>
               <select
+                id="create-facility"
                 value={createData.facility_id}
                 onChange={e => setCreateData(d => ({ ...d, facility_id: e.target.value }))}
                 className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"

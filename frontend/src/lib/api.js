@@ -3,9 +3,12 @@
  *
  * The monolithic api.js has been decomposed into domain-specific modules:
  *   - @/api/auth.js       → authHeaders
- *   - @/api/cases.js      → getCases, reviewCase, getMySubmissions, overrideTriage, recordCaseOutcome
+ *   - @/api/cases.js      → getCases, reviewCase, getMySubmissions, overrideTriage, recordCaseOutcome, getPatientSummary, getCaseHistoryByPatientKey
  *   - @/api/admin.js      → adminList/Create/Update/Deactivate/Reactivate users + facilities + stats
- *   - @/api/analytics.js  → getAnalyticsSummary, getEmergencyRate
+ *   - @/api/analytics.js  → getAnalyticsSummary, getResponseTimes
+ *   - @/api/supervisor.js → getTeamMetrics
+ *   - @/api/outbreak.js   → getOutbreakSignals
+ *   - @/api/protocol.js   → askProtocolQuestion, listProtocolQuestions, curateProtocolAnswer
  *   - @/stores/syncStore.js → submitCase, processQueue (stateful offline queue manager)
  *
  * This barrel keeps existing consumers working without requiring immediate refactors.
@@ -14,7 +17,7 @@
 
 export { authHeaders } from '@/api/auth'
 export { submitCase, processQueue } from '@/stores/syncStore'
-export { getCases, reviewCase, getMySubmissions, overrideTriage, recordCaseOutcome } from '@/api/cases'
+export { getCases, reviewCase, getMySubmissions, overrideTriage, recordCaseOutcome, getPatientSummary, getCaseHistoryByPatientKey } from '@/api/cases'
 export {
   adminListUsers,
   adminCreateUser,
@@ -28,5 +31,8 @@ export {
   adminGetStats,
   adminGetAuditLog,
 } from '@/api/admin'
-export { getAnalyticsSummary, getEmergencyRate, getResponseTimes, getMlAgreement, exportCases } from '@/api/analytics'
-export { listActiveFacilities, createReferral, listReferrals, updateReferralStatus } from '@/api/referrals'
+export { getAnalyticsSummary, getResponseTimes, getMlAgreement, exportCases } from '@/api/analytics'
+export { listActiveFacilities, createReferral, listReferrals, updateReferralStatus, updateFacilityCapacity } from '@/api/referrals'
+export { getTeamMetrics } from '@/api/supervisor'
+export { getOutbreakSignals } from '@/api/outbreak'
+export { askProtocolQuestion, listProtocolQuestions, curateProtocolAnswer } from '@/api/protocol'

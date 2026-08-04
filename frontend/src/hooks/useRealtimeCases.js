@@ -1,5 +1,5 @@
 // frontend/src/hooks/useRealtimeCases.js
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 
 /**
@@ -12,8 +12,6 @@ import { supabase } from '../lib/supabase'
  * @param {string}   options.userId     - Filters to this user's cases (optional, for ASHA)
  */
 export function useRealtimeCases({ onInsert, onUpdate, facilityId, userId } = {}) {
-  const channelRef = useRef(null)
-
   useEffect(() => {
     // Build a unique channel name to avoid collisions across hook instances
     const channelName = `case_records_${facilityId ?? 'all'}_${userId ?? 'all'}_${Date.now()}`
@@ -48,8 +46,6 @@ export function useRealtimeCases({ onInsert, onUpdate, facilityId, userId } = {}
         }
       )
       .subscribe()
-
-    channelRef.current = channel
 
     return () => {
       supabase.removeChannel(channel)

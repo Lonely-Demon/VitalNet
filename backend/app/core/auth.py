@@ -28,8 +28,6 @@ values from the profiles table (same short-TTL cache as is_active, one
 combined query) into resolved_role / resolved_facility_id. require_role()
 and every route's authorization checks must read those, not user_metadata.
 """
-import base64
-import json
 import time
 from typing import Dict, Optional, Tuple
 
@@ -48,13 +46,20 @@ _ProfileCacheEntry = Tuple[float, bool, str, Optional[str]]
 _profile_cache: Dict[str, _ProfileCacheEntry] = {}
 
 
-def _decode_payload_unverified(token: str) -> dict:
-    """Base64-decode the JWT payload segment WITHOUT verifying the signature.
-    Only ever used after the signature has already been validated by another
-    path (network get_user), to read custom claims get_user() omits."""
-    payload_b64 = token.split(".")[1]
-    payload_b64 += "=" * (-len(payload_b64) % 4)
-    return json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+def _decode_local(token: str) -> Optional[dict]:
+    """Locally verify signature/exp/aud (HS256, supabase_jwt_secret). Returns
+    None if verification fails — a bad token, or an asymmetric-key project
+    this shared secret cannot verify."""
+    try:
+        return jwt.decode(
+            token,
+            settings.supabase_jwt_secret,
+            algorithms=[ALGORITHM],
+            audience=AUDIENCE,
+            options={"verify_aud": True, "verify_exp": True},
+        )
+    except JWTError:
+        return None
 
 
 def _verify_token(token: str) -> dict:
@@ -63,23 +68,18 @@ def _verify_token(token: str) -> dict:
     Tries local HS256 verification first (fast), falls back to network.
     """
     if settings.jwt_local_verification:
-        try:
-            return jwt.decode(
-                token,
-                settings.supabase_jwt_secret,
-                algorithms=[ALGORITHM],
-                audience=AUDIENCE,
-                options={"verify_aud": True, "verify_exp": True},
-            )
-        except JWTError:
-            # Could be an asymmetric-key project, or a genuinely bad token.
-            # Fall through to the network check, which is authoritative for
-            # any signing algorithm and also catches revocation immediately.
-            pass
+        payload = _decode_local(token)
+        if payload is not None:
+            return payload
+        # Could be an asymmetric-key project, or a genuinely bad token.
+        # Fall through to the network check, which is authoritative for any
+        # signing algorithm and also catches revocation immediately.
 
     # Network fallback: get_user() raises if the token is invalid/expired/revoked.
     supabase_anon.auth.get_user(token)
-    return _decode_payload_unverified(token)
+    # Signature already validated above (network call) — read claims get_user()
+    # omits without re-verifying.
+    return jwt.get_unverified_claims(token)
 
 
 def _resolve_profile(user_id: str, token: str) -> Tuple[bool, str, Optional[str]]:
@@ -190,14 +190,5 @@ def verify_sub_for_rate_limit(token: str) -> str | None:
     This prevents an attacker from forging a token with a victim's sub to
     consume the victim's rate-limit budget.
     """
-    try:
-        payload = jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=[ALGORITHM],
-            audience=AUDIENCE,
-            options={"verify_aud": True, "verify_exp": True},
-        )
-        return payload.get("sub")
-    except JWTError:
-        return None
+    payload = _decode_local(token)
+    return payload.get("sub") if payload else None

@@ -13,13 +13,6 @@ export async function getAnalyticsSummary() {
   return res.json()
 }
 
-export async function getEmergencyRate() {
-  const headers = await authHeaders()
-  const res = await getWithRetry(`${BASE}/api/analytics/emergency-rate`, headers)
-  if (!res.ok) throw new Error(await res.text())
-  return res.json()
-}
-
 export async function getResponseTimes() {
   const headers = await authHeaders()
   const res = await getWithRetry(`${BASE}/api/analytics/response-times`, headers)

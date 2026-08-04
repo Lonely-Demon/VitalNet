@@ -28,10 +28,70 @@ overridden. An LLM (Groq, with Gemini fallback) generates a structured
 clinical briefing for the case. Doctors see a real-time, priority-sorted
 dashboard of incoming cases, see low-confidence/review-requested flags, and
 mark cases reviewed (soft-deletable, audit-logged). Admins manage users and
-facilities. Three roles (asha_worker, doctor, admin), enforced by both
+facilities. A fourth role, supervisor, gets a facility-scoped, aggregate-only,
+non-PHI view of per-ASHA-worker performance for supportive supervision
+(`docs/DECISIONS.md` §25) — modeled on NHM's real ASHA Facilitator role, a
+parallel workforce-quality line distinct from `doctor`'s clinical authority.
+Four roles total (asha_worker, doctor, supervisor, admin), enforced by both
 backend checks (role/facility_id resolved fresh from the `profiles` table
 every request — never trusted from JWT claims) and Supabase Row Level
 Security.
+
+### System architecture
+
+```mermaid
+graph TB
+    subgraph Client["Client (PWA — React 19 + Vite, offline-capable)"]
+        ASHA["ASHA worker browser<br/>IntakeForm, offline queue,<br/>pure-JS triage"]
+        Doctor["Doctor browser<br/>Dashboard, Realtime feed,<br/>Referrals"]
+        Admin["Admin browser<br/>Users/Facilities/Analytics"]
+        Supervisor["Supervisor browser<br/>Team Metrics (aggregate-only)"]
+    end
+
+    subgraph Backend["FastAPI backend (Railway)"]
+        API["app/api/routes/*<br/>rate-limited, role-gated"]
+        Auth["app/core/auth.py<br/>hybrid JWT verify"]
+        ML["app/ml/classifier.py<br/>safety net → model → NEWS2 floor"]
+        LLM_SVC["app/services/llm.py<br/>4-tier fallback"]
+        Push_SVC["app/services/push.py"]
+    end
+
+    subgraph Supabase["Supabase"]
+        PG[("PostgreSQL<br/>RLS-enforced tables")]
+        SupaAuth["Auth<br/>JWT issuance"]
+        Realtime["Realtime<br/>postgres_changes"]
+    end
+
+    subgraph External["External services"]
+        Groq["Groq API<br/>Llama 3.3 70B / 3.1 8B"]
+        Gemini["Gemini API<br/>2.5 Flash / Flash-Lite"]
+        WebPush["Browser push services<br/>(FCM / Mozilla / etc.)"]
+    end
+
+    ASHA -->|"POST /api/submit<br/>(online)"| API
+    ASHA -.->|"offline: pure-JS<br/>triage + IndexedDB queue"| ASHA
+    Doctor -->|"GET /api/cases, PATCH review"| API
+    Admin -->|"/api/admin/*"| API
+
+    API --> Auth
+    Auth -->|"local verify (hot path)"| Auth
+    Auth -.->|"fallback: asymmetric-key<br/>projects only"| SupaAuth
+    API --> ML
+    API --> LLM_SVC
+    API --> Push_SVC
+
+    LLM_SVC --> Groq
+    LLM_SVC -.->|"fallback"| Gemini
+    Push_SVC --> WebPush
+
+    API <-->|"per-request client,<br/>RLS-scoped"| PG
+    PG -->|"INSERT/UPDATE"| Realtime
+    Realtime -->|"live case feed"| Doctor
+    Realtime -->|"live referral updates"| Doctor
+    SupaAuth -.->|"issues JWTs"| ASHA
+    SupaAuth -.->|"issues JWTs"| Doctor
+    SupaAuth -.->|"issues JWTs"| Admin
+```
 
 ## 2. Repository layout
 
@@ -43,25 +103,44 @@ VitalNet/
 ├── frontend/           React 19 + Vite PWA — see §4
 ├── docs/
 │   ├── DISASTER_RECOVERY.md   Ops runbook: RTO/RPO targets, restore procedures
-│   └── security-audits/       Historical red-team audit trail (dated folders).
-│                       Read-only historical record — do not treat findings as
-│                       current state without cross-checking the code.
+│   ├── INCIDENT_RESPONSE.md   Security incident runbook: severity classification,
+│   │                     detection → containment → eradication → post-incident
+│   │                     review, DPDP breach-notification hook (distinct from
+│   │                     DISASTER_RECOVERY.md — adversary-involved vs. not)
+│   ├── CLINICAL_GOVERNANCE.md Regulatory posture (CDSCO SaMD), model lifecycle
+│   │                     governance, five-layer guardrail architecture
+│   ├── COMPLIANCE_DPDP.md     India DPDP Act 2023 mapping — data-principal
+│   │                     rights, fiduciary obligations, honest gap list
+│   ├── ACCESSIBILITY.md       WCAG 2.1 AA audit — label association, live
+│   │                     regions, color-contrast fixes, honest known gaps
+│   ├── SLO.md                 Service level objectives, SLIs, GET /api/metrics
+│   │                     (Prometheus), example PromQL/scrape config
+│   ├── security-audits/       Historical red-team audit trail (dated folders).
+│   │                     Read-only historical record — do not treat findings as
+│   │                     current state without cross-checking the code.
+│   └── {ARCHITECTURE_RESTRUCTURE,REBUILD_INSTRUCTIONS,IMPROVEMENTS}.md
+│                         Historical execution logs from past hardening phases — all
+│                         marked [!NOTE] superseded-by-this-file at the top. Useful
+│                         for "why is it built this way" archaeology, not "what does
+│                         it do today." (Relocated here from repo root to declutter it —
+│                         still linked from AGENTS.md/FEATURES_ROADMAP.md where cited.)
 ├── colab/              Legacy Google Colab training script — historical reference only,
 │                       NOT wired into the app, trains on only 14 raw features (predates
 │                       ClinicalFeatureEngineer). Do not use its output as a production model.
-├── Context/            Historical phase-by-phase planning documents from earlier
-│                       development sprints. Read for history/rationale, not current state.
+├── Context/            Only test_credentials.md remains (linked from AGENTS.md/
+│                       README.md for E2E test account setup). The rest of this
+│                       directory's historical phase-by-phase planning documents was
+│                       removed as fully superseded by this file / FEATURES_ROADMAP.md —
+│                       recoverable from git history if ever needed.
 ├── .github/
-│   ├── workflows/ci.yml  Lint (PR) + pytest/build (push) on main and dev
+│   ├── workflows/ci.yml  Lint (PR) + pytest/build (push) on main and dev, plus an
+│   │                     SBOM job (push-only, CycloneDX for backend+frontend deps,
+│   │                     uploaded as a build artifact — docs/SECURITY.md)
 │   └── dependabot.yml    Daily pip/npm/actions update PRs, targeting dev
 ├── README.md           Setup, features, deployment — start here
 ├── AGENTS.md           Conventions for coding agents working in this repo
 ├── CODEBASE_MAP.md     This file
-├── FEATURES_ROADMAP.md Proposed feature backlog with implementation-ready specs
-└── {ARCHITECTURE_RESTRUCTURE,REBUILD_INSTRUCTIONS,IMPROVEMENTS}.md
-                        Historical execution logs from past hardening phases — all marked
-                        [!NOTE] superseded-by-this-file at the top. Useful for "why is it
-                        built this way" archaeology, not for "what does it do today."
+└── FEATURES_ROADMAP.md Proposed feature backlog with implementation-ready specs
 ```
 
 ## 3. Backend (`backend/`)
@@ -110,48 +189,154 @@ backend/
 │   │   │                            one user's data to another), supabase_admin
 │   │   │                            (service_role, auth.admin.* AND admin-only
 │   │   │                            cross-tenant ops — require_role('admin') is the
-│   │   │                            only access boundary, no RLS backstop).
+│   │   │                            only access boundary for admin_routes.py/
+│   │   │                            dsr_routes.py/metrics_routes.py, no RLS
+│   │   │                            backstop; a small, DECISIONS.md-documented set
+│   │   │                            of non-admin routes also use it for exactly one
+│   │   │                            aggregate query each — §20, §22, §25, §26).
 │   │   │                            extract_bearer_token() validates header format
 │   │   │                            before any signature check. validate_schema_
 │   │   │                            compatibility() is the startup gate.
+│   │   ├── scoping.py                resolve_facility_scope(role, own_facility_id,
+│   │   │                            requested_facility_id) — shared by
+│   │   │                            supervisor_routes.py and outbreak_routes.py:
+│   │   │                            'admin' is global (system-wide, or narrows via
+│   │   │                            a query param), every other role is pinned to
+│   │   │                            their own facility_id and cannot widen it.
 │   │   ├── audit.py                  PHI access audit logging (log_phi_access,
-│   │   │                            AuditEventType, get_client_ip) — dedicated
-│   │   │                            'vitalnet.audit' logger. The phi_audit_log
-│   │   │                            Postgres table (migrations) is a prepared
-│   │   │                            destination for a future log-shipper; this
-│   │   │                            module does not write to it directly.
+│   │   │                            AuditEventType, get_client_ip) — writes to
+│   │   │                            BOTH the dedicated 'vitalnet.audit' logger
+│   │   │                            AND the phi_audit_log Postgres table
+│   │   │                            (best-effort, non-blocking insert via
+│   │   │                            supabase_admin) — viewable via GET
+│   │   │                            /api/admin/audit-log / AdminAuditLog.jsx.
 │   │   ├── correlation.py            Single contextvar for X-Request-ID, shared by
 │   │   │                            the logging formatter and route handlers.
-│   │   └── logging.py                JSON structured logging setup (setup_logging()),
-│   │                                 includes correlation_id via CorrelationIdFilter.
+│   │   ├── logging.py                JSON structured logging setup (setup_logging()),
+│   │   │                            includes correlation_id via CorrelationIdFilter.
+│   │   └── metrics.py                Prometheus counters/histogram (docs/SLO.md):
+│   │                                 request count/latency by method+route+status,
+│   │                                 triage classifications by level. record_request()
+│   │                                 called from main.py's MetricsMiddleware, keyed on
+│   │                                 the matched ROUTE TEMPLATE (never the raw path —
+│   │                                 unbounded-cardinality footgun).
 │   ├── api/routes/
 │   │   ├── cases.py                  /api/submit, /api/cases, /api/cases/{id}/review,
-│   │   │                             /api/cases/mine, /api/cases/{id}. Owns the shared
-│   │   │                             slowapi `limiter` instance (imported by the other
-│   │   │                             route modules) keyed on the verified JWT sub.
-│   │   │                             Cursor pagination has an id tie-breaker for
-│   │   │                             stability across equal timestamps. Row-level
-│   │   │                             authorization via _authorize_case_row_access()
-│   │   │                             (admin global, doctor facility-scoped, asha_worker
-│   │   │                             own-submissions-only — also used by security.py).
-│   │   │                             Every create/read/update is PHI-audit-logged.
+│   │   │                             /api/cases/mine, /api/cases/by-patient-key/{key},
+│   │   │                             /api/cases/{id}. Owns the shared slowapi `limiter`
+│   │   │                             instance (imported by the other route modules)
+│   │   │                             keyed on the verified JWT sub. Cursor pagination
+│   │   │                             has an id tie-breaker for stability across equal
+│   │   │                             timestamps. Row-level authorization via
+│   │   │                             _authorize_case_row_access() (admin global, doctor
+│   │   │                             facility-scoped, asha_worker own-submissions-only
+│   │   │                             — also used by security.py). The by-patient-key
+│   │   │                             lookup reuses the same RLS-scoped visibility per
+│   │   │                             role (docs/DECISIONS.md §21). submit_case() also
+│   │   │                             runs _check_deterioration_pattern() — one narrow
+│   │   │                             supabase_admin count-only query (same exception
+│   │   │                             class as §20) forcing needs_review when a
+│   │   │                             patient_key has 2+ URGENT/EMERGENCY visits in the
+│   │   │                             trailing 7 days (docs/DECISIONS.md §22). Every
+│   │   │                             create/read/update is PHI-audit-logged.
 │   │   ├── admin_routes.py           /api/admin/* — user CRUD (password complexity
 │   │   │                             policy, orphan rollback on profile-provisioning
 │   │   │                             failure, profile/auth-metadata rollback on
 │   │   │                             partial failure), facility CRUD (optimistic-
-│   │   │                             concurrency toggle), system stats. All
+│   │   │                             concurrency toggle), system stats, audit-log
+│   │   │                             view, and POST /api/admin/users/bulk (CSV
+│   │   │                             onboarding — reuses _provision_user() per row,
+│   │   │                             one bad row doesn't fail the batch). All
 │   │   │                             admin-only (require_role('admin')), all
 │   │   │                             rate-limited and PHI-audit-logged.
 │   │   ├── analytics_routes.py       /api/analytics/* — aggregate stats, EMERGENCY
-│   │   │                             rate trend. Facility-scoped for 'doctor',
-│   │   │                             global for 'admin' (GLOBAL_SCOPE_ROLE constant).
-│   │   │                             Queries run concurrently (asyncio.gather over
-│   │   │                             asyncio.to_thread) with a per-query timeout and
-│   │   │                             graceful degradation (_degraded flag) instead of
-│   │   │                             failing the whole dashboard on one slow query.
-│   │   └── security.py               DELETE /api/security/cases/{id} — soft-delete
-│   │                                  (sets deleted_at, requires X-Device-Id), reuses
-│   │                                  cases.py's row-level authz helper. PHI-audit-logged.
+│   │   │                             rate trend, response-time SLA (median/p90/
+│   │   │                             overdue per tier), ML/doctor agreement rate,
+│   │   │                             and a case CSV export (streamed, PHI-audit-
+│   │   │                             logged as bulk egress). Facility-scoped for
+│   │   │                             'doctor', global for 'admin' (GLOBAL_SCOPE_ROLE
+│   │   │                             constant). Queries run concurrently
+│   │   │                             (asyncio.gather over asyncio.to_thread) with a
+│   │   │                             per-query timeout and graceful degradation
+│   │   │                             (_degraded flag) instead of failing the whole
+│   │   │                             dashboard on one slow query.
+│   │   ├── security.py               DELETE /api/security/cases/{id} — soft-delete
+│   │   │                             (sets deleted_at, requires X-Device-Id), reuses
+│   │   │                             cases.py's row-level authz helper. PHI-audit-logged.
+│   │   ├── push_routes.py            Web Push subscribe/unsubscribe, GET
+│   │   │                             /api/facilities (doctor-accessible target
+│   │   │                             picker), and the unreviewed-EMERGENCY re-alert
+│   │   │                             endpoint (POST /api/push/check-emergency-
+│   │   │                             escalations — idempotent, meant to be driven by
+│   │   │                             an external scheduler/cron). Send logic lives
+│   │   │                             in app/services/push.py to avoid a circular
+│   │   │                             import with cases.py.
+│   │   ├── referral_routes.py        Inter-facility referral workflow — POST
+│   │   │                             /api/cases/{id}/refer, GET /api/referrals,
+│   │   │                             PATCH /api/referrals/{id}/status (forward-only
+│   │   │                             state machine, receiving-facility-only). Also
+│   │   │                             PATCH /api/facilities/{id}/capacity — self-
+│   │   │                             reported available/limited/full, own-facility-
+│   │   │                             or-admin, via the RLS-scoped client (needed
+│   │   │                             facilities' first-ever UPDATE policy — see
+│   │   │                             docs/DECISIONS.md §19). GET /api/facilities
+│   │   │                             attaches open_case_count per facility (one
+│   │   │                             deliberate, narrow supabase_admin aggregate-
+│   │   │                             only query — docs/DECISIONS.md §20) and sorts
+│   │   │                             least-loaded first as a referral suggestion.
+│   │   ├── dsr_routes.py             DPDP data-subject-request lifecycle
+│   │   │                             (docs/COMPLIANCE_DPDP.md), admin-only, scoped
+│   │   │                             to a single case_id: GET .../export (right to
+│   │   │                             access), POST .../erase (right to erasure —
+│   │   │                             redacts identifying fields, never touches the
+│   │   │                             immutable case_outcomes table), POST
+│   │   │                             .../purge-expired (retention sweep, external-
+│   │   │                             scheduler-driven like the re-alert endpoint).
+│   │   ├── voice_routes.py           POST /api/voice/transcribe — server-side voice
+│   │   │                             transcription (app/services/voice.py), Groq
+│   │   │                             Whisper tried first then Sarvam AI as fallback
+│   │   │                             (docs/DECISIONS.md §24). Online-only, no audio
+│   │   │                             persisted; the browser-STT path is the fallback,
+│   │   │                             not this (docs/DECISIONS.md §15).
+│   │   ├── metrics_routes.py         GET /api/metrics — Prometheus text format
+│   │   │                             (app/core/metrics.py), admin-only. Backs the
+│   │   │                             SLIs in docs/SLO.md.
+│   │   ├── supervisor_routes.py      GET /api/supervisor/team-metrics —
+│   │   │                             per-ASHA-worker aggregate metrics (submission
+│   │   │                             count, needs_review/contraindication/
+│   │   │                             deterioration rates, tier distribution) for
+│   │   │                             require_role('supervisor', 'admin'). One narrow
+│   │   │                             supabase_admin aggregate query, same exception
+│   │   │                             class as §20/§22 — no case row or patient field
+│   │   │                             crosses the RLS boundary. supervisor is scoped
+│   │   │                             to their own facility_id only; admin defaults
+│   │   │                             system-wide or narrows via ?facility_id
+│   │   │                             (docs/DECISIONS.md §25).
+│   │   ├── outbreak_routes.py        GET /api/outbreak/signals — EARS C1
+│   │   │                             aberration detection (7-day trailing baseline
+│   │   │                             mean + 3*stddev, floor of 3 cases) over
+│   │   │                             (facility, symptom, day) aggregate counts, for
+│   │   │                             require_role('doctor', 'supervisor', 'admin').
+│   │   │                             Informational only, not a validated
+│   │   │                             surveillance system (docs/DECISIONS.md §26).
+│   │   │                             Same supabase_admin aggregate-only exception
+│   │   │                             as supervisor_routes.py; facility scoping
+│   │   │                             shared via app/core/scoping.py.
+│   │   └── protocol_routes.py        POST /api/protocol/ask, GET .../questions,
+│   │                                 PATCH .../questions/{id}/curate — grounded
+│   │                                 guideline lookup assistant informed by
+│   │                                 ASHABot's published design (docs/DECISIONS.md
+│   │                                 §27). Carries NO PHI (unlike case_records), so
+│   │                                 this uses REAL Postgres RLS via
+│   │                                 get_supabase_for_user, not the supabase_admin
+│   │                                 exception — SELECT is facility-wide for every
+│   │                                 role by design (shared FAQ), UPDATE
+│   │                                 (curation) is doctor/supervisor/admin only.
+│   │                                 The LLM call (generate_protocol_answer in
+│   │                                 app/services/llm.py) is a fully separate call
+│   │                                 path from generate_briefing — never shares
+│   │                                 the triage system prompt or takes patient
+│   │                                 vitals as input.
 │   ├── models/schemas.py            Pydantic request/response models. IntakeForm is
 │   │                                 the case-submission contract — every field is
 │   │                                 bounded (min/max length, numeric ranges, enums),
@@ -160,7 +345,10 @@ backend/
 │   │                                 must be true (server-enforced, not just UI).
 │   │                                 human_review_requested/reason let an ASHA worker
 │   │                                 flag a case for review independent of ML tier.
-│   │                                 If you add a field here, add a matching bound to
+│   │                                 patient_key (optional, XXXX-XXXX, PATIENT_KEY_RE)
+│   │                                 is the patient continuity key — see
+│   │                                 docs/DECISIONS.md §21. If you add a field here,
+│   │                                 add a matching bound to
 │   │                                 frontend/src/utils/validation.js.
 │   ├── ml/
 │   │   ├── README.md                 ML architecture + clinical grounding — READ
@@ -170,28 +358,87 @@ backend/
 │   │   ├── classifier.py             Public ML API: load_classifier(), predict_triage()
 │   │   │                             / run_triage(), get_classifier_info(). Three
 │   │   │                             layers per prediction: (1) _safety_net_check →
-│   │   │                             EMERGENCY for extreme vitals/critical symptoms,
+│   │   │                             EMERGENCY for extreme vitals/critical symptoms
+│   │   │                             (incl. severe hypertension in pregnancy when
+│   │   │                             is_pregnant is set — docs/DECISIONS.md §30),
 │   │   │                             (2) the trained model, (3) _news2_concerning_vital
-│   │   │                             floor → never ROUTINE on a concerning vital.
-│   │   │                             Also emits a low_confidence abstention flag.
+│   │   │                             floor → never ROUTINE on a concerning vital. Also
+│   │   │                             attaches contraindication_flags (below) and emits
+│   │   │                             a low_confidence abstention flag.
+│   │   ├── contraindications.py      check_contraindications() — free-text keyword-
+│   │   │                             matched flags (NSAID+renal, ACE-inhibitor+renal,
+│   │   │                             metformin+vomiting, anticoagulant+bleeding, beta-
+│   │   │                             blocker+bradycardia, insulin+altered-consciousness).
+│   │   │                             Advisory, not a drug-interaction database — see
+│   │   │                             docs/DECISIONS.md §17. Never changes triage tier;
+│   │   │                             cases.py folds any flag into needs_review. Mirrored
+│   │   │                             in JS clinicalRules.js::checkContraindications.
 │   │   ├── clinical_features.py     ClinicalFeatureEngineer — expands ~14 raw intake
-│   │   │                             fields into 45 engineered features. MIRRORED in
+│   │   │                             fields into 43 engineered features. MIRRORED in
 │   │   │                             JS (frontend triageClassifier.js). The safety
-│   │   │                             net + floor are mirrored in JS clinicalRules.js.
-│   │   │                             Change one side → change the other → retrain →
-│   │   │                             `npm run test:parity` (CI-enforced).
+│   │   │                             net + floor + contraindication flags are mirrored
+│   │   │                             in JS clinicalRules.js. Change one side → change
+│   │   │                             the other → retrain → `npm run test:parity`
+│   │   │                             (CI-enforced).
 │   │   └── models/triage_classifier.pkl
 │   │                                 The trained model + SHAP explainer bundle.
 │   │                                 Regenerate via scripts/train_classifier.py — never
 │   │                                 hand-edit.
-│   ├── services/llm.py              4-tier LLM fallback (Groq 70B → Groq 8B → Gemini
-│   │                                 Flash → Gemini Flash-Lite) for clinical briefings.
-│   │                                 triage_level and disclaimer are hard-locked onto
-│   │                                 every LLM output regardless of tier
-│   │                                 (_enforce_schema()) — no LLM call can change the
-│   │                                 triage decision. Free-text patient fields are
-│   │                                 sanitised before entering the prompt
-│   │                                 (_sanitize_field()) to resist prompt injection.
+│   ├── services/
+│   │   ├── llm.py                    4-tier LLM fallback (Groq 70B → Groq 8B → Gemini
+│   │   │                             Flash → Gemini Flash-Lite) for clinical briefings.
+│   │   │                             triage_level and disclaimer are hard-locked onto
+│   │   │                             every LLM output regardless of tier
+│   │   │                             (_enforce_schema()) — no LLM call can change the
+│   │   │                             triage decision. Free-text patient fields are
+│   │   │                             sanitised before entering the prompt
+│   │   │                             (_sanitize_field()) to resist prompt injection.
+│   │   │                             Also owns generate_patient_summary() — a separate,
+│   │   │                             on-demand, single-tier call that only restates the
+│   │   │                             already-fixed triage/briefing in plain language for
+│   │   │                             the patient (docs/DECISIONS.md §18), never a fresh
+│   │   │                             clinical read; falls back to a canned per-tier
+│   │   │                             sentence on any failure. Also owns
+│   │   │                             generate_protocol_answer() — a fully separate
+│   │   │                             call path for protocol_routes.py (docs/DECISIONS.md
+│   │   │                             §27): its own Groq→Gemini tiered fallback, its own
+│   │   │                             system prompt built from protocol_knowledge.md
+│   │   │                             (context-stuffed reference material, no vector DB),
+│   │   │                             shares NO code with generate_briefing by design —
+│   │   │                             never takes patient vitals as input. Returns
+│   │   │                             {answer, grounded, generated}; grounded=false means
+│   │   │                             the question needs human curation.
+│   │   ├── protocol_knowledge.md     Curated reference doc stuffed into
+│   │   │                             generate_protocol_answer()'s system prompt: ANC
+│   │   │                             visit schedule, UIP immunisation schedule, IMNCI
+│   │   │                             newborn/pregnancy danger signs, referral criteria.
+│   │   │                             The ONLY source of truth for the protocol
+│   │   │                             assistant — it refuses/escalates rather than using
+│   │   │                             outside model knowledge.
+│   │   ├── push.py                   Web Push send logic (push_emergency_alert,
+│   │   │                             _send_one) — separate module from push_routes.py
+│   │   │                             specifically to avoid a circular import with
+│   │   │                             cases.py. No-ops silently if VAPID keys aren't
+│   │   │                             configured. Deletes a subscription on a 410-Gone
+│   │   │                             send response (stale subscription cleanup).
+│   │   ├── sms.py                    SMS fallback SCAFFOLDING ONLY (FEATURES_ROADMAP
+│   │   │                             §3.1) — SmsGateway protocol, NullSmsGateway
+│   │   │                             (logs instead of sending), parse_inbound_sms()
+│   │   │                             strict-format parser. No live webhook endpoint —
+│   │   │                             see docs/DECISIONS.md §11.
+│   │   └── voice.py                  transcribe() behind voice_routes.py — two
+│   │                                 independent providers, Groq Whisper
+│   │                                 (whisper-large-v3-turbo) tried first for every
+│   │                                 language, Sarvam AI (saaras:v3) as the fallback
+│   │                                 only if Groq is unconfigured or fails (Sarvam's
+│   │                                 free tier is a fixed signup credit — conserved
+│   │                                 rather than spent on requests Groq already
+│   │                                 handles; docs/DECISIONS.md §24). Either
+│   │                                 GROQ_API_KEY or SARVAM_API_KEY alone is enough
+│   │                                 for every supported language. i18n language codes
+│   │                                 map directly onto Whisper's ISO-639-1 codes /
+│   │                                 Sarvam's BCP-47 codes. Audio is transcribed and
+│   │                                 discarded, never persisted (docs/DECISIONS.md §15).
 │   └── __init__.py files (package markers, no logic)
 ├── scripts/
 │   ├── train_classifier.py          THE training entrypoint (single unified model —
@@ -200,9 +447,37 @@ backend/
 │   │                                 features_config.json, and the golden-vector
 │   │                                 fixture; asserts pkl==onnx==tree-JSON parity;
 │   │                                 reports 5-fold CV + calibration (ECE).
-│   └── tree_export.py                Converts the (in-memory) ONNX tree ensemble to
-│                                     the compact triage_trees.json + a Python
-│                                     reference evaluator used for the parity assert.
+│   ├── tree_export.py                Converts the (in-memory) ONNX tree ensemble to
+│   │                                 the compact triage_trees.json + a Python
+│   │                                 reference evaluator used for the parity assert.
+│   ├── export_golden_vectors.py      Generates tests/fixtures/golden_feature_vectors.json
+│   │                                 (240 synthetic patients, fixed seed) — the ground
+│   │                                 truth for test_feature_parity.py AND
+│   │                                 featureParity.test.mjs. Freezes datetime.now() to a
+│   │                                 fixed reference (see docs/DECISIONS.md §12) so the
+│   │                                 two time-dependent engineered features don't make
+│   │                                 the fixture flaky.
+│   ├── retrain_from_outcomes.py      Retraining pipeline reading real case_outcomes +
+│   │                                 overridden_triage labels (FEATURES_ROADMAP §1.3),
+│   │                                 blended with a shrinking proportion of synthetic
+│   │                                 data. Reports an agreement-rate delta vs. the
+│   │                                 production model. NEVER touches the production
+│   │                                 .pkl or auto-deploys — saves a candidate file only;
+│   │                                 promotion is a manual, human-gated step.
+│   ├── fairness_audit.py             Subgroup (age band × sex) accuracy/EMERGENCY-recall
+│   │                                 report on a fresh synthetic eval set, run through
+│   │                                 the FULL pipeline (safety net + model + NEWS2
+│   │                                 floor). Operator-run, not scheduled/CI — see
+│   │                                 app/ml/README.md.
+│   ├── drift_monitor.py              Population Stability Index per engineered feature,
+│   │                                 live case_records vs. the synthetic training
+│   │                                 distribution. Needs a real Supabase project.
+│   │                                 Operator-run, not scheduled/CI.
+│   └── load_test.py                  asyncio+httpx load generator (no new dependency —
+│                                     httpx is already required). Refuses to target
+│                                     anything but localhost without
+│                                     --confirm-non-local — see docs/INCIDENT_RESPONSE.md.
+│                                     Operator-run, not CI.
 ├── prompts/clinical_system_prompt.txt
 │                                     System prompt for the LLM briefing generator.
 ├── tests/
@@ -212,9 +487,66 @@ backend/
 │   ├── test_classifier_safety.py     Property tests for the safety guarantees (extreme
 │   │                                 vitals → EMERGENCY; concerning vital never ROUTINE;
 │   │                                 low_confidence present). Run in CI.
-│   ├── test_admin_authz.py           Asserts every /api/admin route is require_role
-│   │                                 ('admin')-guarded (the only boundary on the RLS-
-│   │                                 bypassing service-role client). Run in CI.
+│   ├── test_contraindications.py     Unit tests for check_contraindications() — one
+│   │                                 positive/negative case per rule, plus predict_
+│   │                                 triage() integration (flags present on both the
+│   │                                 safety-net and model-decision exit paths).
+│   ├── test_patient_summary.py       Unit tests for generate_patient_summary() — no-
+│   │                                 client/call-failure/empty-response fallback paths,
+│   │                                 and that a successful call passes the target
+│   │                                 language through to the prompt.
+│   ├── test_patient_key.py           Schema-level tests for IntakeForm.patient_key —
+│   │                                 format acceptance/rejection, uppercase
+│   │                                 normalization, and that the excluded-ambiguous-
+│   │                                 char alphabet matches the frontend generator.
+│   ├── test_deterioration_alert.py   Unit tests for _check_deterioration_pattern() —
+│   │                                 no-key skip, count thresholds (0/1/2 prior
+│   │                                 qualifying visits combined with today's tier),
+│   │                                 and the supabase_admin query filters, mocked.
+│   ├── test_admin_authz.py           Asserts every /api/admin route — across
+│   │                                 admin_routes.py AND dsr_routes.py (see
+│   │                                 ADMIN_ROUTE_MODULES) — is require_role('admin')-
+│   │                                 guarded (the only boundary on the RLS-bypassing
+│   │                                 service-role client). Run in CI.
+│   ├── test_feature_parity.py        Python half of the online/offline ML parity
+│   │                                 guarantee — replays golden_feature_vectors.json
+│   │                                 through ClinicalFeatureEngineer. JS half is
+│   │                                 frontend/tests/featureParity.test.mjs. Both freeze
+│   │                                 the clock (docs/DECISIONS.md §12). Run in CI.
+│   ├── test_bulk_user_import.py      Row-isolation and orphaned-auth-user-rollback
+│   │                                 tests for admin_routes.py's _provision_user() —
+│   │                                 one bad CSV row must not fail the whole batch.
+│   ├── test_sms_parser.py            Unit tests for the SMS scaffolding's fixed-format
+│   │                                 parser (app/services/sms.py) — pure logic, no
+│   │                                 DB/network mocking needed.
+│   ├── test_dsr_routes.py            Unit tests for dsr_routes.py's plain helper
+│   │                                 functions — redaction field coverage, deleted_at
+│   │                                 idempotency, and that case_outcomes is never
+│   │                                 written (immutable-by-design invariant).
+│   ├── test_voice_transcription.py   Unit tests for app/services/voice.py — not-
+│   │                                 configured error, language-code pass-through/
+│   │                                 fallback-to-None, Groq-tried-first ordering,
+│   │                                 Sarvam-as-fallback on Groq failure, Sarvam
+│   │                                 never attempted when unconfigured, both-fail
+│   │                                 wrapping. Uses asyncio.run() directly (no
+│   │                                 pytest-asyncio dep).
+│   ├── test_scoping.py                Tests resolve_facility_scope() (app/core/
+│   │                                 scoping.py) — the shared admin-global/role-
+│   │                                 owns-facility rule used by supervisor_routes.py
+│   │                                 and outbreak_routes.py.
+│   ├── test_supervisor_routes.py     Tests _aggregate_team_metrics() — per-worker
+│   │                                 grouping, rate computation, sort order, rows
+│   │                                 with no submitted_by skipped.
+│   ├── test_outbreak_routes.py       Tests _compute_ears_signals() — floor
+│   │                                 enforcement, stable-baseline non-flagging, sharp-
+│   │                                 spike flagging, noisy-baseline false-positive
+│   │                                 avoidance, zero-baseline-with-floor-met flagging,
+│   │                                 per-facility/per-symptom independence.
+│   ├── test_protocol_answer.py       Tests generate_protocol_answer() — grounded vs.
+│   │                                 ungrounded contract, Groq->Gemini fallback, the
+│   │                                 canned fallback when no LLM tier is configured,
+│   │                                 question-text sanitization before it reaches the
+│   │                                 prompt.
 │   └── test_e2e.py                   Full integration test against a running server +
 │                                     real Supabase auth (needs seeded test users).
 │                                     NOT run in unit CI (needs a live server).
@@ -232,6 +564,41 @@ backend/
 ```
 
 ### Backend request lifecycle (submit case, the core flow)
+
+```mermaid
+sequenceDiagram
+    participant W as ASHA worker (browser)
+    participant R as cases.py::submit_case
+    participant S as schemas.py::IntakeForm
+    participant M as classifier.py::run_triage
+    participant L as llm.py::generate_briefing
+    participant DB as Supabase (case_records)
+    participant RT as Realtime
+    participant D as Doctor dashboard
+
+    W->>R: POST /api/submit (rate-limited 20/min, require_role)
+    R->>S: validate (bounds, symptom allow-list, control-char strip)
+    alt validation fails
+        S-->>W: 422 (scrubbed error, no PII)
+    end
+    R->>M: run_triage(form_data)
+    M->>M: 1. safety-net check (extreme vitals → EMERGENCY)
+    M->>M: 2. trained model + SHAP (if safety net didn't fire)
+    M->>M: 3. NEWS2 floor (never ROUTINE on a concerning vital)
+    M-->>R: {triage_level, confidence, risk_driver, low_confidence}
+    R->>L: generate_briefing(form_data, triage_result)
+    L->>L: 4-tier fallback (Groq 70B → 8B → Gemini Flash → Flash-Lite)
+    L->>L: _enforce_schema(): lock triage_level + disclaimer onto output
+    L-->>R: briefing JSON
+    R->>DB: upsert on client_id (idempotent — safe to retry)
+    DB-->>R: row (id, created_at, ...)
+    R-->>W: 200 case record
+    DB->>RT: INSERT event
+    RT->>D: live push (useRealtimeCases)
+    opt triage_level == EMERGENCY
+        R->>D: Web Push notification (background task, non-blocking)
+    end
+```
 
 1. `POST /api/submit` (`cases.py::submit_case`) — rate-limited 20/min/user,
    `require_role('asha_worker', 'admin')`.
@@ -256,11 +623,26 @@ support, no TypeScript (plain `.jsx`/`.js`).
 
 ```
 frontend/src/
-├── main.jsx                  Entry point — mounts <App/>, registers the PWA service worker.
+├── main.jsx                  Entry point — mounts <App/>, imports i18n.js (must run
+│                              before render), registers the PWA service worker.
+├── i18n.js                    react-i18next init (FEATURES_ROADMAP §2.1). Persists the
+│                              chosen language to localStorage, updates
+│                              document.documentElement.lang. See docs/DECISIONS.md §10
+│                              for why hi/ta are English placeholders, not real
+│                              translations, and locales/README.md for the same.
+├── locales/
+│   ├── en.json                 Source of truth for every i18n key.
+│   ├── hi.json, ta.json         Byte-for-byte copies of en.json pending clinician review.
+│   └── README.md                Explains the placeholder status — read before "finishing"
+│                              a translation yourself.
 ├── App.jsx                   Role-based routing (no react-router — just profile.role
 │                              branching). Panels are React.lazy()-loaded per role so a
 │                              given user only downloads their own panel's code.
 ├── store/authStore.jsx       AuthProvider/useAuth — Supabase session + profile state.
+│                              Profile fetch joins facilities(phone) and caches it to
+│                              localStorage (vn_facility_phone) — the one piece of
+│                              profile data that must survive an offline reload, for
+│                              EmergencySmsAlert.jsx (docs/DECISIONS.md §14).
 ├── lib/
 │   ├── supabase.js            Supabase client — IndexedDB-backed session storage
 │   │                          (survives memory pressure better than localStorage on
@@ -272,20 +654,38 @@ frontend/src/
 │   │                          NOT navigator.onLine (which only checks local interface,
 │   │                          not actual backend reachability — critical for rural
 │   │                          satellite-link scenarios).
-│   └── offlineQueue.js        IndexedDB submission queue (enqueue/dequeue/getAllQueued),
-│                              shared DB with useDraftSave.js.
+│   ├── offlineQueue.js        IndexedDB submission queue (enqueue/dequeue/getAllQueued),
+│   │                          shared DB with useDraftSave.js.
+│   └── push.js                 Web Push subscription helper — requests Notification
+│                              permission, subscribes via pushManager.subscribe(), POSTs
+│                              to /api/push/subscribe. Never throws; the caller (PushPrompt)
+│                              treats decline/unsupported as a normal, expected outcome.
 ├── stores/syncStore.js        submitCase() (online+offline paths) and processQueue()
 │                              (drains the offline queue with a paced delay to stay
 │                              under the backend rate limit).
-├── api/{auth,cases,admin,analytics}.js
+├── api/{auth,cases,admin,analytics,referrals,voice}.js
 │                              Stateless fetch wrappers per domain, all via authHeaders().
+│                              voice.js strips Content-Type from authHeaders() before a
+│                              multipart upload so fetch can set its own boundary.
 ├── hooks/
 │   ├── useLocalTriage.js      Wires up offline-model warmup (triggered on offline/
-│                              unreachable events) and classify().
+│   │                          unreachable events) and classify().
 │   ├── useDraftSave.js        Auto-saves IntakeForm state to IndexedDB keyed by
-│                              client_id (survives tab eviction on low-RAM devices).
-│   └── useRealtimeCases.js    Supabase Realtime subscription wrapper (INSERT/UPDATE),
-│                              used by Dashboard, ASHAPanel history, AnalyticsDashboard.
+│   │                          client_id (survives tab eviction on low-RAM devices).
+│   ├── useRealtimeCases.js    Supabase Realtime subscription wrapper (INSERT/UPDATE),
+│   │                          used by Dashboard, ASHAPanel history, AnalyticsDashboard.
+│   ├── useRealtimeReferrals.js Same pattern, but binds TWO postgres_changes filters
+│   │                          (referring_facility_id / receiving_facility_id) since a
+│   │                          facility can be on either side of a referral.
+│   └── useVoiceInput.js       Voice-to-text — tries server-side transcription
+│                              (MediaRecorder + POST /api/voice/transcribe, the
+│                              accuracy layer for Indic medical speech) first, falls
+│                              back to the browser's own SpeechRecognition only if
+│                              MediaRecorder/mic access is unavailable or the server
+│                              call fails. BOTH paths need connectivity — the browser
+│                              engine also calls a network speech API — so availability
+│                              is still gated on navigator.onLine either way
+│                              (docs/DECISIONS.md §15).
 ├── utils/
 │   ├── triageClassifier.js    Offline triage orchestrator (NO onnxruntime). Loads
 │   │                          /models/triage_trees.json + features_config.json;
@@ -298,25 +698,76 @@ frontend/src/
 │   │                          a 1:1 port of scripts/tree_export.py::evaluate_tree_json.
 │   ├── clinicalRules.js       safetyNetCheck() + news2ConcerningVital() — 1:1 mirror
 │   │                          of the deterministic rules in classifier.py.
-│   └── validation.js          Zod schema — MUST mirror the bounds in
-│                              backend/app/models/schemas.py::IntakeForm.
+│   ├── validation.js          Zod schema — MUST mirror the bounds in
+│   │                          backend/app/models/schemas.py::IntakeForm.
+│   ├── imageCompression.js    Photo-attachment SCAFFOLDING (FEATURES_ROADMAP §3.2) —
+│   │                          canvas-based resize-to-1024px + JPEG re-encode. Not wired
+│   │                          into any upload flow yet (no live endpoint exists — see
+│   │                          docs/DECISIONS.md §11); vendor-independent and ready.
+│   └── patientKey.js          generatePatientKey() (crypto.getRandomValues, format
+│                              XXXX-XXXX) + normalizePatientKey() — MUST mirror
+│                              backend/app/models/schemas.py::PATIENT_KEY_RE
+│                              (docs/DECISIONS.md §21).
 ├── pages/
 │   ├── LoginPage.jsx, IntakeForm.jsx, Dashboard.jsx
 ├── panels/
-│   ├── ASHAPanel.jsx (New Case / My Submissions), DoctorPanel.jsx (Pending/All cases),
-│   │   AdminPanel.jsx (Analytics/Users/Facilities/System)
-├── components/                Shared UI: BriefingCard, TriageBadge, NavBar,
-│   │                          OfflineBanner, ToastProvider, RouteGuard, UpdatePrompt
-│   │                          (PWA update-available prompt), AnalyticsDashboard.
-│   └── admin/                 AdminUsers, AdminFacilities, AdminStats.
-public/models/
-│   ├── triage_trees.json        Compact tree ensemble (~1 MB), walked in pure JS.
-│   └── features_config.json     Canonical feature-order manifest.
+│   ├── ASHAPanel.jsx (New Case / My Submissions / Ask a Question tabs),
+│   │   DoctorPanel.jsx (Pending Review / All Cases / Referrals / Outbreak Signals /
+│   │   Protocol Assistant), AdminPanel.jsx (Analytics/Outbreak Signals/Protocol
+│   │   Assistant/Users/Facilities/System/Audit Log), SupervisorPanel.jsx (Team
+│   │   Metrics / Outbreak Signals / Protocol Assistant) — TeamMetrics.jsx,
+│   │   OutbreakSignals.jsx, and ProtocolAssistant.jsx are shared components used
+│   │   across these panels (docs/DECISIONS.md §25/§26/§27). ProtocolAssistant's
+│   │   `canCurate` prop gates the curation UI — false for ASHAPanel (ask + view
+│   │   FAQ only), true for Doctor/Supervisor/Admin.
+├── components/                Shared UI: BriefingCard (triage override + outcome-
+│   │                          recording + referral actions + patient-summary on-demand
+│   │                          request live here), TriageBadge,
+│   │                          NavBar (includes the language switcher), OfflineBanner,
+│   │                          ToastProvider, RouteGuard, ErrorBoundary, SkeletonCard,
+│   │                          UpdatePrompt (PWA update-available prompt), PushPrompt
+│   │                          (dismissible Web Push opt-in, shown once via localStorage),
+│   │                          VoiceInputButton (mic button, renders nothing on
+│   │                          unsupported browsers), ReferralsPanel (outgoing/incoming
+│   │                          referral list with live status-advance actions),
+│   │                          AnalyticsDashboard (includes the CSV export control),
+│   │                          EmergencySmsAlert (offline-emergency sms: URI intent —
+│   │                          shown in IntakeForm's queued-result view when the local
+│   │                          triage is EMERGENCY; PHI-free fixed message body, see
+│   │                          docs/DECISIONS.md §14), AmbulanceCallButton (tel:108
+│   │                          intent, shown alongside the EMERGENCY result online AND
+│   │                          offline — docs/DECISIONS.md §16 on why this is a phone
+│   │                          call and not a dispatch integration), PatientKeyCard
+│   │                          (renders a new patient continuity key as a QR code —
+│   │                          `qrcode` npm package, client-side `toDataURL` — plus
+│   │                          plain text; shown once after a NEW patient's first
+│   │                          submission — docs/DECISIONS.md §21).
+│   └── admin/                 AdminUsers (includes the CSV bulk-import upload/preview
+│                              flow), AdminFacilities, AdminStats, AdminAuditLog.
+public/
+│   ├── sw-push.js               Web Push `push`/`notificationclick` handlers, injected
+│   │                            into the Workbox-generated service worker via
+│   │                            workbox.importScripts in vite.config.js.
+│   └── models/
+│       ├── triage_trees.json    Compact tree ensemble (~1 MB), walked in pure JS.
+│       └── features_config.json Canonical feature-order manifest.
                                  Both exported by scripts/train_classifier.py.
 tests/
 │   ├── treeParity.test.mjs      `npm run test:parity` — asserts the JS evaluator
 │   │                            matches the server model on golden vectors (CI).
-│   └── fixtures/golden_vectors.json   py-labelled vectors, written by training.
+│   ├── featureParity.test.mjs   `npm run test:feature-parity` — asserts buildFeatureMap()
+│   │                            matches ClinicalFeatureEngineer. Freezes the global Date
+│   │                            constructor (see docs/DECISIONS.md §12). CI.
+│   ├── contraindications.test.mjs `npm run test:contraindications` — asserts
+│   │                            checkContraindications() (clinicalRules.js) agrees with
+│   │                            app/ml/contraindications.py on flag count per case. CI.
+│   ├── offline.spec.js          Playwright E2E: login → offline → submit → reconnect →
+│   │                            sync. Needs a running dev server + seeded test users;
+│   │                            not part of the unit-test CI job.
+│   └── fixtures/
+│       ├── golden_vectors.json          py-labelled tree-eval vectors, written by training.
+│       └── golden_feature_vectors.json  py-labelled feature-engineering vectors, written
+│                                        by scripts/export_golden_vectors.py.
 ```
 
 ### Frontend build-size notes (see FEATURES_ROADMAP.md for more)
@@ -335,20 +786,123 @@ tests/
 
 ## 5. Database (Supabase)
 
+```mermaid
+erDiagram
+    FACILITIES ||--o{ PROFILES : employs
+    FACILITIES ||--o{ CASE_RECORDS : "scoped to"
+    FACILITIES ||--o{ PUSH_SUBSCRIPTIONS : "scoped to"
+    FACILITIES ||--o{ REFERRALS : "referring or receiving side"
+    PROFILES ||--o{ CASE_RECORDS : submits
+    PROFILES ||--o{ PUSH_SUBSCRIPTIONS : owns
+    PROFILES ||--o{ PHI_AUDIT_LOG : "acts as user_id"
+    CASE_RECORDS ||--o{ CASE_REVIEWS : "reviewed via"
+    CASE_RECORDS ||--o{ CASE_OUTCOMES : "outcome recorded for"
+    CASE_RECORDS ||--o{ REFERRALS : "referred via"
+    CASE_RECORDS ||--o{ CASE_ATTACHMENTS : "photo attached to (scaffold only)"
+
+    FACILITIES {
+        uuid id PK
+        text name
+        text type
+        text district
+        boolean is_active
+    }
+    PROFILES {
+        uuid id PK "= auth.users.id"
+        text role "asha_worker/doctor/supervisor/admin"
+        uuid facility_id FK
+        boolean is_active
+    }
+    CASE_RECORDS {
+        uuid id PK
+        uuid client_id UK "offline-retry idempotency key"
+        uuid submitted_by FK "immutable, trigger-enforced"
+        uuid facility_id FK
+        text triage_level "EMERGENCY/URGENT/ROUTINE"
+        int triage_priority "computed: 0/1/2, sort key"
+        text overridden_triage "doctor correction"
+        text triage_model_version
+        text patient_key "nullable, XXXX-XXXX, continuity key"
+        boolean deterioration_alert "2+ URGENT/EMERGENCY visits in 7d"
+        timestamptz reviewed_at
+        timestamptz deleted_at "soft delete"
+    }
+    CASE_REVIEWS {
+        uuid case_id FK
+        uuid reviewer_id FK
+        timestamptz reviewed_at
+    }
+    CASE_OUTCOMES {
+        uuid case_id FK
+        uuid recorded_by FK
+        text actual_severity "real-label for retraining"
+        text patient_disposition
+    }
+    PHI_AUDIT_LOG {
+        text event_type
+        uuid user_id
+        text resource_type
+        jsonb details
+    }
+    PUSH_SUBSCRIPTIONS {
+        uuid user_id FK
+        uuid facility_id FK
+        text endpoint UK
+    }
+    REFERRALS {
+        uuid case_id FK
+        uuid referring_facility_id FK
+        uuid receiving_facility_id FK
+        text status "pending/acknowledged/patient_arrived/completed/cancelled"
+    }
+    CASE_ATTACHMENTS {
+        uuid case_id FK
+        uuid uploaded_by FK
+        text storage_path "scaffold only — no live endpoint"
+    }
+```
+
 Schema is version-controlled via idempotent SQL migrations in
 `backend/supabase/migrations/` (`phase10_realtime_setup.sql` — enables
 Realtime on `case_records`; `phase15_data_security_hardening.sql` — CHECK
 constraints, FKs, indexes, the `case_reviews` and `phi_audit_log` tables,
 consent-capture columns, RLS policies, a `submitted_by`-immutability trigger;
 `phase16_llm_review_fields.sql` — `low_confidence`/`llm_status`/
-`needs_review`/`human_review_requested`/`human_review_reason` columns). Run
-them in order against the live Supabase project's SQL editor (or via the
-Supabase CLI) — they're written to be safe to re-run.
+`needs_review`/`human_review_requested`/`human_review_reason` columns;
+`phase17_triage_provenance_and_override.sql` — `triage_model_version`,
+doctor-override columns, the `case_outcomes` table; `phase18_
+push_subscriptions.sql` — `push_subscriptions` table, `case_records.
+last_escalated_at`; `phase19_referrals.sql` — the `referrals` table + RLS +
+Realtime; `phase20_case_attachments.sql` — the `case_attachments` schema
+scaffold, SELECT/INSERT RLS only, no live upload endpoint yet;
+`phase21_contraindication_flags.sql` — `case_records.contraindication_flags`
+jsonb column, default `[]`; `phase22_facility_capacity.sql` —
+`facilities.capacity_status`/`capacity_updated_at` plus facilities' first-
+ever UPDATE RLS policy; `phase23_patient_key.sql` — `case_records.
+patient_key` (nullable text, CHECK-constrained to `XXXX-XXXX`, partial
+index) — the patient continuity key, docs/DECISIONS.md §21;
+`phase24_deterioration_alert.sql` — `case_records.deterioration_alert`/
+`deterioration_visit_count`, docs/DECISIONS.md §22; `phase25_
+protocol_questions.sql` — the `protocol_questions` table, facility-wide
+SELECT RLS for every role (no PHI), INSERT for the asking user's own
+facility, UPDATE (curation) restricted to doctor/supervisor/admin,
+docs/DECISIONS.md §27; `phase26_role_check_constraint.sql` — makes the
+`profiles.role` CHECK constraint tracked and widens it to all four roles,
+fixing an untracked constraint discovered live-blocking `supervisor`
+(docs/DECISIONS.md §25, §29). Run them in order against the live Supabase
+project's SQL editor (or via the Supabase CLI) — they're written to be
+safe to re-run. **If you're setting up a project for the first time or
+resuming a long-paused one, don't assume it's current — verify the schema
+actually matches this list** (docs/DECISIONS.md §29 has the exact
+column-existence check that caught this project ten migrations behind).
 
 **Known tables** (from the migrations + backend queries):
 - `profiles` — `id` (= auth user id), `full_name`, `role`
-  (`asha_worker`/`doctor`/`admin`), `facility_id`, `asha_id`, `is_active`,
-  `created_at`.
+  (`asha_worker`/`doctor`/`supervisor`/`admin`, enforced by a
+  `profiles_role_check` CHECK constraint — tracked as of
+  `phase26_role_check_constraint.sql` — plus `admin_routes.py`'s Pydantic
+  `Literal` type and `require_role()`; see docs/DECISIONS.md §25),
+  `facility_id`, `asha_id`, `is_active`, `created_at`.
 - `facilities` — `id`, `name`, `type`, `address`, `district`, `state`,
   `pincode`, `phone`, `is_active`.
 - `case_records` — patient/vitals/symptom fields (mirrors `IntakeForm`),
@@ -360,16 +914,43 @@ Supabase CLI) — they're written to be safe to re-run.
   (unique, idempotency key), `submitted_by` (immutable — trigger-enforced),
   `facility_id`, `reviewed_by`, `reviewed_at`, `created_offline`,
   `client_submitted_at`, `deleted_at` (soft delete via
-  `DELETE /api/security/cases/{id}`), `created_at`.
+  `DELETE /api/security/cases/{id}`), `triage_model_version`,
+  `overridden_triage`/`override_reason`/`overridden_by`/`overridden_at`,
+  `last_escalated_at` (EMERGENCY re-alert tracking), `created_at`.
 - `case_reviews` — append-only per-review audit trail (`case_id`,
   `reviewer_id`, `reviewed_at`, `note`), one row inserted per
   `PATCH /api/cases/{id}/review`.
 - `phi_audit_log` — `event_type`, `user_id`, `user_role`, `resource_type`,
   `resource_id`, `facility_id`, `ip_address`, `details` (JSONB),
-  `created_at`. INSERT-only via RLS; SELECT restricted to `admin`. Currently
-  a prepared destination — `app/core/audit.py` logs structured lines to the
-  `vitalnet.audit` logger but does not write rows here yet (future
-  log-shipper integration point).
+  `created_at`. INSERT-only via RLS; SELECT restricted to `admin`.
+  `app/core/audit.py::log_phi_access()` writes here (best-effort, non-
+  blocking) in addition to the `vitalnet.audit` structured logger — viewable
+  via `GET /api/admin/audit-log` / `AdminAuditLog.jsx`.
+- `case_outcomes` — real-world patient outcome per case (`case_id`,
+  `recorded_by`, `actual_severity`, `patient_disposition`, `outcome_notes`,
+  `recorded_at`). Insert-only (immutable — corrections are new rows), the
+  real-label source for `retrain_from_outcomes.py` and the ML-agreement
+  analytics endpoint.
+- `push_subscriptions` — Web Push endpoint/keys per user (`user_id`,
+  `facility_id`, `endpoint` unique, `p256dh_key`, `auth_key`). Deleted
+  automatically on a 410-Gone send response (stale subscription cleanup).
+- `referrals` — inter-facility referral workflow (`case_id`, `referred_by`,
+  `referring_facility_id`, `receiving_facility_id`, `reason`, `urgency`,
+  `status` — `pending`/`acknowledged`/`patient_arrived`/`completed`/
+  `cancelled`, forward-only transitions). RLS: visible to admin or either
+  facility side; insert by the referring side; status updates by the
+  receiving side only. Realtime-enabled.
+- `case_attachments` — **schema scaffolding only** (FEATURES_ROADMAP §3.2),
+  no live upload endpoint yet. `case_id`, `uploaded_by`, `storage_path`
+  (generic string, storage-backend-agnostic), `content_type`, `size_bytes`.
+  RLS mirrors `case_outcomes`; immutable by omission.
+- `protocol_questions` — the protocol assistant's shared facility FAQ
+  (docs/DECISIONS.md §27). `asked_by`, `facility_id`, `question_text`,
+  `language`, `llm_answer_text`, `llm_grounded`, `status`
+  (`answered`/`pending_curation`/`curated`), `curator_answer_text`,
+  `curated_by`, `curated_at`. Carries NO PHI — RLS SELECT is facility-wide
+  for every role (including `asha_worker`) by design, unlike
+  `case_records`; UPDATE (curation) is `doctor`/`supervisor`/`admin` only.
 
 **Role scoping model** (enforced consistently in application code — see §3's
 route descriptions): `admin` = global scope (sees/manages everything). `doctor`
@@ -379,6 +960,23 @@ their own submissions (`submitted_by = self`, also enforced by RLS and by
 `_authorize_case_row_access()` in `cases.py`).
 
 ## 6. Auth model
+
+```mermaid
+flowchart TD
+    A["Request with Authorization: Bearer &lt;jwt&gt;"] --> B{"Verify signature/exp/aud\nlocally (HS256)"}
+    B -->|success| D["Resolve is_active/role/facility_id\nfrom profiles (cached ≤300s)"]
+    B -->|"can't verify locally\n(asymmetric-key project)"| C["Network fallback:\nsupabase.auth.get_user(token)"]
+    C -->|success| D
+    C -->|fails| F["401 Unauthorized"]
+    B -->|invalid signature/expired| F
+    D -->|"profile row confirmed missing"| G["403 Forbidden\n(fail CLOSED)"]
+    D -->|"transient DB error"| H["Use last cached state\n(fail OPEN — avoids outage lockout)"]
+    D -->|success| E["resolved_role / resolved_facility_id\nattached to request"]
+    H --> E
+    E --> I{"require_role(*roles)\nchecks resolved_role"}
+    I -->|not allowed| J["403 Forbidden"]
+    I -->|allowed| K["Route handler runs"]
+```
 
 Supabase Auth issues JWTs with `user_metadata`/`app_metadata` claims — these
 are **never trusted** for authorization. `get_current_user()`
@@ -419,6 +1017,15 @@ victim's budget.
   and `golden_vectors.json` must always be regenerated together from the same
   `train_classifier.py` run — never independently. The `npm run test:parity` CI
   check fails if the JS offline path desyncs from the server model.
+- `generate_protocol_answer` (`llm.py`) must stay a fully separate call path
+  from `generate_briefing` — never take patient vitals/symptoms as input,
+  never share the triage system prompt. This is what makes it structurally
+  impossible for the protocol assistant to influence a triage decision.
+- `supervisor` must never be added to `case_records`' row-level SELECT
+  policy — its only sanctioned access to case-derived data is the aggregate
+  `supabase_admin` queries in `supervisor_routes.py`/`outbreak_routes.py`
+  (docs/DECISIONS.md §25/§26). If a future feature needs supervisor to see
+  more, add another narrow aggregate, don't widen the row-level policy.
 
 ## 8. Keeping this document current
 

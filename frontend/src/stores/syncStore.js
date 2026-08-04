@@ -12,19 +12,10 @@
 import { supabase } from '@/lib/supabase'
 import { enqueue, dequeue, getAllQueued } from '@/lib/offlineQueue'
 import { isServerReachable } from '@/lib/connectivity'
-import { getDeviceId } from '@/api/auth'
+import { buildAuthHeaders } from '@/api/auth'
 import { v4 as uuidv4 } from 'uuid'
 
 const BASE = import.meta.env.VITE_API_BASE_URL
-
-async function _authHeaders(token) {
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${token}`,
-    'X-Device-Id': getDeviceId(),
-    'X-CSRF-Token': 'vitalnet-spa',
-  }
-}
 
 /**
  * submitCase — Handles online and offline submission paths.
@@ -52,7 +43,7 @@ export async function submitCase(formData) {
   try {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
-    const headers = await _authHeaders(session.access_token)
+    const headers = buildAuthHeaders(session.access_token)
     const res = await fetch(`${BASE}/api/submit`, {
       method: 'POST', headers, body: JSON.stringify(payload),
     })
@@ -103,7 +94,7 @@ export async function processQueue() {
     try {
       const res = await fetch(`${BASE}/api/submit`, {
         method: 'POST',
-        headers: await _authHeaders(freshToken),
+        headers: buildAuthHeaders(freshToken),
         body: JSON.stringify(item.payload),
       })
 

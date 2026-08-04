@@ -8,25 +8,30 @@
 // backend/scripts/export_golden_vectors.py and re-runs buildFeatureMap() on
 // every recorded input, asserting an exact (tolerance-bounded) match.
 //
+// Every fixture input carries an explicit _reference_month (set by
+// scripts/train_classifier.py::generate_patient), which buildFeatureMap()
+// prefers over `new Date()` for seasonal_risk — so this test's outcome no
+// longer depends on real wall-clock time for that feature. The global Date
+// constructor is still frozen to FROZEN_REFERENCE_TIME below (must match
+// export_golden_vectors.py's FROZEN_REFERENCE_TIME and test_feature_parity.py's
+// twin) as a defensive fallback for any other contextual feature that reads
+// it directly.
+//
 // Run: node frontend/tests/featureParity.test.mjs
 
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-// triageClassifier.js's time_of_day_risk/seasonal_risk read `new Date()`, so
-// the fixture's expected values are only correct for the moment it was
-// captured. Freeze Date to that moment — a daytime hour (7-17) in July —
-// before importing the module under test, so this doesn't flake depending
-// on what hour/month it happens to run in.
-const FIXTURE_CAPTURE_TIME = [2026, 6, 4, 12, 0, 0] // month is 0-indexed: 6 = July
+const FROZEN_REFERENCE_TIME = new Date(2026, 6, 4, 12, 0, 0) // month is 0-indexed: 6 = July
+
 const RealDate = Date
 class FrozenDate extends RealDate {
   constructor(...args) {
-    super(...(args.length ? args : FIXTURE_CAPTURE_TIME))
+    super(...(args.length ? args : [FROZEN_REFERENCE_TIME]))
   }
   static now() {
-    return new RealDate(...FIXTURE_CAPTURE_TIME).getTime()
+    return FROZEN_REFERENCE_TIME.getTime()
   }
 }
 globalThis.Date = FrozenDate
