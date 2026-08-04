@@ -106,9 +106,9 @@ def test_classifier_direct():
             # ever reaches this path. Suppression uses the current CodeQL
             # inline syntax (codeql[query-id]) — GitHub's default CodeQL
             # setup does not honor the legacy lgtm.com lgtm[query-id] syntax.
-            print(f"Triage Level: {result['triage_level']}")
-            print(f"Confidence: {result['confidence_score']:.3f}")
-            print(f"Risk Driver: {result['risk_driver']}")
+            print(f"Triage Level: {result['triage_level']}")  # codeql[py/clear-text-logging-sensitive-data]
+            print(f"Confidence: {result['confidence_score']:.3f}")  # codeql[py/clear-text-logging-sensitive-data]
+            print(f"Risk Driver: {result['risk_driver']}")  # codeql[py/clear-text-logging-sensitive-data]
             print(f"Safety net triggered: {result.get('safety_net_triggered')}")  # codeql[py/clear-text-logging-sensitive-data]
 
             if result["triage_level"] != test_case["expected"]:
