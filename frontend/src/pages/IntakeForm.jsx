@@ -591,7 +591,7 @@ export default function IntakeForm() {
             <textarea id="observations" name="observations" value={form.observations} onChange={handleChange}
               placeholder={t('intakeForm.placeholders.observations')}
               rows={3} className={`${inputClass} resize-none flex-1`} maxLength={500} />
-            <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('observations')} />
+            <VoiceInputButton lang={speechLang} value={form.observations} onTranscript={(val) => setForm(prev => ({ ...prev, observations: val }))} />
           </div>
         </Field>
         <Field label={t('intakeForm.fields.knownConditions')} id="known_conditions">
@@ -599,7 +599,7 @@ export default function IntakeForm() {
             <input id="known_conditions" name="known_conditions" value={form.known_conditions}
               onChange={handleChange} placeholder={t('intakeForm.placeholders.knownConditions')}
               maxLength={300} className={`${inputClass} flex-1`} />
-            <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('known_conditions')} />
+            <VoiceInputButton lang={speechLang} value={form.known_conditions} onTranscript={(val) => setForm(prev => ({ ...prev, known_conditions: val }))} />
           </div>
         </Field>
         <Field label={t('intakeForm.fields.currentMedications')} id="current_medications">
@@ -607,7 +607,7 @@ export default function IntakeForm() {
             <input id="current_medications" name="current_medications" value={form.current_medications}
               onChange={handleChange} placeholder={t('intakeForm.placeholders.currentMedications')}
               maxLength={300} className={`${inputClass} flex-1`} />
-            <VoiceInputButton lang={speechLang} onTranscript={appendVoiceTranscript('current_medications')} />
+            <VoiceInputButton lang={speechLang} value={form.current_medications} onTranscript={(val) => setForm(prev => ({ ...prev, current_medications: val }))} />
           </div>
         </Field>
       </Section>

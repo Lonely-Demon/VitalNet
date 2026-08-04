@@ -9,7 +9,7 @@
 //
 // If server Whisper is unconfigured or fails (e.g. invalid API key), the live
 // browser transcript is preserved so no spoken data is lost.
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { transcribeAudio } from '../api/voice'
 
 function getSpeechRecognitionCtor() {
@@ -24,19 +24,69 @@ function getMediaRecorderCtor() {
 // intake i18n language codes (frontend/src/i18n.js) → Whisper ISO-639-1 codes.
 const LANG_TO_ISO = { 'en-US': 'en', 'hi-IN': 'hi', 'ta-IN': 'ta' }
 
-export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
+export function useVoiceInput({ lang = 'en-US', onResult, containerRef } = {}) {
   const [listening, setListening] = useState(false)
   const [error, setError] = useState(null)
   const recognitionRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
-  const hasBrowserTranscriptRef = useRef(false)
+  const silenceTimerRef = useRef(null)
 
   const speechSupported = Boolean(getSpeechRecognitionCtor())
   const recorderSupported = Boolean(getMediaRecorderCtor() && navigator.mediaDevices?.getUserMedia)
   const supported = speechSupported || recorderSupported
   const online = typeof navigator === 'undefined' || navigator.onLine
   const available = supported && online
+
+  const stop = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current)
+      silenceTimerRef.current = null
+    }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop()
+      } catch {}
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop()
+      } catch {}
+    } else {
+      setListening(false)
+    }
+  }, [])
+
+  const resetSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current)
+    silenceTimerRef.current = setTimeout(() => {
+      stop()
+    }, 5000) // 5 seconds of silence -> auto-turn off
+  }, [stop])
+
+  // Click outside / pointerdown auto-stop
+  useEffect(() => {
+    if (!listening) return
+
+    const handlePointerDown = (e) => {
+      if (containerRef?.current && containerRef.current.contains(e.target)) {
+        return
+      }
+      stop()
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown, { capture: true })
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown, { capture: true })
+    }
+  }, [listening, containerRef, stop])
+
+  // Cleanup silence timer on unmount
+  useEffect(() => {
+    return () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current)
+    }
+  }, [])
 
   const startBrowserRecognition = useCallback(() => {
     if (!speechSupported) return
@@ -47,13 +97,17 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
     recognition.continuous = true
     recognition.maxAlternatives = 1
 
+    recognition.onspeechstart = () => {
+      resetSilenceTimer()
+    }
+
     recognition.onresult = (event) => {
+      resetSilenceTimer()
       const transcript = Array.from(event.results)
         .map((r) => r[0].transcript)
         .join(' ')
         .trim()
       if (transcript) {
-        hasBrowserTranscriptRef.current = true
         onResult?.(transcript)
       }
     }
@@ -61,18 +115,17 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
       if (event.error === 'not-allowed') setError('permissionDenied')
     }
     recognition.onend = () => {
-      // recognition ended naturally
+      setListening(false)
     }
 
     recognitionRef.current = recognition
     try {
       recognition.start()
     } catch {}
-  }, [speechSupported, lang, onResult])
+  }, [speechSupported, lang, onResult, resetSilenceTimer])
 
   const start = useCallback(async () => {
     setError(null)
-    hasBrowserTranscriptRef.current = false
 
     if (!supported) {
       setError('unsupported')
@@ -84,6 +137,7 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
     }
 
     setListening(true)
+    resetSilenceTimer()
 
     // 1. Start live browser recognition immediately for instant real-time transcription
     if (speechSupported) {
@@ -127,22 +181,7 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
         }
       }
     }
-  }, [supported, online, speechSupported, recorderSupported, lang, onResult, startBrowserRecognition])
-
-  const stop = useCallback(() => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop()
-      } catch {}
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop()
-      } catch {}
-    } else {
-      setListening(false)
-    }
-  }, [])
+  }, [supported, online, speechSupported, recorderSupported, lang, onResult, startBrowserRecognition, resetSilenceTimer])
 
   return { start, stop, listening, error, supported, available }
 }
