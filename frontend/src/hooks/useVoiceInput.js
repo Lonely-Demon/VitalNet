@@ -37,6 +37,7 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
   const recognitionRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
+  const hasBrowserTranscriptRef = useRef(false)
 
   const speechSupported = Boolean(getSpeechRecognitionCtor())
   const recorderSupported = Boolean(getMediaRecorderCtor() && navigator.mediaDevices?.getUserMedia)
@@ -45,14 +46,12 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
   const available = supported && online
 
   const startBrowserRecognition = useCallback(() => {
-    if (!speechSupported) {
-      setError('failed')
-      return
-    }
+    if (!speechSupported) return
     const SpeechRecognitionCtor = getSpeechRecognitionCtor()
     const recognition = new SpeechRecognitionCtor()
     recognition.lang = lang
-    recognition.interimResults = false
+    recognition.interimResults = true
+    recognition.continuous = true
     recognition.maxAlternatives = 1
 
     recognition.onresult = (event) => {
@@ -60,56 +59,28 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
         .map((r) => r[0].transcript)
         .join(' ')
         .trim()
-      if (transcript) onResult?.(transcript)
+      if (transcript) {
+        hasBrowserTranscriptRef.current = true
+        onResult?.(transcript)
+      }
     }
     recognition.onerror = (event) => {
-      setError(event.error === 'not-allowed' ? 'permissionDenied' : 'failed')
+      if (event.error === 'not-allowed') setError('permissionDenied')
     }
-    recognition.onend = () => setListening(false)
+    recognition.onend = () => {
+      // recognition ended naturally
+    }
 
     recognitionRef.current = recognition
-    setListening(true)
-    recognition.start()
+    try {
+      recognition.start()
+    } catch {}
   }, [speechSupported, lang, onResult])
 
-  const startServerRecording = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const MediaRecorderCtor = getMediaRecorderCtor()
-      const recorder = new MediaRecorderCtor(stream)
-      chunksRef.current = []
-
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data)
-      }
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop())
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
-        try {
-          const transcript = await transcribeAudio(blob, LANG_TO_ISO[lang])
-          setListening(false)
-          if (transcript) onResult?.(transcript)
-        } catch (err) {
-          console.warn('[VitalNet] Server transcription failed, falling back to browser STT:', err)
-          if (speechSupported) {
-            startBrowserRecognition()
-          } else {
-            setListening(false)
-            setError('failed')
-          }
-        }
-      }
-
-      mediaRecorderRef.current = recorder
-      recorder.start()
-      setListening(true)
-    } catch (err) {
-      setError(err.name === 'NotAllowedError' ? 'permissionDenied' : 'failed')
-    }
-  }, [lang, onResult, speechSupported, startBrowserRecognition])
-
-  const start = useCallback(() => {
+  const start = useCallback(async () => {
     setError(null)
+    hasBrowserTranscriptRef.current = false
+
     if (!supported) {
       setError('unsupported')
       return
@@ -118,19 +89,66 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
       setError('offline')
       return
     }
-    if (recorderSupported) {
-      startServerRecording()
-    } else {
+
+    setListening(true)
+
+    // 1. Start live browser recognition immediately for instant real-time transcription
+    if (speechSupported) {
       startBrowserRecognition()
     }
-  }, [supported, online, recorderSupported, startServerRecording, startBrowserRecognition])
+
+    // 2. Also start MediaRecorder if supported for server Whisper refinement on stop
+    if (recorderSupported) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        const MediaRecorderCtor = getMediaRecorderCtor()
+        const recorder = new MediaRecorderCtor(stream)
+        chunksRef.current = []
+
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) chunksRef.current.push(event.data)
+        }
+        recorder.onstop = async () => {
+          stream.getTracks().forEach((track) => track.stop())
+          const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+          if (blob.size > 0) {
+            try {
+              const serverTranscript = await transcribeAudio(blob, LANG_TO_ISO[lang])
+              if (serverTranscript?.trim()) {
+                onResult?.(serverTranscript.trim())
+              }
+            } catch (err) {
+              console.warn('[VitalNet] Server transcription unavailable, preserving browser transcript:', err)
+            }
+          }
+          setListening(false)
+        }
+
+        mediaRecorderRef.current = recorder
+        recorder.start()
+      } catch (err) {
+        console.warn('[VitalNet] Mic stream access error:', err)
+        if (!speechSupported) {
+          setError(err.name === 'NotAllowedError' ? 'permissionDenied' : 'failed')
+          setListening(false)
+        }
+      }
+    }
+  }, [supported, online, speechSupported, recorderSupported, lang, onResult, startBrowserRecognition])
 
   const stop = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop()
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop()
+      } catch {}
     }
-    recognitionRef.current?.stop()
-    setListening(false)
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop()
+      } catch {}
+    } else {
+      setListening(false)
+    }
   }, [])
 
   return { start, stop, listening, error, supported, available }
