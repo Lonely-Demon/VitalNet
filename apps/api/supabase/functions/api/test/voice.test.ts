@@ -43,6 +43,19 @@ async function withMockFetch<T>(
   }
 }
 
+/** Parse the hostname from the URL supplied to fetch(), then check it with an
+ * exact equality test. Using hostname rather than url.includes(host) closes
+ * CodeQL's js/incomplete-url-host-check: a substring match on the full URL
+ * string can be fooled by a path or subdomain that embeds the expected host
+ * (e.g. https://evil.example.com/api.groq.com). */
+function urlHostname(input: RequestInfo | URL): string {
+  try {
+    return new URL(String(input)).hostname;
+  } catch {
+    return "";
+  }
+}
+
 Deno.test("transcribe: throws TranscriptionUnavailable when nothing is configured", async () => {
   _setConfigForTest(testConfig());
   await assertRejects(() => transcribe(new Uint8Array([1, 2, 3]), "clip.webm"), TranscriptionUnavailable);
@@ -53,13 +66,12 @@ Deno.test("transcribe: returns stripped text from Groq when configured", async (
 
   const result = await withMockFetch(
     (input) => {
-      const url = String(input);
-      if (url.includes("api.groq.com")) {
+      if (urlHostname(input) === "api.groq.com") {
         return Promise.resolve(
           new Response(JSON.stringify({ text: "  fever for three days  " }), { status: 200 }),
         );
       }
-      throw new Error(`unexpected fetch to ${url}`);
+      throw new Error(`unexpected fetch to ${String(input)}`);
     },
     () => transcribe(new Uint8Array([1, 2, 3]), "clip.webm", "en"),
   );
@@ -73,15 +85,15 @@ Deno.test("transcribe: Groq is tried before Sarvam when both are configured", as
 
   const result = await withMockFetch(
     (input) => {
-      const url = String(input);
-      if (url.includes("api.groq.com")) {
+      const host = urlHostname(input);
+      if (host === "api.groq.com") {
         return Promise.resolve(new Response(JSON.stringify({ text: "groq answered" }), { status: 200 }));
       }
-      if (url.includes("api.sarvam.ai")) {
+      if (host === "api.sarvam.ai") {
         sarvamCalled = true;
         return Promise.resolve(new Response(JSON.stringify({ transcript: "sarvam answered" }), { status: 200 }));
       }
-      throw new Error(`unexpected fetch to ${url}`);
+      throw new Error(`unexpected fetch to ${String(input)}`);
     },
     () => transcribe(new Uint8Array([1, 2, 3]), "clip.webm", "hi"),
   );
@@ -95,14 +107,14 @@ Deno.test("transcribe: falls back to Sarvam when Groq fails", async () => {
 
   const result = await withMockFetch(
     (input) => {
-      const url = String(input);
-      if (url.includes("api.groq.com")) {
+      const host = urlHostname(input);
+      if (host === "api.groq.com") {
         return Promise.resolve(new Response("upstream error", { status: 500 }));
       }
-      if (url.includes("api.sarvam.ai")) {
+      if (host === "api.sarvam.ai") {
         return Promise.resolve(new Response(JSON.stringify({ transcript: "sarvam answered" }), { status: 200 }));
       }
-      throw new Error(`unexpected fetch to ${url}`);
+      throw new Error(`unexpected fetch to ${String(input)}`);
     },
     () => transcribe(new Uint8Array([1, 2, 3]), "clip.webm", "hi"),
   );
@@ -117,11 +129,11 @@ Deno.test("transcribe: Sarvam is never attempted when unconfigured, even if Groq
     () =>
       withMockFetch(
         (input) => {
-          const url = String(input);
-          if (url.includes("api.groq.com")) {
+          const host = urlHostname(input);
+          if (host === "api.groq.com") {
             return Promise.resolve(new Response("upstream error", { status: 500 }));
           }
-          throw new Error(`unexpected fetch to ${url}`);
+          throw new Error(`unexpected fetch to ${String(input)}`);
         },
         () => transcribe(new Uint8Array([1, 2, 3]), "clip.webm", "hi"),
       ),

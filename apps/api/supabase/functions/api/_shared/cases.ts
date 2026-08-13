@@ -11,10 +11,19 @@ import type { AuthedUser } from "./types.ts";
  * Defense-in-depth on top of Zod's control-char stripping (schema.ts):
  * strips embedded HTML/markup tags before the text reaches the DB, the LLM
  * prompt, or a doctor's browser.
+ *
+ * Two-pass approach (closes CodeQL js/incomplete-html-tag-sanitization):
+ *  1. Strip <script …>…</script> blocks and their content entirely (case-
+ *     insensitive, dotAll so multi-line script bodies are caught too).
+ *  2. Strip all remaining HTML/XML-style tags, including malformed tags
+ *     that lack a closing > (e.g. a truncated <script fragment).
  */
 export function sanitizeMedicalText(value: string | null | undefined, maxLength = 500): string | null {
   if (value === null || value === undefined) return null;
-  const withoutTags = value.replace(/<[^>]+>/g, "");
+  // Pass 1: remove <script …>…</script> elements and their inner content.
+  const noScript = value.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  // Pass 2: strip any remaining tags (including fragments without closing >).
+  const withoutTags = noScript.replace(/<[^>]*>?/g, "");
   const collapsed = withoutTags.replace(/\s+/g, " ").trim();
   return collapsed ? collapsed.slice(0, maxLength) : null;
 }
