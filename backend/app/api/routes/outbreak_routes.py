@@ -21,7 +21,7 @@ public-health surveillance system — the same honesty standard already
 applied to fairness_audit.py/drift_monitor.py. Output is aggregate counts
 only: no patient names, no individual case content, ever. Calls
 fn_outbreak_signal_counts — a SECURITY DEFINER Postgres function (backend/
-supabase/migrations/phase28_security_definer_fns.sql) — through the
+supabase/migrations/phase40_supervisor_global_aggregate_scope.sql) — through the
 caller's own RLS-scoped client, the same narrow exception pattern as
 §20/§22/§25, now enforced inside the database rather than via supabase_admin.
 """
@@ -113,8 +113,9 @@ async def get_outbreak_signals(
     baseline. Informational only — surfaced for a human to review, not an
     automated alert or a validated surveillance system.
 
-    Scope: doctor/supervisor are always restricted to their own facility;
-    admin defaults to system-wide, or narrows via `facility_id`.
+    Scope: supervisor defaults to organisation-wide (facility_id = None) but may
+    pass facility_id to narrow to a specific PHC. doctor and admin (PHC Administrator)
+    are strictly restricted to their resolved own facility.
     """
     role = _resolved_role(user)
     scoped_facility_id = resolve_facility_scope(role, _resolved_facility(user), facility_id)

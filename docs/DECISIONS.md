@@ -696,19 +696,18 @@ and not onto `admin` (would wrongly hand a facility-level workforce
 supervisor organisation-wide system authority, which they don't have in
 NHM's real structure either). It is:
 
-- **Facility-scoped**, the same way `doctor` already is (`resolved_facility_id`
-  — no new scoping primitive needed).
+- **Organisation-wide by default** (with no `facility_id` required on their profile;
+  may optionally narrow an aggregate query to a specific PHC — see §39).
 - **Aggregate-only, non-PHI, read-only** by design: per-ASHA-worker
   submission counts, `needs_review` rate, contraindication-flag rate,
-  deterioration-alert rate, and triage-tier distribution at their own
-  facility. This is exactly the signal real supportive supervision needs
+  deterioration-alert rate, and triage-tier distribution across the organisation
+  (or narrowed to a specific PHC). This is exactly the signal real supportive supervision needs
   (which workers need more training or support) and structurally cannot
   see an individual patient's case — no new PHI exposure surface at all.
 - **Not** clinical review/override authority (stays `doctor`-only — a
   supervisor is not a clinician) and **not** user/facility CRUD (stays
-  `admin`-only — a facility-level role has no business managing the whole
-  organisation).
-- Also scoped into the facility-level view of the outbreak dashboard
+  `admin`-only — PHC Administrators manage local staff; Supervisors govern PHCs).
+- Also scoped into the outbreak dashboard
   (§26) and the curation queue for the protocol assistant (§27) — both are
   a natural extension of "workforce quality and support," not scope creep.
 
@@ -750,9 +749,9 @@ chief-complaint cluster, day)` aggregate counts — a floor (e.g. at least 3
 cases) is also required before a day is even eligible to be flagged, so a
 jump from 0 to 1 case in a tiny population is never treated as
 "elevated." Output is **aggregate counts only** — no patient names, no
-individual case content, ever. Scope: `admin` sees every facility;
-`doctor` and `supervisor` see their own facility only (the same facility-
-scoping convention used everywhere else). Framed explicitly, in the UI and
+individual case content, ever. Scope: `supervisor` sees organisation-wide
+by default (or narrows to a specific PHC); `admin` (PHC Administrator) and
+`doctor` see their own facility only. Framed explicitly, in the UI and
 the code, as an informational aid for a human to review — not a validated
 public-health surveillance system — matching the same honesty standard
 already applied to `fairness_audit.py`/`drift_monitor.py`.
@@ -1904,3 +1903,16 @@ and the edge test suite pass for all edited files (the 4 pre-existing
 unchanged on clean `dev` under Deno 2.4's stricter sanitizer — a
 deno-version artifact, not this change). clinical-core (61) and the web build
 are green.
+
+### 39. Supervisor global aggregate-scope database migration alignment (phase40)
+
+**Context**: During pre-production testing on `test` branch commit `99e9bd2`, sign-in for an organisation-scoped Supervisor (no `facility_id` assigned) succeeded, but loading the Team Metrics panel sent `GET /api/supervisor/team-metrics?days=30` which failed with HTTP `502`. Render logs showed `Supervisor team-metrics query failed: {'code': '22023', ..., 'message': 'account has no facility assigned'}`.
+
+**Root cause analysis**: The application-level scope resolver `app/core/scoping.py` was correctly updated to `GLOBAL_SCOPE_ROLE = "supervisor"` (Supervisor is organisation-wide by default, no `facility_id` required). However, the underlying SECURITY DEFINER PostgreSQL functions created in `phase28_security_definer_fns.sql` (`fn_team_metrics` and `fn_outbreak_signal_counts`) still contained an obsolete check requiring `v_own_facility IS NOT NULL` for non-admin roles and threw SQLSTATE `22023`.
+
+**Decision**: Added additive migration `phase40_supervisor_global_aggregate_scope.sql` to align the database-level authorization with the application RBAC model:
+- `fn_team_metrics`: `supervisor` and `admin` are permitted. `supervisor` defaults to organisation-wide (`p_facility_id = NULL`), or narrows if `p_facility_id` is supplied. `admin` (PHC Administrator) is strictly forced to `v_own_facility`.
+- `fn_outbreak_signal_counts`: `doctor`, `supervisor`, and `admin` are permitted. `supervisor` is organisation-wide by default (`p_facility_id = NULL`), or narrows if `p_facility_id` is supplied. `doctor` and `admin` are strictly forced to `v_own_facility`.
+- Permissions: `REVOKE ALL FROM PUBLIC`, `GRANT EXECUTE TO authenticated`. `SECURITY DEFINER` and `SET search_path = public` hardening preserved.
+- **Clinical Data Boundary**: Supervisor remains aggregate-only with zero direct `case_records` row-level access.
+
