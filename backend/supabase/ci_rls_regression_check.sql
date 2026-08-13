@@ -383,7 +383,7 @@ BEGIN
     caught_metrics := true;
   END;
   IF NOT caught_metrics THEN
-    RAISE EXCEPTION 'PHASE 40 REGRESSION (check 7b): Doctor A was NOT denied execution for fn_team_metrics!', caught_metrics;
+    RAISE EXCEPTION 'PHASE 40 REGRESSION (check 7b): Doctor A was NOT denied execution for fn_team_metrics!';
   END IF;
 END
 $$;
