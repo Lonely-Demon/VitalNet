@@ -3,23 +3,37 @@
 This document explains how the ML triage classifier works, what it is
 trained on, why it is designed the way it is, and — critically — its
 limitations. Read this before touching `classifier.py`, `clinical_features.py`,
-or `backend/scripts/train_classifier.py`.
+or `tools/training/train_classifier.py`.
+
+**This describes the legacy FastAPI backend's runtime** (`backend/app/`),
+which is still the live-serving system today — every endpoint in
+`apps/web/src/api/base.js`'s `ENDPOINT_BACKEND` map is still `'legacy'`. It
+still runs the original hybrid design below: safety net → trained model →
+NEWS2 floor, with SHAP explanations. The Round 6 TypeScript migration
+(`docs/DECISIONS.md` §33) built a parallel, advisory-only architecture —
+`packages/clinical-core`'s deterministic rules engine is authoritative,
+the model is advisory-only, and Saabas-style path attribution replaces
+SHAP — live today in `apps/api` (the new Supabase Edge Function backend),
+not yet receiving production traffic. This document will be superseded by
+that architecture's own docs once the cutover happens; until then it
+accurately describes what `backend/app/ml/classifier.py` actually runs.
 
 ## What it is
 
-A single `sklearn.ensemble.HistGradientBoostingClassifier`, trained on 45
+A single `sklearn.ensemble.HistGradientBoostingClassifier`, trained on 43
 engineered clinical features, that predicts one of three triage tiers:
 `ROUTINE`, `URGENT`, `EMERGENCY`. It is:
 
 - **The only classifier in the app.** It is exported from one training run to:
   `app/ml/models/triage_classifier.pkl` (loaded by the FastAPI backend, bundled
   with a `shap.TreeExplainer` for real explanations) and
-  `frontend/public/models/triage_trees.json` (loaded by the browser and walked
+  `apps/web/public/models/triage_trees.json` (loaded by the browser and walked
   by a **dependency-free pure-JS tree evaluator** —
-  `frontend/src/utils/treeEvaluator.js` — for offline/local inference; there is
-  **no onnxruntime-web WASM** anymore). Because both come from the same training
-  run, online and offline triage can never disagree for the same input — a
-  golden-vector parity test (`npm run test:parity`) enforces this. (ONNX is
+  `packages/clinical-core/src/treeEvaluator.ts` — for offline/local inference;
+  there is **no onnxruntime-web WASM** anymore). Because both come from the same
+  training run, online and offline triage can never disagree for the same
+  input — clinical-core's golden-vector test
+  (`pnpm --filter @vitalnet/clinical-core test`) enforces this. (ONNX is
   still produced in-memory during training as the intermediate the tree JSON is
   extracted from, but it is not shipped.) See `backend/CLASSIFIER_CHANGELOG.md`.
 - **Abstention-aware.** Predictions carry a `low_confidence` flag (top-class
@@ -51,19 +65,29 @@ engineered clinical features, that predicts one of three triage tiers:
 
 `clinical_features.py::ClinicalFeatureEngineer` expands the ~14 raw intake
 fields (age, sex, vitals, symptoms, free-text complaint/duration/location/
-conditions) into 45 features across five groups: basic vitals/symptoms,
+conditions) into 43 features across five groups: basic vitals/symptoms,
 vital-derived scores (shock index, pulse pressure, MAP, cardiac/respiratory/
 hemodynamic/sepsis risk scores, pediatric/geriatric/pregnancy adjustments),
 symptom-interaction clusters, age-specific risk scores, and contextual
-factors (time of day, season, location-derived healthcare access proxy).
+factors — monsoon-season vector-borne disease risk, a rural/tribal
+location-derived disease-exposure proxy, and a location-derived healthcare
+access proxy (`docs/DECISIONS.md` §23; two earlier contextual features,
+time-of-day risk and a hardcoded epidemic-alert placeholder, were removed
+after an audit found them constant across the entire training set and
+therefore contributing zero signal to any prediction).
 
-**This logic is duplicated in JavaScript** in
-`frontend/src/utils/triageClassifier.js::buildFeatureMap()` for offline
-inference, since a browser cannot run scikit-learn. If you change
-`ClinicalFeatureEngineer`, you must port the equivalent change to the JS
-file and re-run `train_classifier.py` — there is currently no automated
-cross-language test that catches drift here (see `FEATURES_ROADMAP.md` for
-a proposed fix: a golden-vector parity test run in CI).
+**This is no longer mirrored anywhere.** Before the Round 6 migration, this
+logic was hand-duplicated in `frontend/src/utils/triageClassifier.js::
+buildFeatureMap()` for offline inference — that file is gone. The
+authoritative implementation is now `packages/clinical-core/src/
+features.ts::buildFeatureMap()`, used by both the browser (offline) and
+`apps/api` (online) paths. `ClinicalFeatureEngineer` here is the *legacy*
+copy: it only affects `backend/app/`'s own predictions and is not read by
+anything else. `tools/training/train_classifier.py` does not call it
+either — training labels and features come from clinical-core via
+`cli.mjs` (see that script's module docstring). Changing
+`ClinicalFeatureEngineer` now only matters for as long as `backend/app/`
+is still live.
 
 ## How the synthetic training data is generated and labelled
 
@@ -79,16 +103,21 @@ balanced) using two **decoupled** steps:
    real multi-feature syndromes to learn, not just independent per-feature
    thresholds).
 2. **Labelling**: the TRUE label is computed independently by
-   `assign_triage_label()`, an evidence-informed scoring function, **not**
+   `assign_triage_labels()`, which pipes each generated patient through
+   `packages/clinical-core`'s deterministic rules engine (the same code
+   `apps/api`'s `POST /api/submit` calls at inference time, via a JSONL
+   subprocess — `node packages/clinical-core/cli.mjs label`), **not**
    trusted from the generation band. A patient generated in the "severe"
    band that happens to roll mild vitals is correctly labelled
    ROUTINE/URGENT, not forced to EMERGENCY. This avoids the classifier
    learning generation-bucket artifacts instead of real vital-sign
-   relationships.
+   relationships. Before the Round 6 migration this was a standalone
+   ~190-line Python port of the same scoring function — the last
+   hand-mirrored pair in the codebase; see `docs/DECISIONS.md` §33.
 
-`assign_triage_label()` is loosely modelled on three established clinical
-scoring frameworks, adapted to the six vitals VitalNet's intake form
-actually collects (no respiratory rate, no O2 supplementation status):
+The rules engine is loosely modelled on three established clinical scoring
+frameworks, adapted to the six vitals VitalNet's intake form actually
+collects (no respiratory rate, no O2 supplementation status):
 
 - **NEWS2** (Royal College of Physicians, 2017): aggregate early-warning
   scoring — score each vital 0-3 by deviation from normal, sum to an
@@ -102,8 +131,9 @@ actually collects (no respiratory rate, no O2 supplementation status):
   BP band treats the entire 111-219 mmHg range as "0" because NEWS2 targets
   acute deterioration, where *hypo*tension is the dangerous direction. That
   underweights hypertensive crisis, a distinct emergency pathway relevant to
-  this population — see `_bp_sys_score` and the `hypertensive_neuro_emergency`
-  rule in `train_classifier.py` for the adaptation.
+  this population — see `packages/clinical-core/src/rules/bands.ts` and the
+  `hypertensive_neuro_emergency` rule in `rules/rules.ts` for the adaptation
+  and citations.
 
 **This is a heuristic label generator for a synthetic training set, not a
 validated clinical scoring instrument.** It has not been through clinical
@@ -117,10 +147,11 @@ diagnosis, never a replacement for clinical judgment.
 
 Held-out 5,400-sample test set and 5-fold CV on 36,000 samples:
 
-- Accuracy: 98.9% held-out / 99.2% CV
-- EMERGENCY recall (model alone): 98.3% held-out / 98.6% CV
-- Expected Calibration Error: 0.0016
-- Model size: ~5.7 MB (`.pkl`, carries the SHAP explainer), ~1 MB
+- Accuracy: 99.0% held-out / 99.1% CV
+- EMERGENCY recall (model alone): 98.8% held-out / 98.5% CV
+- Expected Calibration Error: 0.0020 (class-balanced), 0.0050 (realistic
+  ~85/12/3 ROUTINE/URGENT/EMERGENCY prevalence — see MODEL_CARD.md)
+- Model size: ~6.7 MB (`.pkl`, carries the SHAP explainer), ~1.2 MB
   (`triage_trees.json`, gzips far smaller)
 
 The model-alone EMERGENCY false negatives are borderline URGENT/EMERGENCY cases;
@@ -133,17 +164,57 @@ honest limitations statement live in `MODEL_CARD.md`.
 ## Regenerating the model
 
 ```bash
-cd backend
-source venv/bin/activate
-pip install -r requirements.txt -r requirements-train.txt
-python scripts/train_classifier.py
+pnpm --filter @vitalnet/clinical-core build   # tools/training pipes patients through its dist/
+cd tools/training
+source ../../backend/venv/bin/activate
+pip install -r ../../backend/requirements.txt -r ../../backend/requirements-train.txt
+python train_classifier.py
 ```
 
 Always commit the regenerated `.pkl`, `triage_trees.json`, `features_config.json`,
-and `golden_vectors.json` together — they must come from the same run. Never
-hand-edit or partially regenerate them. After a `clinical_features.py` change,
-also mirror the change in `frontend/src/utils/triageClassifier.js` and re-run
-`npm run test:parity` (it will fail if the JS offline path desyncs).
+`golden_vectors.json`, and `golden_feature_vectors.json` (in `apps/web/tests/
+fixtures/`) together — they must come from the same run. Never hand-edit or
+partially regenerate them. Labels and features both come from
+`packages/clinical-core` (via `cli.mjs`), so there is nothing to hand-mirror
+here any more — changing `packages/clinical-core/src/rules/` or `features.ts`
+and re-running `train_classifier.py` is the entire update path.
+
+**Separately**, `backend/tests/fixtures/golden_feature_vectors.json` (a
+*different* fixture, in `backend/`, not `apps/web/`) backs
+`backend/tests/test_feature_parity.py` — a regression guard on the legacy
+`ClinicalFeatureEngineer` only. After a `clinical_features.py` change,
+regenerate it: `python export_golden_vectors.py` (from `tools/training/`).
+This fixture and test exist only as long as `backend/app/` does.
+
+## Fairness audit and drift monitoring (operator-run, not scheduled)
+
+Two diagnostic scripts, neither wired into CI or a schedule — each prints a
+report for a human to read; neither takes automatic action.
+
+```bash
+cd tools/training
+
+# Subgroup performance (age band × sex) on a fresh synthetic evaluation set,
+# run through the FULL legacy pipeline (safety net + model + NEWS2 floor):
+PYTHONPATH=../../backend python fairness_audit.py [--n 6000] [--flag-gap 0.10]
+
+# Feature-distribution drift (Population Stability Index) between the
+# synthetic training distribution and live case_records — needs a real
+# Supabase project configured (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY):
+PYTHONPATH=../../backend python drift_monitor.py [--reference-n 4000] [--live-n 500] [--since-days 90]
+```
+
+Both are **synthetic-data diagnostics**, not real-world bias/drift audits —
+VitalNet has no real patient data to check either against (see
+`MODEL_CARD.md`'s training-data caveat). `fairness_audit.py` tells you
+whether the model behaves consistently across the synthetic generator's
+age/sex distribution (a large gap would mean the model learned some
+age/sex-correlated shortcut, worth understanding before trusting it on any
+subgroup). `drift_monitor.py` tells you whether the population VitalNet is
+*actually seeing* has drifted from what the model was trained on. Re-run
+both whenever the model is retrained
+(`tools/training/retrain_from_outcomes.py`) or before a real deployment —
+see `docs/CLINICAL_GOVERNANCE.md`'s model lifecycle governance section.
 
 ## Why scikit-learn is pinned exactly (not `>=`)
 

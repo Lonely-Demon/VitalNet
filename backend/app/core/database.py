@@ -12,11 +12,30 @@ Supabase database clients.
                     users) AND cross-tenant reads/writes on profiles, facilities,
                     and case_records behind admin-only endpoints.
 
-   SECURITY NOTE: because supabase_admin bypasses RLS, every route that uses it
-   (all of app/api/routes/admin_routes.py) MUST be guarded by
-   require_role('admin') — that role check is the ONLY access-control boundary
-   on those endpoints; there is no RLS backstop. Do not use supabase_admin in
-   any route that isn't admin-gated. tests/test_admin_authz.py enforces this.
+   SECURITY NOTE: because supabase_admin bypasses RLS, every route in a module
+   meant to be admin-only end to end (admin_routes.py, dsr_routes.py,
+   metrics_routes.py) MUST be guarded by require_role('admin') ONLY — that
+   role check is the sole access-control boundary on those endpoints; there is
+   no RLS backstop. tests/test_admin_authz.py enforces this for exactly those
+   modules (see ADMIN_ROUTE_MODULES there).
+
+   RETIRED NARROW AGGREGATE EXCEPTION (DECISIONS.md §29, §33): non-admin
+   endpoints used to reach past their own RLS-scoped token via supabase_admin
+   for exactly one aggregate each (a doctor's referral picker needing another
+   facility's open-case *count*; a supervisor's team dashboard needing a
+   cross-worker aggregate). Those four call sites (cases.py's deterioration
+   check, referral_routes.py's open-case counts, supervisor_routes.py's team
+   metrics, outbreak_routes.py's EARS signal query) now call SECURITY DEFINER
+   Postgres functions instead (backend/supabase/migrations/
+   phase28_security_definer_fns.sql — fn_deterioration_count,
+   fn_open_case_counts, fn_team_metrics, fn_outbreak_signal_counts), through
+   the caller's OWN get_supabase_for_user() client via .rpc(). Each function
+   re-derives the same narrow exception and role/facility scoping rule
+   inside the database itself (auth.uid() -> profiles), so the RLS-bypass
+   boundary lives next to the table it protects instead of in application
+   code. Do not add a new supabase_admin call outside admin_routes.py/
+   dsr_routes.py/metrics_routes.py — write a SECURITY DEFINER function
+   instead, following that same pattern, and record it in DECISIONS.md.
 """
 import hmac
 from typing import Optional

@@ -29,3 +29,9 @@ _fill("SUPABASE_ANON_KEY", _fake_key)
 _fill("SUPABASE_SERVICE_ROLE_KEY", _fake_key)
 _fill("SUPABASE_JWT_SECRET", "test-secret-at-least-32-chars-long-aaaaaa")
 _fill("GROQ_API_KEY", "test-key")
+# Explicitly unconfigured by default — Sarvam is optional, and voice-
+# transcription tests assert specific provider-fallback behavior that
+# depends on knowing whether it's configured. Without this, a developer's
+# local .env.local carrying a real SARVAM_API_KEY would silently change
+# which providers app/services/voice.py's tests exercise.
+_fill("SARVAM_API_KEY", "")

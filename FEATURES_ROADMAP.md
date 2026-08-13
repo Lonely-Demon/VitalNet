@@ -66,7 +66,7 @@ system is unauditable from this repository.
    directly again except in a genuine emergency, and if you do, immediately
    follow up with `supabase db pull` to reconcile.
 6. Update `AGENTS.md`'s Database section to state this as the required
-   workflow (mirroring what `ARCHITECTURE_RESTRUCTURE.md` §3.3 already
+   workflow (mirroring what `docs/ARCHITECTURE_RESTRUCTURE.md` §3.3 already
    proposed but was apparently never executed).
 7. Add a CI job (or at minimum a documented manual step before merging any
    PR that touches `supabase/migrations/`) that runs `supabase db lint` and
@@ -82,9 +82,23 @@ identical to production.
 
 ---
 
-### 1.2 Golden-vector Python/JS feature-engineering parity test (CI-enforced)
+### 1.2 Golden-vector Python/JS feature-engineering parity test (CI-enforced) — ✅ DONE
 
-**Why**: `backend/app/ml/clinical_features.py::ClinicalFeatureEngineer` is
+**Status**: Implemented. `tools/training/export_golden_vectors.py` generates
+240 synthetic patients across all four severities and writes
+`tests/fixtures/golden_feature_vectors.json` (mirrored into
+`frontend/tests/fixtures/`); `backend/tests/test_feature_parity.py` and
+`frontend/tests/featureParity.test.mjs` both replay it, wired into
+`.github/workflows/ci.yml`'s PR and push frontend jobs alongside the existing
+tree-parity check. This immediately caught a real bug (see
+`backend/app/ml/README.md`): `buildFeatureMap()` was clamping a real age of 0
+(a newborn) up to a 40-year-old default before several age-banded risk
+checks, so newborns received adult-cardiac/obstetric scoring instead of
+pediatric-fever scoring in the offline path only — fixed by introducing a
+second age variable (`ageOrDefault`) that only substitutes on a truly-missing
+age, matching `clinical_features.py`'s own `.get('patient_age', 40)` pattern.
+
+**Why (original)**: `backend/app/ml/clinical_features.py::ClinicalFeatureEngineer` is
 hand-ported into `frontend/src/utils/triageClassifier.js::buildFeatureMap()`.
 If a future change to one is not mirrored in the other, the offline
 (browser) triage classification silently diverges from the online (server)
@@ -99,7 +113,7 @@ one feature at a time.
 **Effort**: Small.
 
 **Implementation**:
-1. Create `backend/scripts/export_golden_vectors.py`: generates ~200
+1. Create `tools/training/export_golden_vectors.py`: generates ~200
    diverse synthetic patients (reuse `generate_patient()` from
    `train_classifier.py`), runs each through
    `ClinicalFeatureEngineer.engineer_features()`, and writes
@@ -131,9 +145,30 @@ on it.
 
 ---
 
-### 1.3 Doctor outcome feedback loop + real-data model retraining
+### 1.3 Doctor outcome feedback loop + real-data model retraining — ✅ DONE
 
-**Why**: The classifier is currently trained entirely on synthetic,
+**Status**: Fully implemented. `case_outcomes` table (migration `phase17_...`,
+immutable/insert-only via RLS), `PATCH /api/cases/{case_id}/outcome`
+(`CaseOutcomeInput`-validated, same facility-scoping as `review_case`), a
+"Record patient outcome" control on `BriefingCard.jsx` (shown once a case is
+reviewed), `scripts/retrain_from_outcomes.py` (blends recorded outcomes with
+a shrinking proportion of synthetic data, trains a candidate model, reports
+its agreement rate against the recorded outcomes vs. the current production
+model's — never auto-promotes; saves to `candidate_triage_classifier.pkl`
+for human review), and `GET /api/analytics/ml-agreement` + an "ML Triage
+Agreement" card on the admin System tab.
+
+Verified end-to-end against `tests/fixtures/synthetic_outcomes.json` (75
+synthetic outcomes with ~15% simulated doctor/model disagreement, via
+`--force` to bypass the production minimum-sample-size gate): the candidate's
+agreement with the recorded outcomes measurably exceeded the untouched
+production model's (0.947 vs 0.867) — the acceptance criterion. The
+retraining script is deliberately **not** wired into CI (per its own spec —
+a silently-regressing clinical model in production is worse than a slower
+manual cadence) and is slow (~30-60s, generates the full 36k-patient
+synthetic pool) — run it manually, not as part of the fast test suite.
+
+**Why (original)**: The classifier is currently trained entirely on synthetic,
 evidence-informed-but-unvalidated data (see `backend/app/ml/README.md`).
 There is no mechanism to learn from what actually happened to patients —
 the single highest-leverage improvement available for genuine clinical
@@ -168,7 +203,7 @@ periodic — not real-time — retraining job).
    new `recordCaseOutcome()` wrapper in `frontend/src/api/cases.js`.
 4. **Retraining pipeline** (NOT real-time, NOT automatic — a human-gated
    periodic job, given the safety stakes): a new script
-   `backend/scripts/retrain_from_outcomes.py` that:
+   `tools/training/retrain_from_outcomes.py` that:
    - Pulls all `case_outcomes` joined with their `case_records` (need
      `bp_systolic`, `spo2`, etc. — the original submitted vitals).
    - Where `actual_severity` disagrees with the original `triage_level`,
@@ -205,9 +240,31 @@ produces a model that measurably shifts toward the recorded outcomes.
 
 ---
 
-### 1.4 Web Push notifications for EMERGENCY cases
+### 1.4 Web Push notifications for EMERGENCY cases — ✅ DONE
 
-**Why**: Today, a doctor only learns about a new EMERGENCY case if their
+**Status**: Implemented. New `push_subscriptions` table (migration
+`phase18_push_subscriptions.sql`), `POST`/`DELETE /api/push/subscribe`
+(`require_role('doctor', 'admin')`) in `app/api/routes/push_routes.py`, VAPID
+settings (`vapid_public_key`/`vapid_private_key`/`vapid_subject`) in
+`config.py`. `app/services/push.py` holds the actual send logic (kept in a
+separate module from `push_routes.py` to avoid a circular import with
+`cases.py`, which calls it) — it no-ops cleanly if VAPID keys are unconfigured,
+and deletes a subscription on a `410 Gone` response (expired subscription).
+`cases.py::submit_case` fires `push_emergency_alert` via FastAPI
+`BackgroundTasks` after a successful EMERGENCY-tier submission, so the push
+send never adds latency to the ASHA worker's response. Frontend:
+`frontend/src/lib/push.js` (permission request + `pushManager.subscribe()` +
+POST to the backend), `frontend/src/components/PushPrompt.jsx` (a dismissible
+bottom-left prompt, shown once per browser via `localStorage`, mounted from
+`DoctorPanel.jsx` — never forced, since Realtime-while-open remains the
+primary channel), and `frontend/public/sw-push.js` (the `push` /
+`notificationclick` handlers, injected into the Workbox-generated service
+worker via `workbox.importScripts` in `vite.config.js` — no `injectManifest`
+mode needed for this one script). New env vars: `VAPID_PUBLIC_KEY` /
+`VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` (backend `.env.example`) and
+`VITE_VAPID_PUBLIC_KEY` (frontend `.env.example`).
+
+**Why (original)**: Today, a doctor only learns about a new EMERGENCY case if their
 dashboard tab is open and they notice the toast (`Dashboard.jsx`'s
 `useRealtimeCases` `onInsert` handler). If the tablet's screen is off, the
 browser tab is backgrounded or closed, or the doctor is away from the
@@ -258,9 +315,20 @@ notification within a few seconds.
 
 ---
 
-### 1.5 Facility response-time SLA dashboard
+### 1.5 Facility response-time SLA dashboard — ✅ DONE
 
-**Why**: VitalNet already records everything needed for this
+**Status**: Implemented. `GET /api/analytics/response-times` (same
+facility/admin scoping as `get_summary`) computes per-tier median/p90 review
+latency over the last 30 days plus an "overdue" count (EMERGENCY >15 min,
+URGENT >2h, ROUTINE >24h, still unreviewed) using `statistics.median` and a
+nearest-rank percentile helper — no percentile math pushed into PostgREST.
+New section in `AnalyticsDashboard.jsx` rendering median/p90 per tier with
+the overdue count in the emergency color when non-zero. The §1.4 escalation
+follow-on (re-notify past threshold) needs push notifications first — not
+built this pass (see §1.4/§1b.2, still speculative pending the Web Push
+implementation).
+
+**Why (original)**: VitalNet already records everything needed for this
 (`created_at`, `reviewed_at`, `triage_level`) but never surfaces it. "How
 long did it take from an EMERGENCY case being flagged to a doctor actually
 reviewing it" is arguably the single most important operational metric a
@@ -296,9 +364,40 @@ meeting our EMERGENCY response target?" without exporting raw data.
 
 ## Tier 2 — High value, larger effort
 
-### 2.1 Multi-language intake form (i18n)
+### 2.1 Multi-language intake form (i18n) — ✅ INFRASTRUCTURE DONE (translations pending clinician review)
 
-**Why**: VitalNet's default facility state (`admin_routes.py`'s
+**Status**: The infrastructure is real and working: `react-i18next` +
+`i18next` (added to `package.json`), `frontend/src/i18n.js` (init, persists
+the chosen language to `localStorage` under `vn_language`, updates
+`document.documentElement.lang`), and a language switcher in `NavBar.jsx`
+(English/Hindi/Tamil). `IntakeForm.jsx` — the single component the spec
+itself names as highest-value — is fully wired: every displayed string
+(section titles, field labels, placeholders, complaint/duration/symptom
+options, consent text, error messages) goes through `t()`.
+
+**Deliberately NOT done this pass**: `hi.json` and `ta.json` are byte-for-
+byte English copies of `en.json` (see `frontend/src/locales/README.md`), not
+real translations. The spec itself warns that machine-translating clinical
+terminology without a clinician review pass is a patient-safety issue, not a
+cosmetic one — a mistranslated symptom option could change what a worker
+believes they're recording. Populating real translations is tracked as
+follow-on work requiring that review; it is not a coding task and was
+explicitly excluded from this pass by user decision. The mechanical string
+extraction for the *other* panels/components (`Dashboard.jsx`,
+`AdminPanel.jsx`, etc.) also hasn't been done — `IntakeForm.jsx` is the
+reference implementation demonstrating the pattern works end-to-end;
+extending it to the rest of the app is the same mechanical pattern, not a
+design question.
+
+**Wire-format guarantee preserved**: `chief_complaint`'s submitted value and
+every `symptoms[]` id are unchanged regardless of the selected language —
+`COMPLAINT_IDS`/`DURATION_IDS` (stable English strings, exactly as before)
+are decoupled from their displayed labels via `COMPLAINT_LABEL_KEYS`/
+`DURATION_LABEL_KEYS`; `SYMPTOM_IDS` double as both the wire value and the
+i18n key directly. A form filled out in any language submits byte-identical
+`symptoms`/`chief_complaint` values to English mode.
+
+**Why (original)**: VitalNet's default facility state (`admin_routes.py`'s
 `CreateFacilityRequest.state` default) is Tamil Nadu, and ASHA workers
 nationally work primarily in their regional language, not English. An
 intake form in a worker's non-native language increases entry time and
@@ -333,9 +432,25 @@ submits the exact same wire payload (English symptom IDs) as English mode.
 
 ---
 
-### 2.2 Voice-to-text intake assist
+### 2.2 Voice-to-text intake assist — ✅ DONE (browser-native path)
 
-**Why**: Typing speed and literacy vary widely among ASHA workers. Free-
+**Status**: Implemented exactly per the "ship first" browser-native path.
+`frontend/src/hooks/useVoiceInput.js` wraps `SpeechRecognition`/
+`webkitSpeechRecognition`; `frontend/src/components/VoiceInputButton.jsx` is
+a mic button rendering nothing on unsupported browsers (Firefox) rather than
+a dead button. Availability is gated on both feature support AND
+`navigator.onLine` (Chrome's engine calls a Google speech API and silently
+fails offline), matching the spec's explicit constraint — the button
+disables with a tooltip explaining why rather than letting a worker tap it
+and get nothing. `lang` is derived from the §2.1 language switcher
+(`en`→`en-US`, `hi`→`hi-IN`, `ta`→`ta-IN`). Wired onto `observations`,
+`known_conditions`, and `current_medications` in `IntakeForm.jsx` — the
+transcript is always appended into the field for the worker to review/edit,
+never auto-submitted. The offline-capable WASM-model follow-on remains
+out of scope per the spec's own guidance (validate the browser-native path
+on real devices first).
+
+**Why (original)**: Typing speed and literacy vary widely among ASHA workers. Free-
 text fields (`observations`, `known_conditions`, `current_medications`)
 are exactly where voice input has the highest leverage — structured
 fields (dropdowns, symptom checkboxes) are already fast to fill via touch.
@@ -370,9 +485,30 @@ before investing here.
 
 ---
 
-### 2.3 Inter-facility referral workflow
+### 2.3 Inter-facility referral workflow — ✅ DONE
 
-**Why**: A PHC doctor's real-world action on a severe case is often not
+**Status**: Implemented per spec. Migration `phase19_referrals.sql` adds the
+`referrals` table (`case_id`, `referred_by`, `referring_facility_id`,
+`receiving_facility_id`, `reason`, `urgency`, `status`, timestamps) with RLS
+(visible to admin globally or a doctor on either side of the referral;
+insert restricted to the referring facility; status updates restricted to
+the receiving facility) plus Realtime (mirrors `phase10`'s setup for
+`case_records`). New `backend/app/api/routes/referral_routes.py`:
+`GET /api/facilities` (doctor-accessible target picker — deliberately not
+tier-filtered, since `facilities.type` is free text with no defined
+ordering yet and enforcing one could hide a legitimate lateral referral),
+`POST /api/cases/{case_id}/refer`, `GET /api/referrals?direction=`, and
+`PATCH /api/referrals/{id}/status` (enforces a forward-only
+`pending→acknowledged→patient_arrived→completed` state machine, with
+`cancelled` reachable from any active state, via optimistic concurrency
+matching `toggle_facility`'s pattern). Frontend: `api/referrals.js`,
+`hooks/useRealtimeReferrals.js` (binds two `postgres_changes` filters — one
+per side of a referral — since a facility can be either referring or
+receiving), a "Refer to another facility" action on `BriefingCard.jsx`, and
+a new "Referrals" tab in `DoctorPanel.jsx` (`ReferralsPanel.jsx`) showing
+outgoing/incoming/all with live status-advance actions.
+
+**Why (original)**: A PHC doctor's real-world action on a severe case is often not
 "treat here" but "stabilize and refer to the district hospital." VitalNet
 currently has no way to represent that — a case is either reviewed or not,
 with no notion of where the patient went next. This connects directly to
@@ -407,9 +543,18 @@ beyond just triage.
 
 ---
 
-### 2.4 Admin audit log
+### 2.4 Admin audit log — ✅ DONE
 
-**Why**: `admin_routes.py` lets an admin change any user's role, deactivate
+**Status**: Implemented, reusing the existing `phi_audit_log` table and
+`log_phi_access()` helper (already called from every admin_routes.py mutation
+as part of round-3 reconciliation) rather than a separate `audit_log` table
+as originally spec'd — same shape, same purpose, avoids a duplicate audit
+mechanism. `log_phi_access()` now also persists to the DB (previously
+log-only; the DB write is best-effort/non-blocking so a transient failure
+never breaks the calling request). New `GET /api/admin/audit-log` (paginated,
+admin-only) and an "Audit Log" tab in `AdminPanel.jsx`.
+
+**Why (original)**: `admin_routes.py` lets an admin change any user's role, deactivate
 accounts, and create/toggle facilities — all currently unlogged beyond
 whatever Supabase's own database logs capture (not queryable from the
 app). For a system managing access to patient health data, "who changed
@@ -444,9 +589,33 @@ the product, not by asking a DBA to grep Postgres logs.
 
 ## Tier 3 — Large scope, needs a product decision first
 
-### 3.1 SMS-based zero-connectivity fallback submission
+### 3.1 SMS-based zero-connectivity fallback submission — 🔶 SCAFFOLDING ONLY (per user decision)
 
-**Why**: The offline-first PWA queue (`offlineQueue.js`/`syncStore.js`)
+**Status**: `backend/app/services/sms.py` provides exactly the parts that
+don't need a vendor/product decision: an `SmsGateway` Protocol (a real
+vendor adapter — Twilio, MSG91, a licensed Indian aggregator — implements
+`send()` and nothing else changes), a `NullSmsGateway` default that logs
+what it would send (mirrors `push.py`'s no-op-when-unconfigured pattern),
+and a strict fixed-format inbound parser (`TRIAGE <age> <M/F>
+<symptom_id,...>`, reusing `schemas.py`'s existing `ALLOWED_SYMPTOMS`
+allow-list) that raises an actionable `SmsParseError` — never silently
+drops a malformed message — with 11 unit tests in `tests/test_sms_parser.py`.
+
+**Deliberately NOT built**: a live inbound webhook wired to `case_records`.
+That needs two decisions this scaffolding cannot make: (1) the SMS
+aggregator, which determines the actual webhook payload shape and that
+vendor's signature-verification scheme (e.g. Twilio's HMAC signature) — a
+webhook without equivalent protection would let anyone who finds the URL
+inject arbitrary submissions; (2) the trust model for a channel that can't
+carry a Bearer JWT. The natural candidate — authenticating by a
+pre-registered ASHA worker phone number — is a real change to the auth
+model (a new `profiles.phone_number` column, admin UI to register it, and
+a security review of "trust whoever controls that SIM") and deserves that
+review before going live, not to be slipped in as a side effect of
+scaffolding. Wiring the endpoint is a small, well-scoped follow-on once
+both decisions are made — the parser and gateway interface are ready for it.
+
+**Why (original)**: The offline-first PWA queue (`offlineQueue.js`/`syncStore.js`)
 handles "no connectivity right now, will sync later" well — but it
 assumes the device eventually regains internet connectivity. In genuinely
 remote areas, a worker's device may go days without data connectivity
@@ -478,9 +647,30 @@ triage-logic problem), and an SMS reply carrying the triage result.
 
 ---
 
-### 3.2 Patient photo attachments
+### 3.2 Patient photo attachments — 🔶 SCAFFOLDING ONLY (per user decision)
 
-**Why**: Visual symptoms (rashes, wounds, swelling) are hard to describe
+**Status**: The vendor-independent parts are built. Migration
+`phase20_case_attachments.sql` adds `case_attachments` (`case_id`,
+`uploaded_by`, `storage_path` — a generic string so this works with
+whichever backend gets chosen, `content_type`, `size_bytes`, `created_at`)
+with RLS mirroring `case_outcomes`: visible to admin/the case's facility
+doctor/the submitting ASHA worker, insert-only by the same set, immutable
+by omission (no update/delete policies). `frontend/src/utils/
+imageCompression.js` is a real, working, vendor-independent client-side
+utility (canvas-based resize to 1024px max dimension + JPEG re-encode at
+quality 0.6) that runs before an image would ever touch IndexedDB.
+
+**Deliberately NOT built**: a live upload endpoint or the queued-upload path
+in `syncStore.js`. The spec itself flags the blocking decisions — storage
+backend (Supabase Storage vs external), and retention/consent policy for
+patient photographs specifically, a materially more sensitive data category
+likely triggering stricter handling under Indian health-data rules than
+structured vitals. Wiring `compressImage()` + the `case_attachments` schema
+into an actual upload flow is mechanical once those two decisions are made;
+building it now would mean guessing at a storage vendor's API or leaving
+dead code that calls a non-existent endpoint.
+
+**Why (original)**: Visual symptoms (rashes, wounds, swelling) are hard to describe
 in a structured form and a photo meaningfully helps the reviewing doctor.
 
 **Why Tier 3, not Tier 2**: Needs product decisions on: storage (Supabase
@@ -502,15 +692,22 @@ parallel to the existing case-submission queue.
 
 ---
 
-## Tier 1b — Round-2 additions (specs; not yet built)
+## Tier 1b — Round-2 additions — ✅ ALL DONE
 
-These emerged from the second hardening pass. They are documented as
-ready-to-execute specs (per the decision to keep new features as specs this
-round). 1b.1 is the highest-value follow-on to the round-2 ML work.
+These emerged from the second hardening pass. Originally documented as
+specs-only per that round's decision; all five were subsequently built (see
+the ✅ DONE status on each below). 1b.1 was the highest-value follow-on to
+the round-2 ML work.
 
-### 1b.1 Doctor triage-override + reason capture (unlocks real-label collection)
+### 1b.1 Doctor triage-override + reason capture (unlocks real-label collection) — ✅ DONE
 
-**Why**: Round 2 added a `low_confidence` abstention flag and a deterministic
+**Status**: Implemented. Migration `phase17_triage_provenance_and_override.sql`
+adds the nullable columns; `PATCH /api/cases/{case_id}/triage-override` in
+`cases.py` (schema-validated via `TriageOverride`, same facility-scoping as
+`review_case`); `BriefingCard.jsx` has an inline override control showing the
+adjusted tier + reason with visible provenance once saved.
+
+**Why (original)**: Round 2 added a `low_confidence` abstention flag and a deterministic
 NEWS2 floor, but the model still has no way to learn from a doctor disagreeing
 with its triage. Letting a reviewing doctor override the ML triage and record a
 one-line reason is the single smallest change that starts accumulating real,
@@ -538,7 +735,23 @@ tool uses it more readily than one who cannot.
 4. This is the data source `retrain_from_outcomes.py` (§1.3) reads — the two
    specs are designed to compose.
 
-### 1b.2 Unreviewed-EMERGENCY deterioration re-alert
+### 1b.2 Unreviewed-EMERGENCY deterioration re-alert — ✅ DONE
+
+**Status**: Implemented as `POST /api/push/check-emergency-escalations`
+(`require_role('admin')`, rate-limited) in `push_routes.py`. It scans
+`case_records` for `triage_level = 'EMERGENCY' AND reviewed_at IS NULL AND
+deleted_at IS NULL AND created_at < now() - 15 min`, re-emits a push via
+`push_emergency_alert` for each candidate not already escalated within the
+current threshold window, and stamps `last_escalated_at` (new column, same
+migration as §1.4) so a case is escalated at most once per
+`ESCALATION_THRESHOLD_MINUTES` interval rather than on every scheduler tick.
+This is deliberately an idempotent, repeatedly-safe-to-call endpoint rather
+than an in-process cron — intended to be invoked on a schedule by an external
+scheduler (a plain cron job, a Supabase `pg_cron` job, or a Railway cron
+add-on), since the backend itself has no persistent scheduler process. Wiring
+up that external scheduler call is an ops/deployment step, not application
+code — document the chosen scheduler and its cadence (5–15 min recommended)
+in the deployment runbook.
 
 **Why**: An EMERGENCY case that sits unreviewed past a threshold is the exact
 failure the tool exists to prevent. §1.5 surfaces this as a dashboard metric;
@@ -553,9 +766,30 @@ this turns it into an active escalation.
    duplicate spam.
 3. No new user-facing surface required beyond the existing dashboard + push.
 
-### 1b.3 Case CSV / PDF export for facility reporting
+### 1b.3 Case CSV / PDF export for facility reporting — ✅ DONE (CSV only)
 
-**Why**: PHC/district administrators must submit periodic reports up the
+**Status**: Implemented for CSV. `GET /api/analytics/export?date_from=&date_to=`
+(`require_role('doctor', 'admin')`, 10/minute rate limit, facility-scoped
+exactly like the other analytics endpoints, capped to a 366-day range)
+streams a CSV via the stdlib `csv` module (no new dependency) with columns
+matching what these same roles already see through `GET /api/cases` — this
+is a different export *format* of already-authorized data, not a new access
+grant, so the earlier "line-list needs separate authorization" concern in
+the spec below doesn't add a new exposure here. Every export is logged via
+`log_phi_access(AuditEventType.PHI_EXPORT, ...)` with the row count and date
+range. Frontend: `exportCases()` in `api/analytics.js` (triggers a browser
+file download from the streamed response), a date-range picker + "Download
+CSV" button in `AnalyticsDashboard.jsx`.
+
+**PDF is deliberately deferred**: it needs a real rendering dependency
+(`reportlab` or similar) that isn't in `requirements.txt` yet and deserves
+its own vetting (size, license, pinned version, a golden-output test) rather
+than being rushed into this pass. CSV covers the actual stated need — feeding
+a PHC/district report — without that cost. Re-open this as a small, scoped
+follow-on if a PDF-specific requirement (e.g. an official reporting template)
+shows up.
+
+**Why (original)**: PHC/district administrators must submit periodic reports up the
 health-system chain. Today that means manual re-entry from the dashboard. A
 scoped export is low-effort and removes a real recurring chore.
 
@@ -571,9 +805,27 @@ scoped export is low-effort and removes a real recurring chore.
 3. Governance: document who may export line-level (patient) data vs aggregates,
    and log every export via the §2.4 audit log.
 
-### 1b.4 Bulk ASHA onboarding via CSV
+### 1b.4 Bulk ASHA onboarding via CSV — ✅ DONE
 
-**Why**: Standing up a new facility means creating many ASHA accounts. The admin
+**Status**: Implemented. `POST /api/admin/users/bulk` (`require_role('admin')`,
+3/minute rate limit — much stricter than the single-user endpoint's 10/minute
+since one request can create up to 100 accounts, capped via
+`BulkCreateUsersRequest.users: list[..., max_length=100]`) reuses the exact
+same `_provision_user()` logic the single-user endpoint calls (extracted from
+what was previously `create_user`'s inline body) per row, so every row gets
+the identical password-policy enforcement and orphaned-auth-user rollback on
+profile-provisioning failure. One bad row (duplicate email, weak password,
+missing facility) is caught and reported per-row rather than failing the
+whole batch; a `PHI_CREATE` audit entry is still logged per successfully
+created user. Frontend: a CSV upload + client-side preview/validate step in
+`AdminUsers.jsx` (a small hand-rolled RFC4180-ish parser — handles quoted
+fields, no new dependency) showing which rows will succeed/fail *before*
+committing, with a `facility` column matched by name against the already-
+loaded facilities list (falling back to a raw `facility_id` if provided) so
+admins don't need to know facility UUIDs. Passwords are never echoed back in
+the per-row result report.
+
+**Why (original)**: Standing up a new facility means creating many ASHA accounts. The admin
 UI creates them one at a time. A CSV import makes facility rollout practical.
 
 **Implementation**:
@@ -586,9 +838,17 @@ UI creates them one at a time. A CSV import makes facility rollout practical.
 3. Security: enforce the same 12-char password policy per row; never echo
    passwords back in the result report.
 
-### 1b.5 Model-version display + per-case model provenance
+### 1b.5 Model-version display + per-case model provenance — ✅ DONE
 
-**Why**: Once the model retrains from real outcomes (§1.3), different cases will
+**Status**: Implemented. `triage_model_version` column added (migration
+`phase17_...`), populated in `submit_case` from `run_triage()`'s existing
+`model_version` field, shown on `BriefingCard.jsx` next to the timestamp
+(`low_confidence` was already added and surfaced in round 3's reconciliation,
+under that name rather than `triage_low_confidence` — same thing, no
+duplicate column). The admin System tab already showed `/api/health`'s model
+version pre-existing this change.
+
+**Why (original)**: Once the model retrains from real outcomes (§1.3), different cases will
 have been triaged by different model versions. A doctor auditing an old case, or
 an admin investigating a mis-triage, needs to know *which* model produced it.
 The backend already returns `model_version` from `predict_triage`; it just isn't
@@ -603,6 +863,460 @@ persisted or shown.
    System tab (it's already in `/api/health`).
 3. This closes the loop with the audit/traceability posture and is a
    prerequisite for trustworthy A/B comparison of model versions.
+
+---
+
+## Tier 1c — Round-3 additions — ✅ ALL DONE
+
+The user asked for a supervisor dashboard, an outbreak dashboard, a
+protocol/guideline lookup assistant, and a researched, documented decision
+on the role/access model. All three features are built; the role decision
+is docs/DECISIONS.md §25.
+
+### 1c.1 Supervisor role + team-metrics dashboard — ✅ DONE
+
+**Status**: Implemented. Fourth role `supervisor`, modeled on NHM's real
+ASHA Facilitator role (docs/DECISIONS.md §25) — facility-scoped,
+aggregate-only, non-PHI. `GET /api/supervisor/team-metrics`
+(`app/api/routes/supervisor_routes.py`) returns per-ASHA-worker submission
+count, needs_review/contraindication/deterioration rates, and tier
+distribution, using one narrow `supabase_admin` aggregate query (same
+exception class as §20/§22). `SupervisorPanel.jsx`/`TeamMetrics.jsx` render
+it; `AdminUsers.jsx`/`admin_routes.py` widened to provision the role.
+
+### 1c.2 Outbreak early-warning dashboard — ✅ DONE
+
+**Status**: Implemented. CDC's EARS C1 method (docs/DECISIONS.md §26): a
+(facility, symptom) pair is flagged when today's count exceeds the 7-day
+trailing baseline mean + 3 standard deviations, gated by a minimum floor.
+`GET /api/outbreak/signals` (`app/api/routes/outbreak_routes.py`), visible
+to `doctor`/`supervisor`/`admin`. `OutbreakSignals.jsx` is shared across
+Doctor/Supervisor/Admin panels. Informational only — explicitly not framed
+as a validated surveillance system.
+
+### 1c.3 Protocol/guideline lookup assistant — ✅ DONE
+
+**Status**: Implemented, informed by ASHABot's own published design
+(docs/DECISIONS.md §27). `generate_protocol_answer` (`app/services/llm.py`)
+is a fully separate LLM call path from the triage briefing, grounded via
+`protocol_knowledge.md` context-stuffing, refusing patient-specific
+questions. `POST /api/protocol/ask`, `GET .../questions`, `PATCH
+.../questions/{id}/curate` (`app/api/routes/protocol_routes.py`); new
+`protocol_questions` table (migration `phase25_...`) uses real RLS
+(facility-wide SELECT for every role — no PHI). `ProtocolAssistant.jsx` is
+shared across all four panels (ask/view for `asha_worker`, plus curation
+for `doctor`/`supervisor`/`admin`).
+
+---
+
+## Tier 4 — Round-5 additions (specs only, not yet built)
+
+These emerged from the round-5 ML-and-hardening pass. Several are direct
+follow-ons to the age-aware classifier work (§ ML retrain, DECISIONS §31):
+the model now reasons about paediatric physiology, but the intake form still
+can't *capture* the inputs that make that reasoning precise (age in months,
+gestational age, weight). The rest are high-value, mostly-deterministic,
+offline-first tools that fit the weak-hardware / poor-connectivity target
+without adding ML risk. Each is written implementation-ready; none is built.
+
+Prioritisation note: 4.1, 4.2, and 4.4 are the highest value-to-effort —
+each is small, each sharpens a clinical-safety guarantee the app already
+makes, and each is pure structured data + deterministic logic (no new
+dependency, no ML retrain, trivially offline). 4.3 and 4.6 are the biggest
+day-to-day utility wins for the health worker. 4.5 and 4.7 build on data
+the app already collects.
+
+### 4.1 Age-in-months entry for infants (< 2 years)
+
+**Why**: `patient_age` is an integer year, so every child under 1 is entered
+as `0` and every child under 2 collapses to `0` or `1`. That erases exactly
+the distinction the safety net and the age-aware classifier depend on most:
+a 2-week-old and an 11-month-old are both "age 0", yet the neonatal-fever
+rule (`age < 0.25` → EMERGENCY on temp ≥ 38) and the paediatric vital bands
+(HR/BP/temp normal ranges change fastest in the first year) diverge sharply
+across that range. The model is now trained on fractional infant ages
+(DECISIONS §31) but at inference receives only integer `0`, so the youngest,
+highest-risk patients are precisely where intake precision is worst. This is
+the single highest-yield data-quality fix for triage safety.
+
+**Effort**: Small.
+
+**Implementation**:
+1. **Schema** (`app/models/schemas.py`): add `age_months: Optional[int]`
+   (bounded 0–23) to `IntakeForm`. Add a validator: when `patient_age == 0`
+   (or `<= 1`), `age_months` may be set; when both are present, the effective
+   age used everywhere downstream is `age_months / 12.0`. Add a computed
+   helper `effective_age_years()` on the model returning
+   `age_months / 12 if age_months is not None else float(patient_age)`.
+2. **Backend wiring** (`cases.py::submit_case`): pass the effective age into
+   `form_data["patient_age"]` before `predict_triage()` and before persisting,
+   so the classifier and the deterministic layers receive the fractional age
+   they already understand. Persist `age_months` in a new nullable
+   `case_records.age_months` column (migration, §1.1 pattern) for audit/recall.
+3. **Frontend** (`IntakeForm.jsx`): render a "Months" number input
+   *conditionally*, only when the entered age is `0` or `1`, right beside the
+   years field (mirror the existing conditional-field pattern used for
+   `is_pregnant`). i18n keys in all three locale files (English placeholder in
+   `hi`/`ta`, per DECISIONS §10). Zod bound in `validation.js` (0–23).
+4. **Offline JS mirror** (`triageClassifier.js`): apply the same
+   `age_months → fractional age` substitution before `buildFeatureMap`, so
+   offline triage uses the precise age too. Add a case to
+   `featureParity.test.mjs`.
+5. **Tests**: `test_classifier_safety.py` — assert a 2-week-old
+   (`age_months=0`) with temp 38.5 is EMERGENCY (neonatal fever) while an
+   18-month-old (`age_months=18`) with the same temp is not force-escalated by
+   that specific rule; assert the effective-age substitution is applied.
+
+### 4.2 Gestational age (weeks) for pregnant patients
+
+**Why**: `is_pregnant` (DECISIONS §30) gates the severe-hypertension /
+preeclampsia rule, but pregnancy risk is strongly gestational-age dependent:
+preeclampsia is a concern from ~20 weeks, preterm labour before 37 weeks is
+itself an emergency pathway, and third-trimester physiology (resting
+tachycardia, lower BP baseline) changes what "normal" vitals mean. A single
+`gestational_weeks` integer unlocks materially better obstetric triage and
+sharper LLM briefings, at near-zero cost, and composes directly with the
+existing pregnancy rule.
+
+**Effort**: Small.
+
+**Implementation**:
+1. **Schema**: `gestational_weeks: Optional[int]` (bounded 0–45) on
+   `IntakeForm`; only meaningful when `is_pregnant` is true (validator: warn,
+   don't reject, if set while `is_pregnant` is false — clinicians mis-tap).
+2. **Deterministic rule** (`classifier.py::_safety_net_check`, mirrored in
+   `clinicalRules.js`): when `is_pregnant` and `gestational_weeks >= 20`, keep
+   the existing ACOG BP thresholds; additionally, `gestational_weeks` in
+   `[20, 37)` **with** `severe_abdominal_pain` or `severe_bleeding` →
+   EMERGENCY (preterm-labour / abruption red flag). Add golden-parity cases to
+   `safetyNet.test.mjs` and `test_classifier_safety.py`.
+3. **Frontend**: conditional "Weeks pregnant" input shown only when
+   `is_pregnant` is checked (same conditional pattern). Persist in a nullable
+   `case_records.gestational_weeks` column.
+4. **LLM briefing** (`llm.py`): include gestational age in the prompt context
+   when present so the differential reflects trimester.
+
+### 4.3 Offline clinical calculators (dose-by-weight, ORS/dehydration, drip rate)
+
+**Why**: The single most-requested day-to-day tool for a rural health worker
+is not triage — it's arithmetic they must get exactly right under pressure:
+paediatric drug dose by weight, ORS volume for a dehydrated child, IV drip
+rate. These are pure deterministic formulae, need no connectivity, carry no
+PHI, and involve no ML. Shipping them as an offline calculator panel turns
+VitalNet from a triage-only tool into the app a worker keeps open all shift,
+which is also the surest route to adoption. Getting these *provably* right is
+the classic "not lazy about correctness" case — each formula gets a table of
+worked reference values as its test.
+
+**Effort**: Medium (mostly careful, well-tested formula work + a simple UI).
+
+**Implementation**:
+1. **Pure module** `frontend/src/utils/clinicalCalculators.js` — no React, no
+   network. Functions: `weightBasedDose({ mgPerKg, weightKg, maxMg })`,
+   `orsVolume({ weightKg, dehydration })` (WHO Plan A/B/C), `ivDripRate(
+   { volumeMl, durationMin, dropFactor })`, `pediatricMaintenanceFluid(
+   weightKg)` (Holliday-Segar 4-2-1). Each returns a value **and** the
+   worked steps (for transparency — a health worker should see the arithmetic,
+   not just trust a black box).
+2. **A curated drug table** `frontend/src/data/pediatricDoses.json` — a
+   *small, explicitly-scoped* list of common essential-medicine paediatric
+   doses (paracetamol, ORS, zinc, amoxicillin, ...), each with a source
+   citation and hard max. **Not** a general prescribing database — a
+   docstring and an on-screen disclaimer must say so, exactly like the
+   contraindication checker's scoping (DECISIONS §17).
+3. **UI**: a new "Calculators" tab/panel (no role restriction — every user
+   gets it), each calculator a small form. Precached by the service worker so
+   it works fully offline. i18n for all labels.
+4. **Tests** (`clinicalCalculators.test.mjs`, node, no framework): a table of
+   worked reference cases per formula (e.g. "15 mg/kg paracetamol × 12 kg =
+   180 mg, capped at 500 mg"); assert exact outputs. This is the runnable
+   check the logic demands.
+5. **Explicitly out of scope**: adult dosing, IV compatibility, anything
+   requiring a real drug database. State this in the module docstring.
+
+### 4.4 Paediatric malnutrition screen (MUAC + weight-for-age z-score)
+
+**Why**: Severe acute malnutrition is one of the highest-impact,
+most-missed rural paediatric red flags, and it is invisible to a
+vitals-and-symptoms triage — a wasted child can have "normal" vitals. MUAC
+(mid-upper-arm circumference) < 115 mm is a WHO-standard, tape-measure-only,
+no-equipment red flag that an ASHA worker can capture in seconds. Adding a
+MUAC field (for children 6–59 months) plus a deterministic flag is a large
+clinical-safety win for a tiny amount of code, and it is exactly the kind of
+"catch what the vitals miss" backstop this app is built around.
+
+**Effort**: Small–medium.
+
+**Implementation**:
+1. **Schema**: `muac_mm: Optional[int]` (bounded 50–250) and optional
+   `weight_kg: Optional[float]` on `IntakeForm`, meaningful for age 0.5–5.
+2. **Deterministic flag** (a new advisory flag, like contraindication_flags —
+   never lowers a tier, only raises review): a helper
+   `check_nutrition_flags(form_data)` in a small module mirrored in JS. MUAC
+   `< 115 mm` (age 6–59 mo) → "Severe acute malnutrition (MUAC <115 mm) —
+   refer" and **floor the tier at URGENT** (via the existing NEWS2-floor
+   mechanism); MUAC `115–125 mm` → "Moderate acute malnutrition" advisory
+   flag only. Fold into `needs_review` exactly like contraindication flags.
+3. **Frontend**: MUAC input shown conditionally for under-5s; a colour-coded
+   result chip (red/yellow/green mirroring the MUAC tape) rendered inline.
+4. **Tests**: `test_classifier_safety.py` — MUAC 110 at age 2 floors to at
+   least URGENT and sets the flag; MUAC 130 does not; MUAC on an adult is
+   ignored. Mirror in a JS parity test.
+5. **Optional extension** (documented, not built): WHO weight-for-age
+   z-score from a bundled LMS table when `weight_kg` + precise age are
+   present — pure lookup, offline; specify the table source (WHO Child
+   Growth Standards) but leave the ~2 KB LMS asset for a follow-up.
+
+### 4.5 Cross-visit vitals trend sparkline for returning patients
+
+**Why**: The patient continuity code (DECISIONS §21) and the cross-visit
+deterioration flag (§22) already collect a patient's visit history, but the
+doctor only ever sees today's snapshot plus a boolean "deterioration"
+alert. A tiny inline sparkline of BP / SpO2 / HR / temp across a returning
+patient's recent visits turns that latent data into at-a-glance clinical
+context — "this is the third visit with a climbing heart rate" — with **zero
+new data collection**, just visualisation of rows already in `case_records`.
+
+**Effort**: Small–medium.
+
+**Implementation**:
+1. **Backend**: extend `GET /api/cases/by-patient-key/{key}` (already exists)
+   to include the vitals columns (`bp_systolic`, `spo2`, `heart_rate`,
+   `temperature`, `created_at`, `triage_level`) in its select, still
+   facility-scoped and audit-logged exactly as now. No new endpoint.
+2. **Frontend**: a dependency-free inline SVG sparkline component
+   (`Sparkline.jsx`, ~40 lines — no chart library, keeps the bundle light per
+   the weak-hardware constraint) rendered on `BriefingCard.jsx` when the case
+   has a `patient_key` with ≥ 2 prior visits. One sparkline per vital, most
+   recent on the right, with the current visit's point emphasised.
+3. **Accessibility**: each sparkline needs a text alternative (e.g. "heart
+   rate over last 4 visits: 78, 92, 110, 124 bpm") per the a11y pass.
+4. **Tests**: a small component test asserting the SVG path is generated from
+   a known series; no clinical-logic test needed (pure visualisation).
+
+### 4.6 Structured SBAR handoff note for referrals
+
+**Why**: The referral workflow (§2.3) records *that* a patient was referred,
+but the receiving facility gets no structured clinical handoff — the single
+biggest cause of information loss at a rural referral. SBAR
+(Situation-Background-Assessment-Recommendation) is the global standard
+handoff format. Auto-drafting an SBAR from data the case *already contains*
+(vitals, symptoms, triage, briefing) gives the receiving clinician a
+complete, skimmable summary and makes the referral genuinely useful, not
+just a status change.
+
+**Effort**: Medium.
+
+**Implementation**:
+1. **Deterministic draft first** (no LLM dependency for the core): a pure
+   function `buildSbar(caseRecord)` assembling S/B/A/R sections from
+   structured fields — Situation (age/sex/chief complaint/duration),
+   Background (known conditions, current meds, prior visits via patient key),
+   Assessment (triage tier + risk driver + any flags), Recommendation
+   (referral reason + urgency). Works fully offline, no network.
+2. **Optional LLM polish** (online only, additive): reuse the existing
+   4-tier LLM fallback (`llm.py`) to smooth the deterministic draft into
+   prose — but the deterministic SBAR is always the fallback and is never
+   *replaced* by the LLM, only reworded; the triage tier stays hard-locked
+   exactly as the briefing does.
+3. **Delivery**: render the SBAR on the referral detail view for both
+   referring and receiving facility; offer "copy to clipboard" and include it
+   in the CSV export (§1b.3). Persist the deterministic SBAR text on the
+   `referrals` row so it's available offline at the receiving end.
+4. **Tests**: assert `buildSbar` produces all four sections from a fixture
+   case and never emits PHI beyond what the case already contains; assert the
+   triage tier in the SBAR always equals the case's tier (the hard-lock
+   invariant).
+
+### 4.7 Confidence-and-acuity review routing for the doctor queue
+
+**Why**: The backend already computes two signals the doctor queue ignores:
+`low_confidence` (model abstention) and `deterioration_alert`. A case that is
+EMERGENCY **and** low-confidence, or one carrying a deterioration/
+contraindication/nutrition flag, is exactly the case a doctor should see
+first and look at hardest — yet today the queue sorts on tier + recency
+alone. Surfacing these signals as sort priority and distinct visual treatment
+routes scarce clinician attention to the riskiest, most-uncertain cases,
+using data already in every row.
+
+**Effort**: Small.
+
+**Implementation**:
+1. **Backend** (`cases.py::get_cases`): add a stable secondary sort so that
+   within a tier, cases with any of `low_confidence`, `deterioration_alert`,
+   `contraindication_flags`, (future) nutrition flag rank above unflagged
+   ones. Keep the keyset-pagination contract intact (extend the composite
+   cursor, don't break it — see the existing `before_priority` logic).
+2. **Frontend** (`DoctorPanel.jsx` pending-review list): a distinct
+   left-border / badge treatment for flagged cases and a one-line reason
+   ("model uncertain", "repeat severe visit", "possible contraindication"),
+   colour-safe per the a11y contrast tokens.
+3. **No schema change** — every signal already exists on the row.
+4. **Tests**: assert the sort places a flagged EMERGENCY above an unflagged
+   EMERGENCY of the same recency; assert pagination stays stable across the
+   new sort key.
+
+### 4.8 ABHA (Ayushman Bharat Health Account) integration — spec only
+
+**Status**: Specification, not implemented. No ABDM sandbox credentials
+exist for this project; nothing below is wired into any code path. This
+section exists so a future implementation has a concrete starting design
+instead of starting from zero, and so VitalNet's existing patient-key
+mechanism (`docs/DECISIONS.md` §21) is deliberately designed to not
+conflict with it.
+
+**Why**: India's Ayushman Bharat Digital Mission (ABDM) issues every
+citizen a portable, opt-in health ID (ABHA number, a 14-digit ID, and/or an
+ABHA address, a human-readable `name@abdm` handle) meant to link health
+records across providers. VitalNet's own patient continuity key
+(`XXXX-XXXX`, generated client-side, internal to this app only — §21) was
+deliberately scoped to solve a narrower, more urgent problem: letting an
+ASHA worker recognize a *returning* patient across visits to *this app*,
+without any dependency on connectivity, a government API, or a patient
+having already enrolled in ABDM (rural enrollment is uneven). ABHA
+integration is a genuinely separate, larger effort — real-time API
+dependency on an external government system, a formal consent-manager
+handshake, and PHI flowing to/from a system outside VitalNet's own audit
+boundary — and is out of scope for the offline-first rural PHC triage tool
+this app currently is. This spec exists so that *if* ABDM integration is
+ever prioritized, it is designed to extend the existing patient-key
+mechanism rather than replace or conflict with it.
+
+**Effort**: Large — genuinely out of scope for an autonomous coding pass;
+requires ABDM sandbox enrollment (a real organizational registration, not
+a code change), a consent-manager integration decision, and likely legal/
+compliance review beyond `docs/COMPLIANCE_DPDP.md`'s current scope (ABDM's
+consent framework is a distinct regulatory regime layered on top of, not
+replacing, DPDP).
+
+**Spec**:
+
+1. **ABDM sandbox first, always.** Any implementation work starts against
+   the ABDM sandbox environment (https://sandbox.abdm.gov.in — a real
+   external dependency to register for, not something this spec can
+   pre-configure) with synthetic ABHA IDs. No real-patient ABHA number is
+   ever exercised against non-production code.
+2. **Capture field, additive and optional.** A new nullable
+   `case_records.abha_id` (or address, whichever the eventual integration
+   targets) column, captured *in addition to* — never instead of — the
+   existing internal `patient_key`. An ASHA worker without a scanner/reader
+   for the patient's ABHA card, or a patient not yet enrolled in ABDM, must
+   be able to submit a case exactly as today, with the field simply absent.
+   ABHA capture is never a submission blocker.
+3. **Patient-key fallback mapping.** `patient_key` remains the primary
+   internal identity `useLocalTriage`/cross-visit deterioration detection
+   (§22) key off, since it is guaranteed available (generated locally,
+   works offline) where `abha_id` is not. If both are present on a
+   patient's records, a mapping table (`patient_key <-> abha_id`, not a
+   replacement of one by the other) lets a future feature reconcile the
+   two without forcing a migration of existing `patient_key`-keyed data.
+   This mapping is itself PHI and inherits the same RLS/audit posture as
+   `case_records`.
+4. **Consent-manager notes.** ABDM requires interaction through a
+   registered Consent Manager (CM) — VitalNet would need to either
+   integrate with an existing CM or the ABDM Consent Manager reference
+   sandbox, and obtain patient consent *through that flow* before any
+   health-record fetch/push, which is a distinct consent artifact from
+   VitalNet's own DPDP consent-capture gate (`docs/COMPLIANCE_DPDP.md`) —
+   the two must not be conflated or treated as satisfying each other.
+   Any future implementation should treat the ABDM consent artifact
+   (a signed consent request/grant, with its own ID and expiry) as a
+   first-class audited record, same posture as `phi_audit_log` today.
+5. **Read scope, deliberately unspecified.** Whether a future integration
+   only *links* an ABHA ID (identity linking, no record exchange) or also
+   *fetches* prior records via ABDM's Health Information Exchange is an
+   explicit open product decision, not decided by this spec — record
+   exchange is a materially larger scope (consent-manager record-fetch
+   flows, FHIR-format health records to parse/display) than identity
+   linking alone, and should be scoped as a separate decision once linking
+   itself is validated.
+6. **Not this app's launch blocker.** See "Pilot v1 scope" below — ABHA
+   integration is explicitly not required for a first pilot deployment.
+
+---
+
+## Pilot v1 scope — launch blockers and surface area
+
+This section names what must be true, and what can reasonably be deferred,
+before VitalNet is used with real patients at any facility, even a small
+controlled pilot. It complements `docs/CLINICAL_GOVERNANCE.md` (regulatory/
+clinical-validation gaps) and `docs/CLINICAL_REVIEW.md` (the rules-engine
+sign-off gate) — this section is about product/deployment scope, not model
+correctness.
+
+### Launch blocker: hi/ta translations are English placeholders
+
+**This blocks any pilot where ASHA workers or doctors are not comfortable
+working in English.** `hi.json`/`ta.json` are currently byte-for-byte
+copies of `en.json` (`apps/web/src/locales/README.md`,
+`docs/DECISIONS.md` §10) — selecting Hindi or Tamil in the language
+switcher changes `document.documentElement.lang` and persists the
+preference, but every displayed string, including every symptom label and
+clinical option, is still English. This was a deliberate choice, not an
+oversight: machine-translating clinical terminology without a clinician
+review pass risks a mistranslated symptom option changing what a worker
+believes they're recording, which is a patient-safety issue, not a
+cosmetic one. Real Hindi/Tamil text requires a clinician (or a qualified
+medical translator with clinician review) pass on every string in
+`en.json`, not just `hi.json`/`ta.json` file population — a coding task
+cannot close this gap. **Any pilot site where the primary working language
+of ASHA workers/doctors is not English should not launch until this is
+done for that site's language**, full stop — English-fluent pilot sites
+(if any exist in VitalNet's actual target deployment geography) are the
+only ones this does not block.
+
+### Pilot v1 surface — what's actually needed for a first controlled trial
+
+A minimal first pilot needs the safety-critical loop and nothing else has
+to be *removed* to be safe — but a smaller surface reduces the training
+burden on a small pilot cohort and narrows what needs monitoring closely
+during an initial trial. Suggested split, for whoever scopes an actual
+pilot to decide against real constraints (facility count, staffing,
+timeline):
+
+**Core (the loop a pilot cannot function without)**:
+- Intake form + consent capture, online and offline (`IntakeForm.jsx`)
+- Local + server triage (rules-first once `docs/CLINICAL_REVIEW.md`'s
+  sign-off lands; hybrid/model-primary until then) with the safety net and
+  NEWS2 floor
+- Doctor review dashboard, override, and outcome recording
+  (`DoctorPanel.jsx`'s Pending Review / All Cases)
+- Offline outbox + background sync (`lib/outbox.js`)
+- PHI audit logging (non-optional, not a feature toggle)
+- `asha_worker`/`doctor` roles, RLS
+
+**Not required for v1** (present in the codebase, genuinely useful, but a
+pilot can defer without compromising the core safety loop):
+- `supervisor` role + Team Metrics dashboard (needs a facility with an
+  actual ASHA-Facilitator-equivalent role staffed to be meaningful)
+- Outbreak Signals dashboard (needs enough facilities reporting for EARS
+  aggregation to mean anything — a single-facility pilot has no population
+  to aggregate over)
+- Protocol/guideline assistant (valuable, but adds an LLM-dependent
+  surface + a curation workflow that's easier to introduce once the core
+  loop is validated)
+- Admin CSV bulk user import, analytics dashboard + CSV export (a handful
+  of pilot users can be onboarded manually; analytics needs volume to be
+  meaningful)
+- Web Push notifications, voice-to-text intake
+- QR patient-continuity card, cross-visit deterioration trend flag (useful
+  once there's a returning-patient population to actually observe)
+- ABHA integration (§4.8 — spec only, not implemented; explicitly not a
+  pilot blocker)
+- The SMS-alert scaffolding and photo-attachment scaffolding (neither has
+  a live endpoint — see `docs/DECISIONS.md` §11, §14)
+
+### Optional: a `VITE_PILOT_MODE` flag
+
+Not built. If a real pilot needs a genuinely reduced UI surface (rather
+than the above being purely a "what to train pilot users on" list), a
+single `VITE_PILOT_MODE=true` env var read once in `App.jsx`'s role-based
+routing could hide the "Not required for v1" panels/nav entries above per
+role, without deleting any code or requiring a build variant. This is
+scaffolding-only guidance, not a decision to build it — implement only
+once an actual pilot's requirements confirm the UI needs hiding (as
+opposed to the pilot org just not being trained on those panels, which
+needs no code change at all).
 
 ---
 

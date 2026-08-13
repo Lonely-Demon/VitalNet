@@ -101,16 +101,11 @@ def test_classifier_direct():
         try:
             result = predict_triage(test_case["data"])
 
-            # lgtm[py/clear-text-logging-sensitive-data] — synthetic fixture
-            # data defined in this file, printed to stdout for a human running
-            # this script locally; no real patient data ever reaches this path.
-            print(f"Triage Level: {result['triage_level']}")
-            print(f"Confidence: {result['confidence_score']:.3f}")
-            print(f"Risk Driver: {result['risk_driver']}")
-            print(f"Safety net triggered: {result.get('safety_net_triggered')}")
 
+            # Keep test output free of classifier results: the result object is
+            # intentionally evaluated only for its expected-tier assertion.
             if result["triage_level"] != test_case["expected"]:
-                print(f"FAILED: expected {test_case['expected']}, got {result['triage_level']}")
+                print("FAILED: classifier result did not match the test expectation")
                 failures += 1
             else:
                 print("PASSED")

@@ -2,9 +2,9 @@ name: VitalNet CI
 
 on:
   push:
-    branches: [ main, dev ]
+    branches: [ main, dev, test ]
   pull_request:
-    branches: [ main, dev ]
+    branches: [ main, dev, test ]
 
 permissions:
   contents: read
@@ -19,11 +19,11 @@ jobs:
     timeout-minutes: 12
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
           fetch-depth: 1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.13'
       - name: Install Dependencies
@@ -45,37 +45,91 @@ jobs:
     timeout-minutes: 12
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
           fetch-depth: 1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - name: Install (no install scripts)
-        run: npm ci --prefix frontend --ignore-scripts
-      - name: Offline-model parity (JS == server model)
-        # Guards that the pure-JS offline tree evaluator produces the SAME
-        # triage as the server model on the committed golden vectors. If this
-        # fails, offline triage would diverge from online — block the merge.
-        run: npm run test:parity --prefix frontend
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
+      - name: Install workspace deps (no install scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: clinical-core tests
+        # The single source of clinical truth (packages/clinical-core) — every
+        # rule's embedded citation+vector, the ported safety/fuzz suites, and
+        # the golden vectors (incl. the tree-evaluator and feature-engineering
+        # golden vectors that used to need separate apps/web parity suites —
+        # Round 6 rebuild plan Phase 5: apps/web now imports this package
+        # directly instead of maintaining its own mirrored copies, so there is
+        # nothing left in apps/web that could drift from the server). If this
+        # fails, a clinical rule regressed.
+        run: pnpm --filter @vitalnet/clinical-core test
       - name: Build
-        run: npm run build --prefix frontend
+        run: pnpm --filter @vitalnet/web run build
         env:
           VITE_SUPABASE_URL: https://example.supabase.co
           VITE_SUPABASE_ANON_KEY: ci-placeholder-anon-key
           VITE_API_BASE_URL: http://localhost:8000
+
+  a11y-frontend-pr:
+    # WCAG 2 A/AA scan (axe-core via Playwright) of the main screen for every
+    # role. Same no-secrets posture as build-frontend-pr: every test drives
+    # the dev server against a mocked Supabase/legacy-API backend
+    # (tests/helpers/mockBackend.js) rather than a live project, so untrusted
+    # PR code never sees real credentials. See docs/ACCESSIBILITY.md.
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
+      - name: Install workspace deps (no install scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build clinical-core (workspace dependency, not auto-built by --ignore-scripts)
+        # apps/web imports @vitalnet/clinical-core's compiled dist/ (its
+        # package.json "exports" point there), but nothing triggers that
+        # build automatically here — build-frontend-pr only gets it as a
+        # side effect of its "clinical-core tests" step's pretest hook.
+        # The dev server this job's Playwright tests run against needs it
+        # built explicitly, or every page importing it 404s on import.
+        run: pnpm --filter @vitalnet/clinical-core run build
+      - name: Install Playwright's Chromium
+        run: pnpm --filter @vitalnet/web exec playwright install --with-deps chromium
+      - name: Run axe-core accessibility suite
+        run: pnpm --filter @vitalnet/web exec playwright test tests/a11y.spec.js
+        env:
+          CI: true
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+          VITE_API_BASE_URL: http://localhost:8000
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: failure()
+        with:
+          name: a11y-report-${{ github.sha }}
+          path: apps/web/playwright-report/
+          retention-days: 14
 
   test-backend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: github.event_name == 'push'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
           fetch-depth: 1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.13'
       - name: Install Dependencies
@@ -101,20 +155,63 @@ jobs:
     timeout-minutes: 12
     if: github.event_name == 'push'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
           fetch-depth: 1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - name: Install (no install scripts)
-        run: npm ci --prefix frontend --ignore-scripts
-      - name: Offline-model parity (JS == server model)
-        run: npm run test:parity --prefix frontend
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
+      - name: Install workspace deps (no install scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: clinical-core tests
+        run: pnpm --filter @vitalnet/clinical-core test
       - name: Build
-        run: npm run build --prefix frontend
+        run: pnpm --filter @vitalnet/web run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+
+  sbom:
+    # Software Bill of Materials — supply-chain transparency (docs/SECURITY.md
+    # "Dependency management"). Diagnostic/compliance artifact, not a merge
+    # gate: it only fails if the SBOM tooling itself breaks, not on anything
+    # about the dependency contents (that's Dependabot's job).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
+        with:
+          version: '10'
+      - name: Generate backend SBOM (CycloneDX)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir cyclonedx-bom==7.3.0
+          cyclonedx-py requirements backend/requirements.txt -o backend-sbom.json --of json
+      - name: Install workspace deps (needed for an accurate SBOM)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Generate frontend SBOM (CycloneDX)
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file ../../frontend-sbom.json --ignore-npm-errors
+        working-directory: apps/web
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sbom-${{ github.sha }}
+          path: |
+            backend-sbom.json
+            frontend-sbom.json
+          retention-days: 90

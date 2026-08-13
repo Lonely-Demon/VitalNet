@@ -4,7 +4,13 @@ _Model version: 3.0.0. This card documents what the model is, how it was built,
 what its metrics do and do not mean, and its limitations. Read it before relying
 on, extending, or citing the model. For the architecture and training rationale,
 see `README.md` in this directory; for regeneration, see
-`backend/scripts/train_classifier.py`._
+`tools/training/train_classifier.py`._
+
+_**This describes the legacy FastAPI backend** (`backend/app/`), still the
+live-serving system today. A parallel advisory-only architecture (rules
+engine authoritative, model advisory, Saabas attribution instead of SHAP)
+runs in `apps/api` but has not yet received production traffic — see
+`README.md`'s note in this directory and `docs/DECISIONS.md` §33._
 
 ## Intended use
 
@@ -23,14 +29,15 @@ clearance (CDSCO/CE/FDA) and has not undergone clinical trial validation.
 ## Model
 
 - **Type:** a single `sklearn.ensemble.HistGradientBoostingClassifier`
-  (gradient-boosted decision trees), 3 classes, on **45 engineered clinical
+  (gradient-boosted decision trees), 3 classes, on **43 engineered clinical
   features** (`app/ml/clinical_features.py`).
 - **One model, two runtimes:** the same trained model runs server-side (Python,
   from `triage_classifier.pkl`, with a bundled SHAP `TreeExplainer` for
   per-patient explanations) and in the browser for offline triage (as
-  `frontend/public/models/triage_trees.json`, evaluated by a dependency-free JS
-  tree walker — no onnxruntime). A golden-vector parity test enforces that the
-  two produce identical classifications.
+  `apps/web/public/models/triage_trees.json`, evaluated by a dependency-free JS
+  tree walker — no onnxruntime). A golden-vector test
+  (`packages/clinical-core/test/treeEvaluator.golden.test.ts`) enforces that
+  the two produce identical classifications.
 - **Deterministic safety layers wrap the model** (see `app/ml/classifier.py`):
   a **safety net** force-escalates unambiguous extreme presentations (SpO2 < 85,
   HR < 35 / > 170, systolic BP < 70 / > 220, temp > 41.5 / < 33, neonatal fever,
@@ -41,6 +48,21 @@ clearance (CDSCO/CE/FDA) and has not undergone clinical trial validation.
 - **Abstention:** a `low_confidence` flag is raised when the top-class
   probability < 0.55 or the top-two margin < 0.15, and surfaced in the UI as
   "model uncertain — clinician review recommended."
+- **Contextual features are now all real signals.** A prior round's audit
+  found that `time_of_day_risk`, `epidemic_alert_level`, and the old
+  `geographic_risk`/`seasonal_risk` placeholders were constant (or
+  effectively constant) across the entire training set — `datetime.now()`
+  runs once per training script invocation, so every one of the 36,000
+  training patients got the same value, and a gradient-boosted tree can
+  never learn a split on a constant feature. These contributed **zero**
+  influence on any prediction despite being computed on every request.
+  `time_of_day_risk`/`epidemic_alert_level` were removed outright (43
+  features, down from 45); `seasonal_risk`/`geographic_risk` were rebuilt as
+  real signals — `tools/training/train_classifier.py` now samples a
+  `_reference_month` per synthetic patient and correlates monsoon-season
+  (June–September) + rural/tribal location with a real dengue/malaria-like
+  symptom-probability bump, so the model has genuine training-time variance
+  and a real label correlation to learn from. See `docs/DECISIONS.md` §23.
 
 ## Training data — synthetic, evidence-informed (important caveat)
 
@@ -54,7 +76,7 @@ vital-sign reference ranges, with a deliberate hypertensive-crisis extension.
 The generator also simulates the rural reality of **missing vitals** (no BP
 cuff / pulse-ox on ~6–28% of samples per vital) and a few edge syndromes (silent
 MI / atypical presentation, sepsis-without-fever). Full details and the exact
-thresholds: `app/ml/README.md` and `scripts/train_classifier.py`.
+thresholds: `app/ml/README.md` and `tools/training/train_classifier.py`.
 
 > **What the metrics below mean — and don't.** Accuracy is measured against the
 > synthetic label generator. It quantifies *how faithfully the model learned the
@@ -70,22 +92,22 @@ Held-out test set: 5,400 samples (15% split). 5-fold stratified CV on all 36,000
 
 | Metric | Value |
 |---|---|
-| Accuracy (held-out) | 98.9% |
-| Accuracy (5-fold CV) | 99.2% |
-| EMERGENCY recall — model alone (held-out) | 98.3% |
-| EMERGENCY recall — model alone (CV) | 98.6% |
-| Expected Calibration Error (ECE, 10-bin) | 0.0016 |
+| Accuracy (held-out) | 99.0% |
+| Accuracy (5-fold CV) | 99.1% |
+| EMERGENCY recall — model alone (held-out) | 98.8% |
+| EMERGENCY recall — model alone (CV) | 98.5% |
+| Expected Calibration Error (ECE, 10-bin, class-balanced set) | 0.0020 |
 
 Held-out confusion matrix (rows = true ROUTINE/URGENT/EMERGENCY):
 
 ```
         pred:  ROUTINE  URGENT  EMERGENCY
-ROUTINE         1799       1        0
-URGENT             9    1773       18
-EMERGENCY          1      29     1770
+ROUTINE         1800       0        0
+URGENT             9    1769       22
+EMERGENCY          3      18     1779
 ```
 
-**On the 30 model-alone EMERGENCY false negatives:** these are borderline cases
+**On the 21 model-alone EMERGENCY false negatives:** these are borderline cases
 the model placed in URGENT/ROUTINE. The deterministic safety net + NEWS2 floor
 run *on top of* the model at inference time and guarantee EMERGENCY for the
 **unambiguous** critical subset (extreme vitals, critical symptoms) and at least
@@ -96,10 +118,28 @@ are the safeguard. **We do not claim zero missed emergencies on real patients** 
 we claim a layered design where the unambiguous cases are caught deterministically
 and the ambiguous ones are flagged for a clinician.
 
-**Calibration:** ECE of 0.0016 indicates the raw boosted-tree probabilities are
-already well-calibrated on this data, so no post-hoc calibration transform is
-applied (it would also have to be mirrored exactly in the JS offline evaluator to
-preserve parity). The abstention flag is the shipped uncertainty mechanism.
+**Calibration:** ECE of 0.0020 on the class-balanced test set indicates the raw
+boosted-tree probabilities are already well-calibrated on *that* distribution, so
+no post-hoc calibration transform is applied (it would also have to be mirrored
+exactly in the JS offline evaluator to preserve parity). The abstention flag is
+the shipped uncertainty mechanism.
+
+**Realistic-prevalence validation (new):** the class-balanced ECE above measures
+calibration against an even 33/33/33 class split, which is *not* the distribution
+VitalNet sees in the field (mostly ROUTINE). `tools/training/train_classifier.py`
+separately subsamples the same held-out test set down to a **~85% ROUTINE / 12%
+URGENT / 3% EMERGENCY** realistic prevalence (n=2,117: 1,800 ROUTINE / 254 URGENT
+/ 63 EMERGENCY) and re-measures ECE and the `low_confidence` abstention rate
+against it — validating the *same fixed* 0.55-probability / 0.15-margin
+thresholds under the deployment-shape distribution, not just the training
+distribution. Result: accuracy 99.8%, ECE 0.0050 (still low, though roughly 2.5x
+the balanced-set figure — expected, since a model this confident on the dominant
+ROUTINE class naturally shows a slightly larger absolute calibration gap when
+that class dominates the sample), abstention rate 0.0% (the model was never
+uncertain on this particular realistic-prevalence sample — a genuinely easy
+regime for a model this accurate, not evidence the abstention mechanism is
+broken; it fires on the harder borderline cases the balanced test set surfaces
+proportionally more of).
 
 ## Known limitations
 
@@ -109,8 +149,43 @@ preserve parity). The abstention flag is the shipped uncertainty mechanism.
 - No respiratory rate or supplemental-O2 status (not collected by the intake
   form), so the NEWS2 approximation omits those parameters.
 - Trained for rural Indian primary care; not validated elsewhere.
-- The safety net's paediatric HR floor is intentionally conservative (may
-  over-triage some children to URGENT — an accepted safe-side tradeoff).
+- The safety net's + NEWS2 floor's paediatric thresholds are intentionally
+  conservative and NOT age-adjusted (they must stay dead-simple and mirror
+  1:1 in JS): a normal infant's HR ~140 or systolic BP ~85 can be floored to
+  URGENT by the adult NEWS2 bands. This is mild over-triage in the safe
+  direction (never EMERGENCY, never a missed escalation) — an accepted
+  tradeoff, unchanged in v3.1.0.
+- **Model-level infant over-triage — FIXED in v3.1.0** (was a documented
+  limitation in v3.0.0): a hemodynamically normal infant (e.g. 6-month-old,
+  HR 140, BP 85/55 — all normal for age) was previously escalated to
+  EMERGENCY by the *model's own judgment* because (a) the synthetic-label
+  scorer age-adjusted HR and temperature but **not systolic BP**, so a normal
+  infant's low-for-adult BP scored as "hypotension" and the label itself said
+  EMERGENCY, and (b) infants were only ~1.7% of the training set. v3.1.0 adds
+  an age-banded paediatric BP scorer (PALS 5th-percentile hypotension
+  thresholds), age-appropriate BP generation, an age-gated qSOFA hypotension
+  criterion, and ~22% paediatric oversampling. That exact case now classifies
+  URGENT (the conservative floor), not EMERGENCY, while genuinely sick
+  children (frank hypotension for age, SpO2 84, neonatal fever) still escalate
+  correctly. See `docs/DECISIONS.md` §31.
+- **Altitude over-triage — still a documented limitation** (not fixable
+  without an altitude field): an asymptomatic chronic high-altitude resident
+  with baseline SpO2 ~88% is escalated (URGENT by the floor, sometimes
+  EMERGENCY by the model). Without an altitude/baseline-SpO2 input the app
+  cannot distinguish adapted chronic hypoxia from acute hypoxia, and treating
+  an isolated SpO2 of 88 as concerning is the clinically safe default. A
+  future `baseline_spo2` or altitude field would resolve it.
+- **No monotonic constraints (considered, currently infeasible):** several
+  engineered features are constructed as unambiguous "higher = worse" scores
+  (`shock_index`, `sepsis_risk_score`, `hemodynamic_instability`,
+  `respiratory_distress_score`, `cardiac_risk_score`), and constraining the
+  model to respect that monotonically would make behavior in sparse/
+  out-of-distribution feature-space provably safe rather than merely
+  probable. Verified directly: `HistGradientBoostingClassifier` in the pinned
+  scikit-learn 1.9.0 raises `ValueError: monotonic constraints are not
+  supported for multiclass classification` for this 3-class problem — not
+  implemented here to avoid an unplanned scikit-learn upgrade. Worth
+  revisiting if/when the pin moves.
 
 ## Ethical & safety considerations
 
@@ -121,16 +196,29 @@ preserve parity). The abstention flag is the shipped uncertainty mechanism.
   triage never silently fails.
 - **Transparency:** SHAP explanations accompany model predictions; safety-net /
   floor escalations state their deterministic reason.
+- **Contraindication flags are advisory, not comprehensive:**
+  `app/ml/contraindications.py` checks a small curated list of free-text
+  keyword matches (see `docs/DECISIONS.md` §17) — it never changes the
+  triage tier, only forces `needs_review`, and does not attempt general
+  drug-drug interaction checking (no structured drug database exists here).
 - **No PII in logs:** validation errors are scrubbed of input values
   (`app/main.py`).
+- **Fairness and drift monitoring:** `tools/training/fairness_audit.py`
+  (subgroup accuracy/EMERGENCY-recall by age band and sex) and
+  `tools/training/drift_monitor.py` (feature-distribution drift, live data
+  vs. training distribution) are operator-run diagnostics — see `README.md`'s
+  "Fairness audit and drift monitoring" section. Both are synthetic-data
+  checks, same caveat as the metrics above; neither is a substitute for
+  real-world validation.
 
 ## Regenerating / changing the model
 
-`cd backend && pip install -r requirements.txt -r requirements-train.txt &&
-python scripts/train_classifier.py`. This retrains and re-exports the `.pkl`,
-`triage_trees.json`, `features_config.json`, and the golden-vector fixture from
-one run, and asserts py-pkl == onnx == tree-JSON parity. If you change
-`clinical_features.py`, mirror it in `frontend/src/utils/triageClassifier.js` and
-re-run — the frontend parity test (`npm run test:parity`) will fail otherwise.
-Never bump `scikit-learn` without retraining in the same change (see
-`app/ml/README.md`).
+`cd tools/training && pip install -r ../../backend/requirements.txt -r
+../../backend/requirements-train.txt && python train_classifier.py` (after
+`pnpm --filter @vitalnet/clinical-core build`). This retrains and re-exports
+the `.pkl`, `triage_trees.json`, `features_config.json`, and the golden-vector
+fixtures from one run, and asserts py-pkl == onnx == tree-JSON parity. Labels
+and features both come from `packages/clinical-core` (via `cli.mjs`) — change
+`packages/clinical-core/src/rules/` or `features.ts` and re-run; there is
+nothing else to keep in sync. Never bump `scikit-learn` without retraining in
+the same change (see `app/ml/README.md`).

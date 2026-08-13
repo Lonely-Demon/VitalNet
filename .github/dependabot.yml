@@ -1,11 +1,21 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
+# Dependabot version updates.
 # https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
+#
+# Coverage note (kept current with the Round 6 monorepo layout):
+#   - /backend (pip): the legacy FastAPI backend, still deployable.
+#   - / (npm): the pnpm workspace root — one pnpm-lock.yaml covers BOTH
+#     apps/web and packages/clinical-core, so a single root entry monitors
+#     the entire post-Round-6 frontend surface (React 19, Vite, zod,
+#     @supabase/supabase-js, etc.). The old "/frontend" directory no longer
+#     exists (Round 6 moved it to apps/web), so that entry was silently inert
+#     and has been removed.
+#   - github-actions.
+# NOT covered by Dependabot: apps/api (Deno/Hono). Deno is not a supported
+# Dependabot ecosystem — its deps (deno.lock) need a manual review cadence or
+# a Renovate config; tracked as a known gap in docs/SECURITY.md.
 version: 2
 updates:
-  # 1. Backend Dependencies (Python/Pip)
+  # Backend dependencies (legacy FastAPI — Python/pip)
   - package-ecosystem: "pip"
     directory: "/backend"
     schedule:
@@ -13,15 +23,15 @@ updates:
     target-branch: "dev"
     open-pull-requests-limit: 5
 
-  # 2. Frontend Dependencies (NPM)
+  # Frontend workspace (pnpm) — root lockfile covers apps/web + packages/clinical-core
   - package-ecosystem: "npm"
-    directory: "/frontend"
+    directory: "/"
     schedule:
       interval: "daily"
     target-branch: "dev"
     open-pull-requests-limit: 5
 
-  # 3. Actions Dependencies (GitHub Actions)
+  # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

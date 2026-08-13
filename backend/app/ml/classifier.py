@@ -2,9 +2,9 @@
 VitalNet Classifier Interface.
 
 Loads the single unified HistGradientBoostingClassifier (see
-backend/scripts/train_classifier.py for training + the clinical rationale)
+tools/training/train_classifier.py for training + the clinical rationale)
 and exposes:
-  - predict_triage() / run_triage() — main prediction entry point
+  - predict_triage() — main prediction entry point
   - get_classifier_info() — startup/health-check introspection
 
 Two safety layers run on every prediction, in order:
@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 import numpy as np
+
+from app.ml.contraindications import check_contraindications
 
 logger = logging.getLogger("vitalnet")
 
@@ -54,6 +56,17 @@ LOW_CONFIDENCE_MARGIN = 0.15     # top-two probability gap below this = uncertai
 CRITICAL_SYMPTOMS_OVERRIDE = {
     "altered_consciousness", "seizure", "severe_bleeding", "swelling_face_throat",
 }
+
+# Severe features of preeclampsia this app can actually observe (ACOG
+# Practice Bulletin 222) — used only alongside is_pregnant + a preeclampsia-
+# range BP reading below (docs/DECISIONS.md §30).
+PREECLAMPSIA_SEVERE_SYMPTOMS = {"severe_headache", "severe_abdominal_pain"}
+
+
+def _readable(symptom_codes: set) -> str:
+    """'altered_consciousness' -> 'altered consciousness', comma-joined and sorted."""
+    return ", ".join(sorted(s.replace("_", " ") for s in symptom_codes))
+
 
 # ── NEWS2 "concerning single vital" floor (C1) ─────────────────────────────
 # The safety net (above) escalates EXTREME single vitals straight to EMERGENCY.
@@ -119,8 +132,8 @@ FEATURE_LABELS = {
     "pediatric_fever_risk": "pediatric fever risk", "elderly_fall_risk": "elderly fall risk",
     "adult_cardiac_risk": "adult cardiac risk", "obstetric_emergency_risk": "obstetric emergency risk",
     "trauma_severity_score": "trauma severity", "mental_health_crisis": "mental health crisis indicators",
-    "time_of_day_risk": "time-of-day risk factor", "seasonal_risk": "seasonal disease risk",
-    "geographic_risk": "geographic disease risk", "epidemic_alert_level": "epidemic alert level",
+    "seasonal_risk": "seasonal disease risk",
+    "geographic_risk": "geographic disease risk",
     "healthcare_accessibility": "healthcare accessibility",
 }
 
@@ -136,7 +149,7 @@ def load_classifier() -> bool:
     if not PKL_PATH.exists():
         raise RuntimeError(
             f"Triage classifier not found at {PKL_PATH}. "
-            "Run backend/scripts/train_classifier.py to generate it."
+            "Run tools/training/train_classifier.py to generate it."
         )
 
     try:
@@ -180,7 +193,7 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
     symptoms = set(form_data.get("symptoms") or [])
     hit = symptoms & CRITICAL_SYMPTOMS_OVERRIDE
     if hit:
-        readable = ", ".join(sorted(h.replace("_", " ") for h in hit))
+        readable = _readable(hit)
         return f"Critical symptom present: {readable}"
 
     age = form_data.get("patient_age")
@@ -205,7 +218,7 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
             "severe_headache", "weakness_one_side", "difficulty_speaking", "altered_consciousness",
         }
         if neuro_hit:
-            readable = ", ".join(sorted(h.replace("_", " ") for h in neuro_hit))
+            readable = _readable(neuro_hit)
             return (
                 f"Hypertensive crisis (systolic BP {bp_sys} mmHg) with neurological "
                 f"symptom(s): {readable} — possible hypertensive encephalopathy/stroke"
@@ -213,6 +226,22 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
 
     if temp is not None and (temp > 41.5 or temp < 33.0):
         return f"Extreme body temperature ({temp}°C)"
+
+    if form_data.get("is_pregnant"):
+        bp_dia = form_data.get("bp_diastolic")
+        if bp_sys is not None and bp_dia is not None:
+            if bp_sys >= 160 or bp_dia >= 110:
+                return (
+                    f"Severe hypertension in pregnancy (BP {bp_sys}/{bp_dia} mmHg) "
+                    f"— possible severe preeclampsia"
+                )
+            preeclampsia_hit = symptoms & PREECLAMPSIA_SEVERE_SYMPTOMS
+            if (bp_sys >= 140 or bp_dia >= 90) and preeclampsia_hit:
+                readable = _readable(preeclampsia_hit)
+                return (
+                    f"Hypertension in pregnancy (BP {bp_sys}/{bp_dia} mmHg) with severe "
+                    f"feature(s): {readable} — possible preeclampsia with severe features"
+                )
 
     return None
 
@@ -238,6 +267,12 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
         [[features[name] for name in _feature_names]], dtype=np.float32
     )
 
+    # Contraindication/interaction flags (app/ml/contraindications.py) — an
+    # independent, additive check that never changes the triage tier itself;
+    # the caller (cases.py) folds any flag into needs_review. Computed
+    # before either exit path below since it applies regardless of tier.
+    contraindication_flags = check_contraindications(form_data)
+
     # Layer 1 — deterministic safety net: extreme presentations -> EMERGENCY,
     # independent of the model. Certain by construction, so never low-confidence.
     safety_reason = _safety_net_check(form_data)
@@ -249,6 +284,7 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
             "model_version": _model_version,
             "safety_net_triggered": True,
             "low_confidence": False,
+            "contraindication_flags": contraindication_flags,
         }
 
     # Layer 2 — trained model.
@@ -288,6 +324,7 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
         "safety_net_triggered": False,
         "news2_floor_triggered": bool(floor_reason),
         "low_confidence": low_confidence,
+        "contraindication_flags": contraindication_flags,
     }
 
 
@@ -348,7 +385,3 @@ def get_classifier_info() -> Dict[str, Any]:
         },
         "is_enhanced": False,  # legacy field name kept for API stability
     }
-
-
-# Backwards-compatible alias — cases.py imports run_triage
-run_triage = predict_triage

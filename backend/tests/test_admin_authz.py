@@ -1,25 +1,13 @@
 """
-Authorization regression test for the admin surface.
-
-Every route under app/api/routes/admin_routes.py uses the RLS-bypassing
-service-role client (supabase_admin). Its ONLY access-control boundary is
-require_role('admin') — there is no RLS backstop (see the SECURITY NOTE in
-app/core/database.py). This test asserts that boundary is present on every admin
-route, so a future route added without it fails CI instead of silently exposing
-cross-tenant data.
-
-Sets fake JWT-format Supabase creds in the environment before import so the
-module-level client construction in database.py succeeds without a real project
-(no network is made at construction time). Run:
-    cd backend && PYTHONPATH=. python tests/test_admin_authz.py
-    (or: pytest tests/test_admin_authz.py -v)
+Authorization regression & PHC Admin scoping tests.
 """
 import os
 
+from fastapi import HTTPException
+from fastapi.routing import APIRoute
 from jose import jwt as _jwt
+from starlette.requests import Request
 
-# setdefault so a real CI environment wins; fakes only fill gaps locally.
-# (conftest.py also sets these — kept here so the file runs standalone too.)
 _fake_key = _jwt.encode({"role": "anon"}, "x", algorithm="HS256")
 os.environ.setdefault("SUPABASE_URL", "https://testproj.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", _fake_key)
@@ -27,14 +15,23 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", _fake_key)
 os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret-at-least-32-chars-long-aaaaaa")
 os.environ.setdefault("GROQ_API_KEY", "test-key")
 
-from fastapi.routing import APIRoute  # noqa: E402
-from app.api.routes import admin_routes  # noqa: E402
+from app.api.routes import admin_routes, dsr_routes, metrics_routes  # noqa: E402
+
+ADMIN_ROUTE_MODULES = [admin_routes, dsr_routes, metrics_routes]
+
+
+def make_dummy_request(method="GET", path="/"):
+    scope = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "headers": [(b"host", b"testserver")],
+        "client": ("127.0.0.1", 12345),
+    }
+    return Request(scope)
 
 
 def _enforced_roles(route: APIRoute) -> set:
-    """Collect the roles enforced by any require_role() dependency on a route.
-    require_role(*roles) returns an inner function named 'role_guard' that closes
-    over the roles tuple; we read that closure to recover the enforced roles."""
     roles: set = set()
 
     def walk(dep):
@@ -52,8 +49,13 @@ def _enforced_roles(route: APIRoute) -> set:
 
 
 def test_all_admin_routes_require_admin_only():
-    routes = [r for r in admin_routes.router.routes if isinstance(r, APIRoute)]
-    assert routes, "no admin routes discovered — test wiring is wrong"
+    routes = [
+        r
+        for module in ADMIN_ROUTE_MODULES
+        for r in module.router.routes
+        if isinstance(r, APIRoute)
+    ]
+    assert routes, "No admin routes discovered — test wiring is wrong"
 
     failures = []
     for r in routes:
@@ -62,12 +64,56 @@ def test_all_admin_routes_require_admin_only():
             failures.append((sorted(r.methods), r.path, sorted(roles) or "NONE"))
 
     assert not failures, (
-        "Admin routes must be guarded by require_role('admin') ONLY. Offenders "
-        f"(method, path, enforced_roles): {failures}"
+        "Admin routes must be guarded by require_role('admin') ONLY. Offenders: "
+        f"{failures}"
     )
 
 
-if __name__ == "__main__":
-    test_all_admin_routes_require_admin_only()
-    n = len([r for r in admin_routes.router.routes if isinstance(r, APIRoute)])
-    print(f"PASS test_all_admin_routes_require_admin_only — all {n} admin routes are admin-only")
+def test_phc_admin_cannot_create_admin_or_supervisor():
+    """Verify PHC Admin is forbidden from creating Admin/Supervisor accounts."""
+    req = make_dummy_request("POST", "/api/admin/users")
+    user = {"sub": "admin-1", "resolved_role": "admin", "resolved_facility_id": "fac-1"}
+    body = admin_routes.CreateUserRequest(
+        email="newadmin@test.com",
+        password="Password123!@",
+        full_name="New Admin",
+        role="admin",
+        facility_id="fac-1",
+    )
+
+    import asyncio
+    try:
+        asyncio.run(admin_routes.create_user(request=req, body=body, authorization="Bearer token", user=user))
+        assert False, "Should have raised 403 Forbidden"
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert "only create Doctor and ASHA Worker" in exc.detail
+
+
+def test_phc_admin_cannot_self_manage():
+    """Verify PHC Admin cannot edit or deactivate their own account."""
+    req = make_dummy_request("DELETE", "/api/admin/users/admin-1")
+    user = {"sub": "admin-1", "resolved_role": "admin", "resolved_facility_id": "fac-1"}
+
+    import asyncio
+    try:
+        asyncio.run(admin_routes.deactivate_user(request=req, user_id="admin-1", authorization="Bearer token", user=user))
+        assert False, "Should have raised 403 Forbidden for self-deactivation"
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert "cannot deactivate their own account" in exc.detail
+
+
+def test_phc_admin_cannot_create_facility():
+    """Verify facility creation returns 403 for PHC Admin."""
+    req = make_dummy_request("POST", "/api/admin/facilities")
+    user = {"sub": "admin-1", "resolved_role": "admin", "resolved_facility_id": "fac-1"}
+    body = admin_routes.CreateFacilityRequest(name="New PHC")
+
+    import asyncio
+    try:
+        asyncio.run(admin_routes.create_facility(request=req, body=body, authorization="Bearer token", user=user))
+        assert False, "Should have raised 403 Forbidden"
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert "managed by Supervisor Governance" in exc.detail

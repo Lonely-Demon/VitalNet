@@ -1,0 +1,16 @@
+{
+  "name": "vitalnet",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:web": "pnpm --filter @vitalnet/web dev",
+    "build:web": "pnpm --filter @vitalnet/web build",
+    "test:core": "pnpm --filter @vitalnet/clinical-core test",
+    "build:core": "pnpm --filter @vitalnet/clinical-core build",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
