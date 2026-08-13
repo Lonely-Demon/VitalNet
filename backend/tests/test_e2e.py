@@ -75,7 +75,7 @@ def run_tests():
         json=invalid_case,
         headers={"Authorization": f"Bearer {asha_jwt}"}
     )
-    print(f"Invalid Submit: {r_invalid.status_code} - {r_invalid.text}")
+    print(f"Invalid Submit: {r_invalid.status_code}")
     assert r_invalid.status_code == 422, "Should have rejected SpO2=150 with HTTP 422"
 
     print("\n5. Testing ASHA Case Submission...")
@@ -95,8 +95,6 @@ def run_tests():
         headers={"Authorization": f"Bearer {asha_jwt}"}
     )
     print(f"Submit Status: {r_submit.status_code}")
-    if r_submit.status_code != 200:
-        print("Submit Error:", r_submit.text)
     assert r_submit.status_code == 200, "ASHA submission failed"
     submitted_case = r_submit.json()
     case_id = submitted_case["id"]
