@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 # global-scope role — it is never restricted to a single facility, matching
 # the behaviour of GET /api/admin/stats. 'doctor' accounts are scoped to
 # their own facility_id.
-GLOBAL_SCOPE_ROLE = "admin"
+GLOBAL_SCOPE_ROLE = "supervisor"
 
 QUERY_TIMEOUT_SECONDS = 10
 
