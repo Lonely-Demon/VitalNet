@@ -12,19 +12,45 @@ import type { AuthedUser } from "./types.ts";
  * strips embedded HTML/markup tags before the text reaches the DB, the LLM
  * prompt, or a doctor's browser.
  *
- * Two-pass approach (closes CodeQL js/incomplete-html-tag-sanitization):
- *  1. Strip <script …>…</script> blocks and their content entirely (case-
- *     insensitive, dotAll so multi-line script bodies are caught too).
- *  2. Strip all remaining HTML/XML-style tags, including malformed tags
- *     that lack a closing > (e.g. a truncated <script fragment).
+ * The tag scanner deliberately removes every tag rather than trying to
+ * recognize only a safe subset. For script elements it also removes their
+ * body; a malformed opening tag truncates the remaining input rather than
+ * risking retention of executable markup.
  */
+function stripMarkup(value: string): string {
+  const lower = value.toLowerCase();
+  let output = "";
+  let position = 0;
+
+  while (position < value.length) {
+    const tagStart = value.indexOf("<", position);
+    if (tagStart === -1) {
+      output += value.slice(position);
+      break;
+    }
+
+    output += value.slice(position, tagStart);
+    const tagEnd = value.indexOf(">", tagStart + 1);
+    if (tagEnd === -1) break;
+
+    const tagBody = lower.slice(tagStart + 1, tagEnd).trim();
+    if (tagBody.startsWith("script")) {
+      const closingStart = lower.indexOf("</script", tagEnd + 1);
+      if (closingStart === -1) break;
+      const closingEnd = value.indexOf(">", closingStart + 2);
+      position = closingEnd === -1 ? value.length : closingEnd + 1;
+      continue;
+    }
+
+    position = tagEnd + 1;
+  }
+
+  return output;
+}
+
 export function sanitizeMedicalText(value: string | null | undefined, maxLength = 500): string | null {
   if (value === null || value === undefined) return null;
-  // Pass 1: remove <script …>…</script> elements and their inner content.
-  const noScript = value.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
-  // Pass 2: strip any remaining tags (including fragments without closing >).
-  const withoutTags = noScript.replace(/<[^>]*>?/g, "");
-  const collapsed = withoutTags.replace(/\s+/g, " ").trim();
+  const collapsed = stripMarkup(value).replace(/\s+/g, " ").trim();
   return collapsed ? collapsed.slice(0, maxLength) : null;
 }
 

@@ -128,6 +128,14 @@ Deno.test("sanitizeMedicalText: returns null when stripped content is empty", ()
   assertEquals(sanitizeMedicalText("<script></script>"), null);
 });
 
+Deno.test("sanitizeMedicalText: removes script blocks with mixed-case and spaced closing tags", () => {
+  assertEquals(sanitizeMedicalText("<SCRIPT>alert('x')</SCRIPT > fever"), "fever");
+});
+
+Deno.test("sanitizeMedicalText: discards an unterminated script fragment", () => {
+  assertEquals(sanitizeMedicalText("fever <script>alert('x')"), "fever");
+});
+
 // ── formatRiskDriver ───────────────────────────────────────────────────────
 
 Deno.test("formatRiskDriver: no fired rules describes a routine presentation", () => {

@@ -102,16 +102,10 @@ def test_classifier_direct():
             result = predict_triage(test_case["data"])
 
 
-            # Synthetic fixture data defined in this file: no real patient
-            # data ever reaches this print path. Suppression covers all
-            # result-output lines (current CodeQL inline syntax, not lgtm.com).
-            print(f"Triage Level: {result['triage_level']}")  # codeql[py/clear-text-logging-sensitive-data]
-            print(f"Confidence: {result['confidence_score']:.3f}")  # codeql[py/clear-text-logging-sensitive-data]
-            print(f"Risk Driver: {result['risk_driver']}")  # codeql[py/clear-text-logging-sensitive-data]
-            print(f"Safety net triggered: {result.get('safety_net_triggered')}")  # codeql[py/clear-text-logging-sensitive-data]
-
+            # Keep test output free of classifier results: the result object is
+            # intentionally evaluated only for its expected-tier assertion.
             if result["triage_level"] != test_case["expected"]:
-                print(f"FAILED: expected {test_case['expected']}, got {result['triage_level']}")  # codeql[py/clear-text-logging-sensitive-data]
+                print("FAILED: classifier result did not match the test expectation")
                 failures += 1
             else:
                 print("PASSED")
