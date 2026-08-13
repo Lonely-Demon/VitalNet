@@ -1,22 +1,22 @@
 """
 Supervisor Routes — aggregate, non-PHI, per-ASHA-worker team metrics.
 
-Grounded in NHM's real ASHA Facilitator role (docs/DECISIONS.md §25): a
-facility-scoped, workforce-quality-oversight role, structurally separate from
-clinical case authority (doctor) and organisation-wide administration (admin).
+Grounded in NHM's real ASHA Facilitator / Supervisor role (docs/DECISIONS.md §25, §39): an
+organisation-wide workforce-quality-oversight role, structurally separate from
+clinical case authority (doctor) and local facility administration (PHC Admin).
 
 Calls fn_team_metrics — a SECURITY DEFINER Postgres function (backend/
-supabase/migrations/phase28_security_definer_fns.sql) — through the
+supabase/migrations/phase40_supervisor_global_aggregate_scope.sql) — through the
 caller's own RLS-scoped client, following the same narrow-aggregate
 pattern already established in §20 (referral load-balancing) and §22
 (deterioration alert): what crosses the RLS boundary is always an aggregate,
 grouped by submitting worker, never an individual case row or any patient
 field (chief complaint, vitals, name — none of it is selected here). The
-function re-derives the facility-scoping rule (supervisor pinned to their
-own facility, admin may narrow or go system-wide) inside the database
-itself, not just in this route. supervisor is never added to case_records'
+function re-derives the scoping rule (supervisor is global by default and can
+optionally narrow by facility_id query param; admin is pinned to their own facility)
+inside the database itself, not just in this route. supervisor is never added to case_records'
 row-level SELECT policy; this endpoint is the only sanctioned path by
-which a supervisor account reasons about case data at all.
+which a supervisor account reasons about team performance metrics.
 """
 import logging
 from datetime import datetime, timedelta, timezone
@@ -105,10 +105,9 @@ async def get_team_metrics(
     supervision needs (which workers need more training/support), with
     structurally no visibility into any individual case's content.
 
-    Scope: supervisor is always restricted to their own facility (the
-    `facility_id` query param is ignored for that role — a supervisor cannot
-    widen their own scope by passing a different id). admin defaults to
-    system-wide but may pass `facility_id` to narrow to one facility.
+    Scope: supervisor defaults to organisation-wide (facility_id = None) but may
+    pass facility_id to narrow to a specific PHC. admin is strictly restricted
+    to their resolved own facility (any passed facility_id query param is ignored).
     """
     if not (1 <= days <= MAX_WINDOW_DAYS):
         raise HTTPException(status_code=400, detail=f"days must be between 1 and {MAX_WINDOW_DAYS}")

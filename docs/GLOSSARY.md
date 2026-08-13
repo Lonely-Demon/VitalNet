@@ -179,11 +179,11 @@ last-seen row's sort-key values (rather than an offset/page number) as the
 (`GET /api/cases`, `/api/cases/mine`) — stable under concurrent
 inserts/deletes, unlike offset pagination.
 
-**Role scoping** — the four-role authorization model: `admin` (global),
-`doctor` (scoped to their own facility), `supervisor` (scoped to their own
-facility, aggregate-only, non-PHI — see ASHA Facilitator below and
-`docs/DECISIONS.md` §25), `asha_worker` (scoped to their own submissions).
-See `docs/API_REFERENCE.md`'s conventions section and CODEBASE_MAP.md §6.
+**Role scoping** — the four-role authorization model: `supervisor` (organisation-wide
+by default, aggregate-only, non-PHI, with no `facility_id` required — may narrow query
+by PHC; see `docs/DECISIONS.md` §25, §39), `admin` (PHC Administrator — local management
+and own-PHC scoping), `doctor` (scoped to their own facility), `asha_worker` (scoped to
+their own submissions). See `docs/API_REFERENCE.md`'s conventions section and CODEBASE_MAP.md §6.
 
 **Hybrid auth** — VitalNet's JWT verification approach: local signature
 verification on the hot path, with a network fallback only when local
