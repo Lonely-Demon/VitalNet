@@ -1,13 +1,3 @@
-// tests/a11y.spec.js
-//
-// Automated WCAG 2 A/AA accessibility scan (axe-core) of the app's main
-// screens across every role. Runs against a mocked backend (tests/helpers/
-// mockBackend.js) so it needs no live Supabase project or secrets — safe to
-// run on untrusted PR code, same posture as build-frontend-pr in
-// .github/workflows/ci.yml. Complements, not replaces, the manual contrast/
-// keyboard/screen-reader review in docs/ACCESSIBILITY.md — axe catches
-// structural and programmatic issues (missing labels, contrast, ARIA
-// misuse); it cannot verify things like "does this make sense read aloud."
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { loginAs } from './helpers/mockBackend.js'
@@ -27,10 +17,6 @@ test.describe('Accessibility — WCAG 2 A/AA (axe-core)', () => {
   test('login page', async ({ page }) => {
     await page.goto('/')
     await page.locator('input[type="email"]').waitFor({ state: 'visible', timeout: 5000 })
-    // The page wrapper has a 0.5s animate-fade-up entrance transition;
-    // Playwright's "visible" only means non-zero size, not opacity:1, so
-    // scanning immediately catches axe mid-fade and reports a false-positive
-    // contrast violation on the blended (partially transparent) text.
     await page.waitForTimeout(600)
     await expectNoViolations(page)
   })
@@ -39,10 +25,6 @@ test.describe('Accessibility — WCAG 2 A/AA (axe-core)', () => {
     await page.goto('/')
     await loginAs(page, 'asha_worker')
     await page.locator('text=New Case').waitFor({ state: 'visible', timeout: 5000 })
-    // The symptom checklist staggers each option's entrance animation by
-    // idx*40ms (12 options => last one settles ~440ms + 500ms duration
-    // after mount) — wait long enough to clear it, same false-positive
-    // class as the login page's fade-in (see comment there).
     await page.waitForTimeout(1100)
     await expectNoViolations(page)
   })
@@ -69,9 +51,10 @@ test.describe('Accessibility — WCAG 2 A/AA (axe-core)', () => {
     await expectNoViolations(page)
   })
 
-  test('admin — analytics', async ({ page }) => {
+  test('supervisor — management surface', async ({ page }) => {
     await page.goto('/')
-    await loginAs(page, 'admin')
+    await loginAs(page, 'supervisor')
+    await page.click('text=Management')
     await page.waitForTimeout(400)
     await expectNoViolations(page)
   })
@@ -83,4 +66,40 @@ test.describe('Accessibility — WCAG 2 A/AA (axe-core)', () => {
     await page.waitForTimeout(400)
     await expectNoViolations(page)
   })
+})
+
+test.describe('Mobile Navigation & Responsiveness', () => {
+  const widths = [320, 375, 390, 640, 768]
+
+  for (const width of widths) {
+    test(`compact navbar at ${width}px width`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 667 })
+      await page.goto('/')
+      await loginAs(page, 'supervisor')
+
+      // Document must not overflow horizontally
+      const overflow = await page.evaluate(() => {
+        return document.documentElement.scrollWidth > document.documentElement.clientWidth
+      })
+      expect(overflow).toBe(false)
+
+      if (width < 640) {
+        // Toggle menu button must be visible
+        const toggleBtn = page.locator('button[aria-label="Toggle navigation menu"]')
+        await expect(toggleBtn).toBeVisible()
+
+        // Open menu
+        await toggleBtn.click()
+        await expect(toggleBtn).toHaveAttribute('aria-expanded', 'true')
+
+        // Verify menu contents
+        await expect(page.locator('text=Management')).toBeVisible()
+        await expect(page.locator('text=Sign out')).toBeVisible()
+
+        // Close via Escape key
+        await page.keyboard.press('Escape')
+        await expect(toggleBtn).toHaveAttribute('aria-expanded', 'false')
+      }
+    })
+  }
 })

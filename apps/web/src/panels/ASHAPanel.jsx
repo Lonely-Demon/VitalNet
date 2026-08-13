@@ -82,7 +82,7 @@ export default function ASHAPanel() {
     setError(null)
     try {
       const data = await getMySubmissions()
-      setSubmissions(data.cases)
+      setSubmissions(data?.cases ?? [])
     } catch (e) {
       setError(e.message)
     } finally {

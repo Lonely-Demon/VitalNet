@@ -12,10 +12,8 @@ const TABS = [
   { id: 'analytics',  label: 'Analytics' },
   { id: 'outbreak',   label: 'Outbreak Signals' },
   { id: 'protocol',   label: 'Protocol Assistant' },
-  { id: 'users',      label: 'Users' },
-  { id: 'facilities', label: 'Facilities' },
-  { id: 'system',     label: 'System' },
-  { id: 'audit',      label: 'Audit Log' },
+  { id: 'users',      label: 'Staff Management' },
+  { id: 'facilities', label: 'My PHC' },
 ]
 
 export default function AdminPanel() {
@@ -30,8 +28,6 @@ export default function AdminPanel() {
         {activeTab === 'protocol'   && <ProtocolAssistant canCurate />}
         {activeTab === 'users'      && <AdminUsers />}
         {activeTab === 'facilities' && <AdminFacilities />}
-        {activeTab === 'system'     && <AdminStats />}
-        {activeTab === 'audit'      && <AdminAuditLog />}
       </main>
     </div>
   )

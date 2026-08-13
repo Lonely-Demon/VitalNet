@@ -151,6 +151,16 @@ export async function mockAuthAndData(page, { role, facility_id = 'fac-1' }) {
         cases: SAMPLE_CASES, hasMore: false, nextCursor: null, nextTriagePriority: null, nextId: null,
       }})
     }
+    if (url.includes('/api/supervisor/management/facilities')) {
+      return fulfillJson(route, { body: [
+        { id: 'fac-1', name: 'Rampur PHC', type: 'PHC', district: 'Rampur', phone: '+911234567890', capacity_status: 'available', is_active: true },
+      ]})
+    }
+    if (url.includes('/api/supervisor/management/admins')) {
+      return fulfillJson(route, { body: { data: [
+        { id: 'adm-1', email: 'admin@test.vitalnet', full_name: 'Admin User', role: 'admin', facility_id: 'fac-1', facility_name: 'Rampur PHC', is_active: true, created_at: new Date().toISOString() },
+      ]}})
+    }
     if (url.includes('/api/supervisor/team-metrics')) {
       return fulfillJson(route, { body: {
         workers: [

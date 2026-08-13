@@ -8,10 +8,8 @@ import {
   adminBulkCreateUsers,
   adminListFacilities,
 } from '../../lib/api'
+import { useAuth } from '../../store/authStore'
 
-// Minimal RFC4180-ish CSV parser: handles quoted fields (incl. embedded
-// commas/newlines) and "" escaped quotes. Sufficient for admin-authored
-// onboarding sheets exported from Excel/Sheets.
 function parseCsv(text) {
   const rows = []
   let row = []
@@ -42,46 +40,33 @@ function parseCsv(text) {
   return rows
 }
 
-const CSV_ROLE_OPTIONS = ['asha_worker', 'doctor', 'admin', 'supervisor']
+const CSV_ROLE_OPTIONS = ['asha_worker', 'doctor']
 
-function validateCsvRow(row, facilitiesByName) {
+function validateCsvRow(row) {
   const errors = []
   if (!row.full_name) errors.push('missing full_name')
   if (!row.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push('invalid email')
   if (!row.password || row.password.length < 12) errors.push('password must be 12+ chars')
-  if (!CSV_ROLE_OPTIONS.includes(row.role)) errors.push('role must be asha_worker/doctor/admin/supervisor')
-
-  let facility_id = row.facility_id || ''
-  if (row.facility && !facility_id) {
-    const match = facilitiesByName.get(row.facility.trim().toLowerCase())
-    if (match) facility_id = match
-    else errors.push(`unknown facility "${row.facility}"`)
-  }
-  if ((row.role === 'asha_worker' || row.role === 'doctor' || row.role === 'supervisor') && !facility_id) {
-    errors.push('facility is required for this role')
-  }
-  return { errors, facility_id }
+  if (!CSV_ROLE_OPTIONS.includes(row.role)) errors.push('role must be asha_worker or doctor')
+  return { errors }
 }
 
-const ROLE_OPTIONS = ['asha_worker', 'doctor', 'supervisor', 'admin']
+const ROLE_OPTIONS = ['asha_worker', 'doctor']
 
 const ROLE_LABELS = {
   asha_worker: 'ASHA Worker',
   doctor:      'Doctor',
-  supervisor:  'Supervisor',
-  admin:       'Admin',
 }
 
 const ROLE_COLORS = {
   asha_worker: 'bg-leaf text-forest',
   doctor:      'bg-sand text-forest',
-  supervisor:  'bg-urgent/10 text-urgent-ink',
-  admin:       'bg-surface3 text-text',
 }
 
-const EMPTY_CREATE = { email: '', password: '', full_name: '', role: 'asha_worker', facility_id: '', asha_id: '' }
+const EMPTY_CREATE = { email: '', password: '', full_name: '', role: 'asha_worker', asha_id: '' }
 
 export default function AdminUsers() {
+  const { profile } = useAuth()
   const [users,          setUsers]          = useState([])
   const [facilities,     setFacilities]     = useState([])
   const [loading,        setLoading]        = useState(true)
@@ -93,7 +78,7 @@ export default function AdminUsers() {
   const [editingId,      setEditingId]      = useState(null)
   const [editData,       setEditData]       = useState({})
   const [showBulkImport, setShowBulkImport] = useState(false)
-  const [bulkRows,       setBulkRows]       = useState([])   // [{ full_name, email, role, facility_id, asha_id, errors }]
+  const [bulkRows,       setBulkRows]       = useState([])
   const [bulkImporting,  setBulkImporting]  = useState(false)
   const [bulkResults,    setBulkResults]    = useState(null)
   const [bulkError,      setBulkError]      = useState(null)
@@ -127,6 +112,7 @@ export default function AdminUsers() {
       setCreateError(e.message)
     } finally {
       setCreating(false)
+      setCreateData(d => ({ ...d, password: '' }))
     }
   }
 
@@ -134,6 +120,7 @@ export default function AdminUsers() {
     try {
       await adminUpdateUser(userId, editData)
       setEditingId(null)
+      setEditData({})
       await loadAll()
     } catch (e) {
       alert(e.message)
@@ -141,7 +128,7 @@ export default function AdminUsers() {
   }
 
   async function handleDeactivate(userId) {
-    if (!confirm('Deactivate this user?')) return
+    if (!confirm('Deactivate this staff member?')) return
     try {
       await adminDeactivateUser(userId)
       await loadAll()
@@ -170,12 +157,11 @@ export default function AdminUsers() {
           return
         }
         const header = parsed[0].map((h) => h.trim().toLowerCase())
-        const facilitiesByName = new Map(facilities.map((f) => [f.name.toLowerCase(), f.id]))
         const rows = parsed.slice(1).map((cols) => {
           const raw = {}
           header.forEach((key, i) => { raw[key] = (cols[i] || '').trim() })
-          const { errors, facility_id } = validateCsvRow(raw, facilitiesByName)
-          return { ...raw, facility_id, errors }
+          const { errors } = validateCsvRow(raw)
+          return { ...raw, errors }
         })
         setBulkRows(rows)
       } catch {
@@ -197,7 +183,6 @@ export default function AdminUsers() {
         password: r.password,
         full_name: r.full_name,
         role: r.role,
-        facility_id: r.facility_id || null,
         asha_id: r.asha_id || null,
       }))
       const report = await adminBulkCreateUsers(payload)
@@ -217,14 +202,14 @@ export default function AdminUsers() {
     setBulkError(null)
   }
 
-  if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading users...</div>
+  if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading staff...</div>
   if (error)   return <div className="bg-emergency/10 border border-emergency/30 rounded-lg px-4 py-3 text-emergency text-sm">{error}</div>
 
   return (
     <div>
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-base font-semibold text-text font-display font-bold">Users <span className="text-text3 font-normal font-body">({users.length})</span></h2>
+        <h2 className="text-base font-semibold text-text font-display font-bold">Facility Staff <span className="text-text3 font-normal font-body">({users.length})</span></h2>
         <div className="flex items-center gap-2">
           <button
             onClick={() => { resetBulkImport(); setShowBulkImport(v => !v) }}
@@ -236,19 +221,18 @@ export default function AdminUsers() {
             onClick={() => setShowCreateForm(v => !v)}
             className="text-sm px-3 py-1.5 bg-forest text-white rounded-pill hover:shadow-btn transition-all"
           >
-            {showCreateForm ? 'Cancel' : '+ Create User'}
+            {showCreateForm ? 'Cancel' : '+ Add Staff Member'}
           </button>
         </div>
       </div>
 
-      {/* Bulk CSV Import (FEATURES_ROADMAP §1b.4) */}
+      {/* Bulk CSV Import */}
       {showBulkImport && (
         <div className="bg-surface border border-leaf/40 rounded-lg p-5 mb-5 shadow-card">
-          <h3 className="text-sm font-semibold text-text mb-2">Bulk Import Users</h3>
+          <h3 className="text-sm font-semibold text-text mb-2">Bulk Import Staff</h3>
           <p className="text-xs text-text3 mb-3">
-            CSV columns: <code className="font-mono">full_name,email,password,role,facility,asha_id</code>.
-            {' '}<code className="font-mono">role</code> must be asha_worker/doctor/admin.
-            {' '}<code className="font-mono">facility</code> should match a facility name exactly (or use <code className="font-mono">facility_id</code> directly).
+            CSV columns: <code className="font-mono">full_name,email,password,role,asha_id</code>.
+            {' '}<code className="font-mono">role</code> must be asha_worker or doctor.
           </p>
           <input
             type="file"
@@ -262,9 +246,9 @@ export default function AdminUsers() {
             <>
               <div className="overflow-x-auto mb-3 max-h-80 overflow-y-auto border border-leaf/20 rounded-lg">
                 <table className="w-full text-xs">
-                  <thead className="bg-surface2 border-b border-leaf/40 sticky top-0">
+                  <thead className="bg-surface2 border-b border-leaf/40">
                     <tr>
-                      {['Name', 'Email', 'Role', 'Facility', 'Status'].map(h => (
+                      {['Name', 'Email', 'Role', 'Status'].map(h => (
                         <th key={h} className="px-3 py-2 text-left font-mono font-semibold text-text3 uppercase tracking-wider">{h}</th>
                       ))}
                     </tr>
@@ -275,7 +259,6 @@ export default function AdminUsers() {
                         <td className="px-3 py-2 text-text">{r.full_name || '—'}</td>
                         <td className="px-3 py-2 text-text2">{r.email || '—'}</td>
                         <td className="px-3 py-2 text-text2">{r.role || '—'}</td>
-                        <td className="px-3 py-2 text-text2">{r.facility || r.facility_id || '—'}</td>
                         <td className="px-3 py-2">
                           {r.errors.length
                             ? <span className="text-emergency font-medium">{r.errors.join('; ')}</span>
@@ -288,14 +271,13 @@ export default function AdminUsers() {
               </div>
               <p className="text-xs text-text3 mb-2">
                 {bulkRows.filter(r => r.errors.length === 0).length} of {bulkRows.length} rows will be imported.
-                Rows with errors are skipped — fix and re-upload if needed.
               </p>
               <button
                 onClick={handleBulkImport}
                 disabled={bulkImporting || bulkRows.every(r => r.errors.length > 0)}
                 className="text-sm px-4 py-1.5 bg-routine text-white rounded-pill hover:shadow-btn disabled:opacity-50 transition-all"
               >
-                {bulkImporting ? 'Importing…' : `Import ${bulkRows.filter(r => r.errors.length === 0).length} Users`}
+                {bulkImporting ? 'Importing…' : `Import ${bulkRows.filter(r => r.errors.length === 0).length} Staff Members`}
               </button>
             </>
           )}
@@ -306,20 +288,6 @@ export default function AdminUsers() {
                 <span className="text-routine font-semibold">{bulkResults.succeeded} created</span>
                 {bulkResults.failed > 0 && <span className="text-emergency font-semibold">, {bulkResults.failed} failed</span>}
               </p>
-              <div className="overflow-x-auto max-h-60 overflow-y-auto border border-leaf/20 rounded-lg">
-                <table className="w-full text-xs">
-                  <tbody className="divide-y divide-leaf/20">
-                    {bulkResults.results.map((r) => (
-                      <tr key={r.row}>
-                        <td className="px-3 py-2 text-text2">{r.email}</td>
-                        <td className={`px-3 py-2 font-medium ${r.status === 'created' ? 'text-routine' : 'text-emergency'}`}>
-                          {r.status === 'created' ? 'Created' : r.detail}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
               <button
                 onClick={resetBulkImport}
                 className="mt-3 text-sm px-4 py-1.5 bg-surface2 text-text border border-leaf/40 rounded-pill hover:bg-surface3 transition-all"
@@ -334,13 +302,13 @@ export default function AdminUsers() {
       {/* Create Form */}
       {showCreateForm && (
         <form onSubmit={handleCreate} className="bg-surface border border-leaf/40 rounded-lg p-5 mb-5 shadow-card">
-          <h3 className="text-sm font-semibold text-text mb-4">New User</h3>
+          <h3 className="text-sm font-semibold text-text mb-4">New Staff Member</h3>
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: 'Full Name', key: 'full_name', type: 'text', required: true },
               { label: 'Email',     key: 'email',     type: 'email', required: true },
               { label: 'Password',  key: 'password',  type: 'password', required: true },
-              { label: 'ASHA ID',   key: 'asha_id',   type: 'text', required: false },
+              { label: 'ASHA ID (if ASHA)', key: 'asha_id', type: 'text', required: false },
             ].map(f => (
               <div key={f.key}>
                 <label htmlFor={`create-${f.key}`} className="block text-xs text-text3 mb-1 font-mono">{f.label}{f.required && ' *'}</label>
@@ -365,18 +333,6 @@ export default function AdminUsers() {
                 {ROLE_OPTIONS.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
               </select>
             </div>
-            <div>
-              <label htmlFor="create-facility" className="block text-xs text-text3 mb-1 font-mono">Facility</label>
-              <select
-                id="create-facility"
-                value={createData.facility_id}
-                onChange={e => setCreateData(d => ({ ...d, facility_id: e.target.value }))}
-                className="w-full border border-surface3 rounded-md px-3 py-1.5 text-sm bg-surface2 focus:outline-none focus:ring-1 focus:ring-sage text-text"
-              >
-                <option value="">— None —</option>
-                {facilities.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-              </select>
-            </div>
           </div>
           {createError && <p className="text-emergency text-xs mt-2">{createError}</p>}
           <button
@@ -384,7 +340,7 @@ export default function AdminUsers() {
             disabled={creating}
             className="mt-3 text-sm px-4 py-1.5 bg-routine text-white rounded-pill hover:shadow-btn disabled:opacity-50 transition-all"
           >
-            {creating ? 'Creating...' : 'Create User'}
+            {creating ? 'Creating...' : 'Create Staff Member'}
           </button>
         </form>
       )}
@@ -400,72 +356,74 @@ export default function AdminUsers() {
             </tr>
           </thead>
           <tbody className="divide-y divide-leaf/20">
-            {users.map(u => (
-              <tr key={u.id} className={u.is_active ? '' : 'opacity-50'}>
-                <td className="px-4 py-3 font-medium text-text">{u.full_name || '—'}</td>
-                <td className="px-4 py-3 text-text2">{u.email}</td>
-                <td className="px-4 py-3">
-                  {editingId === u.id ? (
-                    <select
-                      value={editData.role ?? u.role}
-                      onChange={e => setEditData(d => ({ ...d, role: e.target.value }))}
-                      className="border border-surface3 rounded px-2 py-1 text-xs bg-surface2 text-text"
-                    >
-                      {ROLE_OPTIONS.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-                    </select>
-                  ) : (
-                    <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${ROLE_COLORS[u.role] || ROLE_COLORS.admin}`}>
+            {users.map(u => {
+              const isSelf = u.id === profile?.id
+              return (
+                <tr key={u.id} className={u.is_active ? '' : 'opacity-50'}>
+                  <td className="px-4 py-3 font-medium text-text">
+                    {editingId === u.id ? (
+                      <input
+                        type="text"
+                        value={editData.full_name ?? u.full_name}
+                        onChange={e => setEditData(d => ({ ...d, full_name: e.target.value }))}
+                        className="border border-surface3 rounded px-2 py-1 text-xs bg-surface2 text-text"
+                      />
+                    ) : (
+                      u.full_name || '—'
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-text2">{u.email}</td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${ROLE_COLORS[u.role] || ROLE_COLORS.asha_worker}`}>
                       {ROLE_LABELS[u.role] || u.role}
                     </span>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-text2">
-                  {editingId === u.id ? (
-                    <select
-                      value={editData.facility_id ?? u.facility_id ?? ''}
-                      onChange={e => setEditData(d => ({ ...d, facility_id: e.target.value }))}
-                      className="border border-surface3 rounded px-2 py-1 text-xs bg-surface2 text-text"
-                    >
-                      <option value="">— None —</option>
-                      {facilities.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                    </select>
-                  ) : (
-                    u.facility_name || '—'
-                  )}
-                </td>
-                <td className="px-4 py-3 text-text3 font-mono">{u.asha_id || '—'}</td>
-                <td className="px-4 py-3">
-                  <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${
-                    u.is_active
-                      ? 'bg-routine/10 text-routine-ink'
-                      : 'bg-surface3 text-text3'
-                  }`}>
-                    {u.is_active ? 'Active' : 'Inactive'}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    {editingId === u.id ? (
-                      <>
-                        <button onClick={() => handleUpdate(u.id)} className="text-xs text-routine hover:text-forest font-medium">Save</button>
-                        <button onClick={() => setEditingId(null)} className="text-xs text-text3 hover:text-text2">Cancel</button>
-                      </>
+                  </td>
+                  <td className="px-4 py-3 text-text2">{u.facility_name || '—'}</td>
+                  <td className="px-4 py-3 text-text3 font-mono">
+                    {editingId === u.id && u.role === 'asha_worker' ? (
+                      <input
+                        type="text"
+                        value={editData.asha_id ?? u.asha_id ?? ''}
+                        onChange={e => setEditData(d => ({ ...d, asha_id: e.target.value }))}
+                        className="border border-surface3 rounded px-2 py-1 text-xs bg-surface2 text-text w-24"
+                      />
                     ) : (
-                      <>
-                        <button
-                          onClick={() => { setEditingId(u.id); setEditData({}) }}
-                          className="text-xs text-sage hover:text-forest font-medium"
-                        >Edit</button>
-                        {u.is_active
-                          ? <button onClick={() => handleDeactivate(u.id)} className="text-xs text-emergency hover:text-emergency/80 font-medium">Deactivate</button>
-                          : <button onClick={() => handleReactivate(u.id)} className="text-xs text-routine hover:text-forest font-medium">Reactivate</button>
-                        }
-                      </>
+                      u.asha_id || '—'
                     )}
-                  </div>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs px-2 py-0.5 rounded-pill font-medium font-mono ${
+                      u.is_active ? 'bg-routine/10 text-routine-ink' : 'bg-surface3 text-text3'
+                    }`}>
+                      {u.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {!isSelf && (
+                      <div className="flex items-center gap-2">
+                        {editingId === u.id ? (
+                          <>
+                            <button onClick={() => handleUpdate(u.id)} className="text-xs text-routine hover:text-forest font-medium">Save</button>
+                            <button onClick={() => setEditingId(null)} className="text-xs text-text3 hover:text-text2">Cancel</button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => { setEditingId(u.id); setEditData({ full_name: u.full_name, asha_id: u.asha_id }) }}
+                              className="text-xs text-sage hover:text-forest font-medium"
+                            >Edit</button>
+                            {u.is_active
+                              ? <button onClick={() => handleDeactivate(u.id)} className="text-xs text-emergency hover:text-emergency/80 font-medium">Deactivate</button>
+                              : <button onClick={() => handleReactivate(u.id)} className="text-xs text-routine hover:text-forest font-medium">Reactivate</button>
+                            }
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

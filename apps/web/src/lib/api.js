@@ -34,5 +34,15 @@ export {
 export { getAnalyticsSummary, getResponseTimes, getMlAgreement, exportCases } from '@/api/analytics'
 export { listActiveFacilities, createReferral, listReferrals, updateReferralStatus, updateFacilityCapacity } from '@/api/referrals'
 export { getTeamMetrics } from '@/api/supervisor'
+export {
+  supervisorListFacilities,
+  supervisorCreateFacility,
+  supervisorToggleFacility,
+  supervisorListAdmins,
+  supervisorCreateAdmin,
+  supervisorUpdateAdmin,
+  supervisorDeactivateAdmin,
+  supervisorReactivateAdmin,
+} from '@/api/supervisorManagement'
 export { getOutbreakSignals } from '@/api/outbreak'
 export { askProtocolQuestion, listProtocolQuestions, curateProtocolAnswer } from '@/api/protocol'

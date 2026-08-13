@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Optional, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.auth import require_role
@@ -42,6 +42,13 @@ def _mask_csv_value(value: Optional[str]) -> Optional[str]:
     return text
 
 
+def _get_caller_facility_id(user: dict) -> str:
+    facility_id = user.get("resolved_facility_id")
+    if not facility_id:
+        raise HTTPException(status_code=400, detail="Account has no facility assigned.")
+    return facility_id
+
+
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 class CreateUserRequest(BaseModel):
@@ -60,6 +67,7 @@ class BulkCreateUsersRequest(BaseModel):
 class UpdateUserRequest(BaseModel):
     role: Optional[Literal['asha_worker', 'doctor', 'admin', 'supervisor']] = None
     facility_id: Optional[str] = None
+    full_name: Optional[str] = Field(None, min_length=1, max_length=100)
     asha_id: Optional[str] = Field(None, max_length=50)
     is_active: Optional[bool] = None
 
@@ -86,11 +94,11 @@ async def list_users(
     limit: int = 100,
 ):
     """
-    Returns all users joined with their profiles, paginated so a large
-    deployment can't force one unbounded query across the whole user table.
-    Uses admin client for auth.admin.list_users(), then enriches
-    with profiles data for role/facility info.
+    Returns local staff (Doctors and ASHA Workers) belonging to the caller's resolved facility_id.
+    PHC Administrators cannot view users outside their PHC or view Admin/Supervisor accounts.
     """
+    caller_fac_id = _get_caller_facility_id(user)
+
     limit = max(1, min(limit, 200))
     page = max(1, page)
     start = (page - 1) * limit
@@ -102,6 +110,8 @@ async def list_users(
             'id, full_name, role, facility_id, asha_id, is_active, created_at, '
             'facilities(name, district)'
         )
+        .eq('facility_id', caller_fac_id)
+        .in_('role', ['asha_worker', 'doctor'])
         .range(start, end)
         .execute()
     )
@@ -132,7 +142,7 @@ async def list_users(
         user_id=user.get("sub", "unknown"),
         user_role=user.get("resolved_role"),
         resource_type="profiles",
-        resource_id=f"page:{page}",
+        resource_id=f"facility:{caller_fac_id}:page:{page}",
         ip_address=get_client_ip(request),
         details={"count": len(result)},
     )
@@ -143,14 +153,12 @@ async def list_users(
 def _provision_user(body: CreateUserRequest) -> dict:
     """
     Core create-user logic shared by create_user (single) and
-    bulk_create_users (§1b.4). email_confirm=True so new users can log in
-    immediately without going through the email verification flow.
-    Raises HTTPException exactly as the single-user endpoint always has —
-    bulk creation catches it per-row so one bad row can't fail the batch.
+    bulk_create_users. email_confirm=True so new users can log in
+    immediately.
     """
     _validate_password(body.password)
 
-    if body.role in {"asha_worker", "doctor", "supervisor"} and not body.facility_id:
+    if body.role in {"asha_worker", "doctor", "supervisor", "admin"} and not body.facility_id:
         raise HTTPException(status_code=400, detail="facility_id is required for this role")
 
     response = supabase_admin.auth.admin.create_user({
@@ -166,10 +174,6 @@ def _provision_user(body: CreateUserRequest) -> dict:
 
     new_user_id = str(response.user.id)
 
-    # Patch the profile row created by the DB trigger with extra fields. If
-    # this fails, roll back the auth user rather than leave an orphaned
-    # account with no usable profile (which would silently fail every
-    # subsequent request via auth.py's "Profile not provisioned" check).
     try:
         profile_res = (
             supabase_admin.table('profiles')
@@ -201,6 +205,42 @@ async def create_user(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
+    """
+    PHC Administrator creates a local Doctor or ASHA Worker account for their own PHC.
+    Cannot create Admin or Supervisor roles (403). Force-sets facility_id to caller's facility.
+    """
+    caller_fac_id = _get_caller_facility_id(user)
+
+    if body.role not in {'asha_worker', 'doctor'}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators can only create Doctor and ASHA Worker accounts.",
+        )
+
+    if body.facility_id and body.facility_id != caller_fac_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators can only manage staff within their own facility.",
+        )
+
+    body.facility_id = caller_fac_id
+
+    # Verify caller's facility exists and is active
+    fac_res = (
+        supabase_admin.table('facilities')
+        .select('is_active')
+        .eq('id', caller_fac_id)
+        .maybe_single()
+        .execute()
+    )
+    if not fac_res or not fac_res.data:
+        raise HTTPException(status_code=404, detail="Caller facility not found.")
+    if not fac_res.data.get('is_active', True):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot create staff for an inactive facility.",
+        )
+
     result = _provision_user(body)
 
     log_phi_access(
@@ -226,15 +266,41 @@ async def bulk_create_users(
     user: dict = Depends(require_role('admin')),
 ):
     """
-    Bulk ASHA/doctor onboarding via CSV import (FEATURES_ROADMAP §1b.4).
-    Reuses _provision_user per row so each row gets the same password-policy
-    enforcement and profile-provisioning rollback as the single-user
-    endpoint; one bad row (duplicate email, weak password, etc.) is reported
-    per-row rather than failing the whole batch. Passwords are never echoed
-    back in the report.
+    Bulk Doctor/ASHA onboarding for caller's facility.
     """
+    caller_fac_id = _get_caller_facility_id(user)
+
+    fac_res = (
+        supabase_admin.table('facilities')
+        .select('is_active')
+        .eq('id', caller_fac_id)
+        .maybe_single()
+        .execute()
+    )
+    if not fac_res or not fac_res.data or not fac_res.data.get('is_active', True):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot bulk import staff for an inactive facility.",
+        )
+
     results = []
     for i, row in enumerate(body.users):
+        if row.role not in {'asha_worker', 'doctor'}:
+            results.append({
+                "row": i, "email": row.email, "status": "error",
+                "detail": "PHC Administrators can only create Doctor and ASHA Worker accounts.",
+            })
+            continue
+
+        if row.facility_id and row.facility_id != caller_fac_id:
+            results.append({
+                "row": i, "email": row.email, "status": "error",
+                "detail": "Cannot create staff for another facility.",
+            })
+            continue
+
+        row.facility_id = caller_fac_id
+
         try:
             created = _provision_user(row)
         except HTTPException as e:
@@ -271,13 +337,20 @@ async def update_user(
     user: dict = Depends(require_role('admin')),
 ):
     """
-    Updates profile fields (role, facility, asha_id, is_active).
-    Also updates user_metadata in auth so the JWT hook re-embeds
-    the new role on next login.
+    Updates local staff profile fields. Prohibits self-management, role changes, or cross-PHC reassignment.
     """
+    caller_id = user.get("sub")
+    if user_id == caller_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators cannot modify their own account through staff management endpoints.",
+        )
+
+    caller_fac_id = _get_caller_facility_id(user)
+
     target_profile_response = (
         supabase_admin.table("profiles")
-        .select("id, role, facility_id, asha_id, is_active")
+        .select("id, role, facility_id, asha_id, is_active, full_name")
         .eq("id", user_id)
         .maybe_single()
         .execute()
@@ -286,18 +359,49 @@ async def update_user(
     if not target_profile:
         raise HTTPException(status_code=404, detail="User not found")
 
+    if target_profile.get("facility_id") != caller_fac_id or target_profile.get("role") not in {'asha_worker', 'doctor'}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators can only manage Doctor and ASHA Worker accounts in their own facility.",
+        )
+
+    if body.role is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators cannot modify user roles.",
+        )
+
+    if body.facility_id is not None and body.facility_id != caller_fac_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators cannot reassign staff to another facility.",
+        )
+
     profile_update = {}
     meta_update = {}
 
-    if body.role is not None:
-        profile_update['role'] = body.role
-        meta_update['role'] = body.role
-    if body.facility_id is not None:
-        profile_update['facility_id'] = body.facility_id
-        meta_update['facility_id'] = body.facility_id
-    if body.asha_id is not None:
+    if body.full_name is not None:
+        profile_update['full_name'] = body.full_name
+        meta_update['full_name'] = body.full_name
+
+    if body.asha_id is not None and target_profile.get("role") == "asha_worker":
         profile_update['asha_id'] = body.asha_id
+
     if body.is_active is not None:
+        if body.is_active is True:
+            # Check facility is active
+            fac_res = (
+                supabase_admin.table('facilities')
+                .select('is_active')
+                .eq('id', caller_fac_id)
+                .maybe_single()
+                .execute()
+            )
+            if fac_res and fac_res.data and not fac_res.data.get('is_active', True):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Cannot reactivate staff member whose facility is inactive.",
+                )
         profile_update['is_active'] = body.is_active
 
     if profile_update:
@@ -308,11 +412,8 @@ async def update_user(
             supabase_admin.auth.admin.update_user_by_id(user_id, {'user_metadata': meta_update})
         except Exception as e:
             logger.error("Auth metadata update failed for user_id=%s: %s", user_id, e)
-            if profile_update:
-                # Keep the profile row and the JWT's cached metadata in sync —
-                # revert the profile fields we just changed rather than leave
-                # them ahead of what the token's claims (and next-login refresh) will show.
-                rollback_values = {k: target_profile.get(k) for k in profile_update}
+            rollback_values = {k: target_profile.get(k) for k in profile_update if k in target_profile}
+            if rollback_values:
                 supabase_admin.table('profiles').update(rollback_values).eq('id', user_id).execute()
             raise HTTPException(status_code=500, detail="Failed to update user metadata. Profile update was rolled back.")
 
@@ -322,7 +423,7 @@ async def update_user(
         user_role=user.get("resolved_role"),
         resource_type="profiles",
         resource_id=user_id,
-        facility_id=profile_update.get("facility_id") or target_profile.get("facility_id"),
+        facility_id=caller_fac_id,
         ip_address=get_client_ip(request),
         details={"fields_updated": sorted(profile_update.keys())},
     )
@@ -338,11 +439,33 @@ async def deactivate_user(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    """
-    Soft-deactivates: sets profiles.is_active = false.
-    Does NOT delete the auth user or their case records.
-    Hard deletion is intentionally not exposed via API.
-    """
+    """Soft-deactivates a local Doctor or ASHA Worker account."""
+    caller_id = user.get("sub")
+    if user_id == caller_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators cannot deactivate their own account.",
+        )
+
+    caller_fac_id = _get_caller_facility_id(user)
+
+    target_res = (
+        supabase_admin.table('profiles')
+        .select('id, role, facility_id')
+        .eq('id', user_id)
+        .maybe_single()
+        .execute()
+    )
+    target = (target_res.data if target_res else None) or {}
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if target.get('facility_id') != caller_fac_id or target.get('role') not in {'asha_worker', 'doctor'}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators can only manage Doctor and ASHA Worker accounts in their own facility.",
+        )
+
     result = supabase_admin.table('profiles').update({'is_active': False}).eq('id', user_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="User not found")
@@ -353,6 +476,7 @@ async def deactivate_user(
         user_role=user.get("resolved_role"),
         resource_type="profiles",
         resource_id=user_id,
+        facility_id=caller_fac_id,
         ip_address=get_client_ip(request),
         details={"is_active": False},
     )
@@ -367,6 +491,46 @@ async def reactivate_user(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
+    """Reactivates a local Doctor or ASHA Worker account."""
+    caller_id = user.get("sub")
+    if user_id == caller_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators cannot reactivate their own account.",
+        )
+
+    caller_fac_id = _get_caller_facility_id(user)
+
+    fac_res = (
+        supabase_admin.table('facilities')
+        .select('is_active')
+        .eq('id', caller_fac_id)
+        .maybe_single()
+        .execute()
+    )
+    if fac_res and fac_res.data and not fac_res.data.get('is_active', True):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot reactivate staff member whose facility is inactive.",
+        )
+
+    target_res = (
+        supabase_admin.table('profiles')
+        .select('id, role, facility_id')
+        .eq('id', user_id)
+        .maybe_single()
+        .execute()
+    )
+    target = (target_res.data if target_res else None) or {}
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if target.get('facility_id') != caller_fac_id or target.get('role') not in {'asha_worker', 'doctor'}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PHC Administrators can only manage Doctor and ASHA Worker accounts in their own facility.",
+        )
+
     result = supabase_admin.table('profiles').update({'is_active': True}).eq('id', user_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="User not found")
@@ -377,13 +541,14 @@ async def reactivate_user(
         user_role=user.get("resolved_role"),
         resource_type="profiles",
         resource_id=user_id,
+        facility_id=caller_fac_id,
         ip_address=get_client_ip(request),
         details={"is_active": True},
     )
     return {'status': 'reactivated'}
 
 
-# ── Facilities management ─────────────────────────────────────────────────────
+# ── Facilities management (Local Read-Only Context) ───────────────────────────
 
 @router.get('/facilities')
 @limiter.limit("60/minute")
@@ -392,8 +557,12 @@ async def list_facilities(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    result = supabase_admin.table('facilities').select('*').order('name').execute()
-    return result.data
+    """
+    Returns only caller's own PHC record as read-only reference data.
+    """
+    caller_fac_id = _get_caller_facility_id(user)
+    result = supabase_admin.table('facilities').select('*').eq('id', caller_fac_id).execute()
+    return result.data or []
 
 
 @router.post('/facilities')
@@ -404,18 +573,10 @@ async def create_facility(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    result = supabase_admin.table('facilities').insert(body.model_dump()).execute()
-
-    log_phi_access(
-        event_type=AuditEventType.PHI_CREATE,
-        user_id=user.get("sub", "unknown"),
-        user_role=user.get("resolved_role"),
-        resource_type="facilities",
-        resource_id=result.data[0]['id'] if result.data else None,
-        ip_address=get_client_ip(request),
-        details={"name": body.name},
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Facility creation and toggling are managed by Supervisor Governance.",
     )
-    return result.data[0]
 
 
 @router.patch('/facilities/{facility_id}/toggle')
@@ -426,38 +587,13 @@ async def toggle_facility(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    current = supabase_admin.table('facilities').select('is_active').eq('id', facility_id).maybe_single().execute()
-    if not current or not current.data:
-        raise HTTPException(status_code=404, detail="Facility not found")
-
-    current_state = current.data['is_active']
-    new_state = not current_state
-
-    # Optimistic concurrency: only flip if the state hasn't changed since we
-    # read it, so two concurrent toggles can't race into an inconsistent result.
-    result = (
-        supabase_admin.table('facilities')
-        .update({'is_active': new_state})
-        .eq('id', facility_id)
-        .eq('is_active', current_state)
-        .execute()
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Facility creation and toggling are managed by Supervisor Governance.",
     )
-    if not result.data:
-        raise HTTPException(status_code=409, detail="Facility was modified concurrently. Please retry.")
-
-    log_phi_access(
-        event_type=AuditEventType.PHI_UPDATE,
-        user_id=user.get("sub", "unknown"),
-        user_role=user.get("resolved_role"),
-        resource_type="facilities",
-        resource_id=facility_id,
-        ip_address=get_client_ip(request),
-        details={"is_active": new_state},
-    )
-    return {'is_active': new_state}
 
 
-# ── System stats ──────────────────────────────────────────────────────────────
+# ── System stats & Audit Log ──────────────────────────────────────────────────
 
 @router.get('/stats')
 @limiter.limit("60/minute")
@@ -466,31 +602,11 @@ async def get_stats(
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
 ):
-    cases = supabase_admin.table('case_records').select('triage_level').is_('deleted_at', 'null').execute()
-    profiles = supabase_admin.table('profiles').select('role, is_active').execute()
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="System statistics are restricted to Supervisor Governance.",
+    )
 
-    triage_counts = {'EMERGENCY': 0, 'URGENT': 0, 'ROUTINE': 0}
-    for c in cases.data:
-        level = c.get('triage_level', 'ROUTINE')
-        triage_counts[level] = triage_counts.get(level, 0) + 1
-
-    role_counts = {}
-    active_count = 0
-    for p in profiles.data:
-        role_counts[p['role']] = role_counts.get(p['role'], 0) + 1
-        if p['is_active']:
-            active_count += 1
-
-    return {
-        'total_cases':   len(cases.data),
-        'triage_counts': triage_counts,
-        'total_users':   len(profiles.data),
-        'active_users':  active_count,
-        'role_counts':   role_counts,
-    }
-
-
-# ── Audit Log ──────────────────────────────────────────────────────────────────
 
 @router.get('/audit-log')
 @limiter.limit("60/minute")
@@ -498,33 +614,10 @@ async def get_audit_log(
     request: Request,
     authorization: str = Header(None),
     user: dict = Depends(require_role('admin')),
-    before: Optional[str] = None,  # created_at ISO cursor
+    before: Optional[str] = None,
     limit: int = 50,
 ):
-    """
-    Paginated, chronological view of phi_audit_log (FEATURES_ROADMAP §2.4) —
-    every PHI access and admin mutation is logged there via log_phi_access().
-    admin-only; RLS on phi_audit_log independently restricts SELECT to admins
-    too, so this is defense in depth, not the only access boundary.
-    """
-    limit = max(1, min(limit, 200))
-
-    query = (
-        supabase_admin.table('phi_audit_log')
-        .select('id, event_type, user_id, user_role, resource_type, resource_id, facility_id, ip_address, details, created_at')
-        .order('created_at', desc=True)
-        .limit(limit + 1)
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="System audit logs are restricted to Supervisor Governance.",
     )
-    if before:
-        query = query.lt('created_at', before)
-
-    result = query.execute()
-    rows = result.data or []
-    has_more = len(rows) > limit
-    rows = rows[:limit]
-
-    return {
-        'entries': rows,
-        'hasMore': has_more,
-        'nextCursor': rows[-1]['created_at'] if has_more and rows else None,
-    }

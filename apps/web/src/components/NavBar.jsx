@@ -1,5 +1,6 @@
+import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { LogOut } from 'lucide-react'
+import { LogOut, Menu, X } from 'lucide-react'
 import { useAuth } from '../store/authStore'
 
 const ROLE_LABELS = {
@@ -18,15 +19,30 @@ const ROLE_COLORS = {
 
 const LANGUAGES = ['en', 'hi', 'ta']
 
-export default function NavBar({ tabs, activeTab, onTabChange }) {
+export default function NavBar({ tabs = [], activeTab, onTabChange }) {
   const { profile, signOut } = useAuth()
   const { t, i18n } = useTranslation()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuButtonRef = useRef(null)
+
+  const activeTabObj = tabs.find(t => t.id === activeTab) || tabs[0]
+
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape' && menuOpen) {
+        setMenuOpen(false)
+        menuButtonRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [menuOpen])
 
   return (
-    <nav className="sticky top-0 z-10 bg-surface/80 backdrop-blur-md border-b border-leaf/60 shadow-card">
-      <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-3 sm:gap-6">
+    <nav className="sticky top-0 z-20 bg-surface/90 backdrop-blur-md border-b border-leaf/60 shadow-card">
+      <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between gap-3">
 
-        {/* Wordmark — a pulse line, not decoration: the app's actual subject */}
+        {/* Brand Wordmark */}
         <span className="flex items-center gap-2 shrink-0">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="text-forest" aria-hidden="true">
             <path d="M2 12h4l2-7 3 14 2.5-9 2 6h6.5" />
@@ -36,10 +52,8 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
           </span>
         </span>
 
-        {/* Tabs — underline indicator, horizontally scrollable so it never
-            pushes "Sign out" off-screen on narrow viewports or panels with
-            many tabs. */}
-        <div className="flex items-stretch gap-1 flex-1 min-w-0 h-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {/* Desktop Navigation Tabs (sm+) */}
+        <div className="hidden sm:flex items-stretch gap-1 flex-1 min-w-0 h-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {tabs.map(tab => (
             <button
               key={tab.id}
@@ -55,22 +69,22 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
           ))}
         </div>
 
-        {/* User identity */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Desktop User Identity & Controls (sm+) */}
+        <div className="hidden sm:flex items-center gap-3 shrink-0">
           <select
             value={i18n.language}
             onChange={(e) => i18n.changeLanguage(e.target.value)}
             aria-label={t('common.language')}
-            className="text-xs font-mono bg-surface2 border border-leaf/40 rounded-pill px-2 py-1 text-text2 hidden sm:block"
+            className="text-xs font-mono bg-surface2 border border-leaf/40 rounded-pill px-2 py-1 text-text2"
           >
             {LANGUAGES.map((lng) => (
               <option key={lng} value={lng}>{t(`common.languages.${lng}`)}</option>
             ))}
           </select>
-          <span className="text-sm text-text2 hidden sm:block font-body">
+          <span className="text-sm text-text2 font-body">
             {profile?.full_name || profile?.id?.slice(0, 8)}
           </span>
-          <span className={`hidden sm:block text-xs font-mono px-2 py-0.5 rounded-pill font-medium ${
+          <span className={`text-xs font-mono px-2 py-0.5 rounded-pill font-medium ${
             ROLE_COLORS[profile?.role] || ROLE_COLORS.admin
           }`}>
             {ROLE_LABELS[profile?.role] || profile?.role}
@@ -85,7 +99,96 @@ export default function NavBar({ tabs, activeTab, onTabChange }) {
           </button>
         </div>
 
+        {/* Mobile View: Active tab indicator & Compact menu trigger button */}
+        <div className="flex sm:hidden items-center gap-2 shrink-0">
+          {activeTabObj && (
+            <span className="text-xs font-medium text-forest bg-leaf/40 px-2.5 py-1 rounded-pill font-body truncate max-w-[130px]">
+              {activeTabObj.label}
+            </span>
+          )}
+          <button
+            ref={menuButtonRef}
+            onClick={() => setMenuOpen(v => !v)}
+            aria-expanded={menuOpen}
+            aria-controls="vitalnet-mobile-navigation"
+            aria-label="Toggle navigation menu"
+            className="flex items-center justify-center w-11 h-11 min-w-[44px] min-h-[44px] rounded-md border border-leaf/60 text-text hover:text-forest bg-surface2 transition-colors cursor-pointer"
+          >
+            {menuOpen ? <X size={20} aria-hidden="true" /> : <Menu size={20} aria-hidden="true" />}
+          </button>
+        </div>
       </div>
+
+      {/* Mobile Compact Dropdown Menu Overlay */}
+      {menuOpen && (
+        <div id="vitalnet-mobile-navigation" className="sm:hidden border-t border-leaf/40 bg-surface px-4 py-4 space-y-4 shadow-lg animate-fade-down">
+          {/* Identity & Role Badge */}
+          <div className="flex items-center justify-between pb-3 border-b border-leaf/20">
+            <div>
+              <p className="text-sm font-semibold text-text font-body">
+                {profile?.full_name || profile?.id?.slice(0, 8)}
+              </p>
+              <p className="text-xs text-text3 font-mono">{profile?.email}</p>
+            </div>
+            <span className={`text-xs font-mono px-2 py-0.5 rounded-pill font-medium ${
+              ROLE_COLORS[profile?.role] || ROLE_COLORS.admin
+            }`}>
+              {ROLE_LABELS[profile?.role] || profile?.role}
+            </span>
+          </div>
+
+          {/* Role Navigation Tabs */}
+          <div className="space-y-1">
+            <p className="text-[11px] font-mono font-semibold uppercase text-text3 tracking-wider mb-1">
+              Navigation
+            </p>
+            {tabs.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  onTabChange(tab.id)
+                  setMenuOpen(false)
+                }}
+                className={`w-full text-left px-3 py-2.5 rounded-md text-sm font-medium transition-colors ${
+                  activeTab === tab.id
+                    ? 'bg-forest/10 text-forest font-semibold border-l-4 border-forest'
+                    : 'text-text2 hover:bg-surface2 hover:text-text'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Language & Actions */}
+          <div className="pt-3 border-t border-leaf/20 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text3 font-mono">Language:</span>
+              <select
+                value={i18n.language}
+                onChange={(e) => i18n.changeLanguage(e.target.value)}
+                aria-label={t('common.language')}
+                className="text-xs font-mono bg-surface2 border border-leaf/40 rounded-pill px-2.5 py-1 text-text"
+              >
+                {LANGUAGES.map((lng) => (
+                  <option key={lng} value={lng}>{t(`common.languages.${lng}`)}</option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              onClick={() => {
+                setMenuOpen(false)
+                signOut()
+              }}
+              className="flex items-center gap-2 text-xs font-medium text-terra bg-terra/10 border border-terra/30 px-3 py-2 rounded-md hover:bg-terra/20 transition-colors min-h-[44px]"
+            >
+              <LogOut size={14} aria-hidden="true" />
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
     </nav>
   )
 }
