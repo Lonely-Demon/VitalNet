@@ -76,10 +76,28 @@ def _verify_token(token: str) -> dict:
         # signing algorithm and also catches revocation immediately.
 
     # Network fallback: get_user() raises if the token is invalid/expired/revoked.
-    supabase_anon.auth.get_user(token)
-    # Signature already validated above (network call) — read claims get_user()
-    # omits without re-verifying.
-    return jwt.get_unverified_claims(token)
+    user_resp = supabase_anon.auth.get_user(token)
+    if user_resp and getattr(user_resp, "user", None):
+        u = user_resp.user
+        return {
+            "sub": str(u.id),
+            "email": getattr(u, "email", None),
+            "role": getattr(u, "role", "authenticated"),
+            "app_metadata": getattr(u, "app_metadata", {}) or {},
+            "user_metadata": getattr(u, "user_metadata", {}) or {},
+        }
+
+    # Signature already validated or decode safely
+    try:
+        return jwt.decode(
+            token,
+            settings.supabase_jwt_secret,
+            algorithms=[ALGORITHM],
+            audience=AUDIENCE,
+            options={"verify_aud": True, "verify_exp": True},
+        )
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
 
 
 def _resolve_profile(user_id: str, token: str) -> Tuple[bool, str, Optional[str]]:

@@ -51,6 +51,12 @@ class AuditEventType:
     CONSENT_CAPTURED = "CONSENT_CAPTURED"
 
 
+def _sanitize_log_val(val: Any) -> str:
+    if val is None:
+        return ""
+    return str(val).replace("\r", "\\r").replace("\n", "\\n")
+
+
 def log_phi_access(
     event_type: str,
     user_id: str,
@@ -81,7 +87,14 @@ def log_phi_access(
     # lgtm[query-id] syntax, which GitHub's default CodeQL setup does not honor).
     audit_logger.info(
         "event=%s user=%s role=%s resource=%s:%s facility=%s ip=%s details=%s",
-        event_type, user_id, user_role, resource_type, resource_id, facility_id, ip_address, details,  # codeql[py/clear-text-logging-sensitive-data]
+        _sanitize_log_val(event_type),
+        _sanitize_log_val(user_id),
+        _sanitize_log_val(user_role),
+        _sanitize_log_val(resource_type),
+        _sanitize_log_val(resource_id),
+        _sanitize_log_val(facility_id),
+        _sanitize_log_val(ip_address),
+        _sanitize_log_val(details),  # codeql[py/clear-text-logging-sensitive-data]
     )
 
     try:

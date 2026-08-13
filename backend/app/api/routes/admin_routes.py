@@ -1,5 +1,4 @@
 import logging
-import re
 from typing import Optional, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -14,12 +13,19 @@ logger = logging.getLogger("vitalnet")
 
 router = APIRouter(prefix='/api/admin', tags=['admin'])
 
-# Uppercase + lowercase + digit + symbol, 12-128 chars.
-PASSWORD_POLICY_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{12,128}$")
-
-
 def _validate_password(password: str) -> None:
-    if not PASSWORD_POLICY_RE.match(password or ""):
+    p = password or ""
+    if not (12 <= len(p) <= 128):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be 12-128 characters and include an uppercase letter, "
+                   "a lowercase letter, a number, and a symbol",
+        )
+    has_lower = any(c.islower() for c in p)
+    has_upper = any(c.isupper() for c in p)
+    has_digit = any(c.isdigit() for c in p)
+    has_symbol = any(not c.isalnum() for c in p)
+    if not (has_lower and has_upper and has_digit and has_symbol):
         raise HTTPException(
             status_code=400,
             detail="Password must be 12-128 characters and include an uppercase letter, "
