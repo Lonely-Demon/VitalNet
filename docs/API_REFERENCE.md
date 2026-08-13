@@ -285,11 +285,11 @@ selected.
 Per-ASHA-worker aggregate metrics over a trailing window: submission count,
 `needs_review` rate, contraindication-flag rate, deterioration-alert rate,
 and triage-tier distribution.
-- **Query params**: `days` (default 30, 1–366), `facility_id` (optional,
-  **admin only** — a `supervisor`'s own facility always wins; passing a
-  different id as a supervisor is silently ignored, not an error).
-- **Scope**: `supervisor` is always restricted to their own facility;
-  `admin` defaults to system-wide, or narrows via `facility_id`.
+- **Query params**: `days` (default 30, 1–366), `facility_id` (optional —
+  `supervisor` defaults to organisation-wide but may pass `facility_id` to narrow to a specific PHC;
+  `admin` is strictly pinned to their resolved own facility).
+- **Scope**: `supervisor` is organisation-wide by default, or narrows via `facility_id`;
+  `admin` (PHC Administrator) is restricted to their own facility.
 - **Response**: `{ facility_id, window_days, worker_count, workers: [{
   user_id, full_name, submission_count, needs_review_count,
   needs_review_rate, contraindication_flag_count,
@@ -313,11 +313,11 @@ as §20/§22/§25.
 Today's aberration signals: `(facility, symptom)` pairs whose case count
 today exceeds the 7-day trailing baseline mean + 3 standard deviations, with
 a minimum floor of 3 cases before a day is even eligible to be flagged.
-- **Query params**: `facility_id` (optional, **admin only** — `doctor`/
-  `supervisor` are always scoped to their own facility; a different id
-  passed as either of those roles is silently ignored, not an error).
-- **Scope**: `doctor`/`supervisor` restricted to their own facility;
-  `admin` defaults to system-wide, or narrows via `facility_id`.
+- **Query params**: `facility_id` (optional — `supervisor` defaults to organisation-wide
+  but may pass `facility_id` to narrow to a specific PHC; `doctor` and `admin` are
+  strictly pinned to their resolved own facility).
+- **Scope**: `supervisor` is organisation-wide by default, or narrows via `facility_id`;
+  `doctor` and `admin` (PHC Administrator) are restricted to their own facility.
 - **Response**: `{ facility_id, date, baseline_days, signal_count, signals:
   [{ facility_id, symptom, today_count, baseline_mean, baseline_stddev,
   threshold }] }`, sorted by `today_count` descending.
