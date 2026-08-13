@@ -1,0 +1,12 @@
+{
+  "buildCommand": "pnpm --filter @vitalnet/clinical-core build && pnpm --filter @vitalnet/web run build",
+  "outputDirectory": "apps/web/dist",
+  "installCommand": "pnpm install --frozen-lockfile --ignore-scripts",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
