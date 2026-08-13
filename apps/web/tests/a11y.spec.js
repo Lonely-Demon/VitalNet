@@ -24,7 +24,7 @@ test.describe('Accessibility — WCAG 2 A/AA (axe-core)', () => {
   test('ASHA — new case intake form', async ({ page }) => {
     await page.goto('/')
     await loginAs(page, 'asha_worker')
-    await page.locator('text=New Case').waitFor({ state: 'visible', timeout: 5000 })
+    await page.getByRole('button', { name: 'New Case' }).waitFor({ state: 'visible', timeout: 5000 })
     await page.waitForTimeout(1100)
     await expectNoViolations(page)
   })
@@ -32,7 +32,7 @@ test.describe('Accessibility — WCAG 2 A/AA (axe-core)', () => {
   test('ASHA — my submissions', async ({ page }) => {
     await page.goto('/')
     await loginAs(page, 'asha_worker')
-    await page.click('text=My Submissions')
+    await page.getByRole('button', { name: 'My Submissions' }).click()
     await page.waitForTimeout(400)
     await expectNoViolations(page)
   })
@@ -54,15 +54,15 @@ test.describe('Accessibility — WCAG 2 A/AA (axe-core)', () => {
   test('supervisor — management surface', async ({ page }) => {
     await page.goto('/')
     await loginAs(page, 'supervisor')
-    await page.click('text=Management')
+    await page.getByRole('button', { name: 'Management' }).click()
     await page.waitForTimeout(400)
     await expectNoViolations(page)
   })
 
-  test('admin — users table', async ({ page }) => {
+  test('admin — local staff management', async ({ page }) => {
     await page.goto('/')
     await loginAs(page, 'admin')
-    await page.click('text=Users')
+    await page.getByRole('button', { name: 'Staff Management' }).click()
     await page.waitForTimeout(400)
     await expectNoViolations(page)
   })
@@ -93,8 +93,9 @@ test.describe('Mobile Navigation & Responsiveness', () => {
         await expect(toggleBtn).toHaveAttribute('aria-expanded', 'true')
 
         // Verify menu contents
-        await expect(page.locator('text=Management')).toBeVisible()
-        await expect(page.locator('text=Sign out')).toBeVisible()
+        const mobileMenu = page.locator('#vitalnet-mobile-navigation')
+        await expect(mobileMenu.getByRole('button', { name: 'Management' })).toBeVisible()
+        await expect(mobileMenu.getByRole('button', { name: 'Sign out' })).toBeVisible()
 
         // Close via Escape key
         await page.keyboard.press('Escape')

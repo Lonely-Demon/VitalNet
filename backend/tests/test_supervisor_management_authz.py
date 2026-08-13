@@ -4,8 +4,9 @@ Authorization & Lifecycle Invariant Tests for Supervisor Management Surface.
 import os
 from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
-from starlette.requests import Request
+from fastapi.routing import APIRoute
 from jose import jwt as _jwt
+from starlette.requests import Request
 
 _fake_key = _jwt.encode({"role": "anon"}, "x", algorithm="HS256")
 os.environ.setdefault("SUPABASE_URL", "https://testproj.supabase.co")
@@ -13,8 +14,7 @@ os.environ.setdefault("SUPABASE_ANON_KEY", _fake_key)
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", _fake_key)
 os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret-at-least-32-chars-long-aaaaaa")
 
-from fastapi.routing import APIRoute
-from app.api.routes import supervisor_management_routes
+from app.api.routes import supervisor_management_routes  # noqa: E402
 
 
 def make_dummy_request(method="GET", path="/"):

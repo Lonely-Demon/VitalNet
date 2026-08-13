@@ -27,7 +27,6 @@ from app.core.database import supabase_admin
 from app.api.routes.cases import limiter
 from app.api.routes.admin_routes import (
     CreateFacilityRequest,
-    _validate_password,
     _mask_csv_value,
     _provision_user,
     CreateUserRequest,

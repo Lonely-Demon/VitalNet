@@ -2,10 +2,11 @@
 Authorization regression & PHC Admin scoping tests.
 """
 import os
-from unittest.mock import MagicMock, patch
+
 from fastapi import HTTPException
-from starlette.requests import Request
+from fastapi.routing import APIRoute
 from jose import jwt as _jwt
+from starlette.requests import Request
 
 _fake_key = _jwt.encode({"role": "anon"}, "x", algorithm="HS256")
 os.environ.setdefault("SUPABASE_URL", "https://testproj.supabase.co")
@@ -14,8 +15,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", _fake_key)
 os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret-at-least-32-chars-long-aaaaaa")
 os.environ.setdefault("GROQ_API_KEY", "test-key")
 
-from fastapi.routing import APIRoute
-from app.api.routes import admin_routes, dsr_routes, metrics_routes
+from app.api.routes import admin_routes, dsr_routes, metrics_routes  # noqa: E402
 
 ADMIN_ROUTE_MODULES = [admin_routes, dsr_routes, metrics_routes]
 
