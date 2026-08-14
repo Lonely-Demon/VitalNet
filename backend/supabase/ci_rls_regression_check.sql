@@ -1,5 +1,5 @@
 -- CI-only functional RLS & Security Definer regression check.
--- Covers three concerns:
+-- Covers four concerns:
 --
 -- 1. JWT-metadata privilege escalation (phase32 fix, docs/DECISIONS.md §36):
 --    A user who sets user_metadata.role = 'admin' via Supabase's Auth API,
@@ -17,6 +17,11 @@
 --    Doctor is pinned to own facility for fn_outbreak_signal_counts; denied fn_team_metrics.
 --    ASHA Worker is denied execution for both aggregate functions.
 --    Supervisor has 0 direct case_records row access (clinical-data boundary).
+--
+-- 4. Protocol Assistant Supervisor Global Scope (phase41, docs/DECISIONS.md §40):
+--    Supervisor can insert, select, and curate global questions (facility_id IS NULL);
+--    PHC Admin and Doctor cannot select or update global questions;
+--    Supervisor direct case_records access remains strictly 0.
 --
 -- Technique: seed minimal data, SET ROLE authenticated, simulate real
 -- PostgREST-style JWT claims, assert row counts and function execution outcomes.
@@ -36,6 +41,7 @@
 -- 00000000-0000-0000-0000-00000000ca02   CI case_record (PHC B)
 -- 00000000-0000-0000-0000-00000000c001   CI protocol_question (PHC A)
 -- 00000000-0000-0000-0000-00000000c002   CI protocol_question (PHC B)
+-- 00000000-0000-0000-0000-00000000c003   CI protocol_question (Global / facility_id NULL)
 -- ──────────────────────────────────────────────────────────────────────────
 
 BEGIN;
@@ -423,4 +429,140 @@ $$;
 
 RESET ROLE;
 
-SELECT 'All RLS and Security Definer checks passed: Supervisor has global aggregate access & 0 direct case_records access; PHC Admin and Doctor are scoped locally; ASHA denied.' AS result;
+-- ══════════════════════════════════════════════════════════════════════════
+-- CHECK 8 — Phase 41: Protocol Assistant Supervisor Global Scope (facility_id IS NULL)
+-- 1. Authenticated Supervisor inserts a global question (facility_id = NULL).
+-- 2. Supervisor SELECT sees all 3 questions (c001, c002, c003).
+-- 3. Supervisor can curate c003 (UPDATE succeeds -> 1 row).
+-- 4. Doctor A SELECT sees only 1 question (c001; cannot see c002 or c003).
+-- 5. Doctor A UPDATE attempt on c003 fails to touch any row (0 rows updated).
+-- 6. PHC Admin A SELECT sees only 1 question (c001; cannot see c002 or c003).
+-- 7. PHC Admin A UPDATE attempt on c003 fails to touch any row (0 rows updated).
+-- 8. Supervisor clinical-data boundary: SELECT case_records remains exactly 0.
+-- ══════════════════════════════════════════════════════════════════════════
+
+-- 8a. Authenticated Supervisor inserts & selects global question (facility_id = NULL)
+SET ROLE authenticated;
+SELECT set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-000000000b01","role":"authenticated"}',
+  false
+);
+
+DO $$
+DECLARE
+  visible_protocols int;
+  visible_cases     int;
+  rows_updated      int;
+BEGIN
+  -- Insert global protocol question as authenticated supervisor
+  INSERT INTO public.protocol_questions (
+    id, asked_by, facility_id, question_text, status
+  ) VALUES (
+    '00000000-0000-0000-0000-00000000c003',
+    '00000000-0000-0000-0000-000000000b01',
+    NULL,
+    'What are the referral danger signs in pregnancy?',
+    'pending_curation'
+  );
+
+  -- Supervisor must see all 3 questions now (c001, c002, c003)
+  SELECT count(*) INTO visible_protocols FROM public.protocol_questions;
+  IF visible_protocols <> 3 THEN
+    RAISE EXCEPTION 'PHASE 41 REGRESSION (check 8a): Supervisor sees % protocol_questions instead of 3', visible_protocols;
+  END IF;
+
+  -- Supervisor can curate the global question (c003)
+  UPDATE public.protocol_questions
+     SET curator_answer_text = 'Danger signs: severe headache, blurred vision, vaginal bleeding, reduced fetal movements.',
+         status              = 'curated',
+         curated_by          = '00000000-0000-0000-0000-000000000b01',
+         curated_at          = now()
+   WHERE id = '00000000-0000-0000-0000-00000000c003';
+  GET DIAGNOSTICS rows_updated = ROW_COUNT;
+  IF rows_updated <> 1 THEN
+    RAISE EXCEPTION 'PHASE 41 REGRESSION (check 8b): Supervisor cannot curate global protocol question c003';
+  END IF;
+
+  -- Supervisor clinical boundary assertion: still 0 direct case_records access
+  SELECT count(*) INTO visible_cases FROM public.case_records;
+  IF visible_cases <> 0 THEN
+    RAISE EXCEPTION 'PHASE 41 REGRESSION (check 8c): Supervisor sees % case_records directly — clinical boundary violation!', visible_cases;
+  END IF;
+END
+$$;
+
+RESET ROLE;
+
+-- 8b. Doctor A (PHC A) cannot select or curate global question c003
+SET ROLE authenticated;
+SELECT set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-000000000d01","role":"authenticated"}',
+  false
+);
+
+DO $$
+DECLARE
+  visible_protocols int;
+  rows_updated      int;
+BEGIN
+  -- Doctor A sees only PHC A questions (1 row: c001). Global c003 and PHC B c002 must be invisible.
+  SELECT count(*) INTO visible_protocols FROM public.protocol_questions;
+  IF visible_protocols <> 1 THEN
+    RAISE EXCEPTION 'PHASE 41 REGRESSION (check 8d): Doctor A sees % protocol_questions instead of 1', visible_protocols;
+  END IF;
+
+  -- Doctor A cannot curate global question c003
+  UPDATE public.protocol_questions
+     SET curator_answer_text = 'Doctor unauthorized curation attempt',
+         status              = 'curated',
+         curated_by          = '00000000-0000-0000-0000-000000000d01',
+         curated_at          = now()
+   WHERE id = '00000000-0000-0000-0000-00000000c003';
+  GET DIAGNOSTICS rows_updated = ROW_COUNT;
+  IF rows_updated <> 0 THEN
+    RAISE EXCEPTION 'PHASE 41 REGRESSION (check 8e): Doctor A updated global question c003 (expected 0 rows updated)';
+  END IF;
+END
+$$;
+
+RESET ROLE;
+
+-- 8c. PHC Admin A (PHC A) cannot select or curate global question c003
+SET ROLE authenticated;
+SELECT set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-000000000a01","role":"authenticated"}',
+  false
+);
+
+DO $$
+DECLARE
+  visible_protocols int;
+  rows_updated      int;
+BEGIN
+  -- Admin A sees only PHC A questions (1 row: c001). Global c003 and PHC B c002 must be invisible.
+  SELECT count(*) INTO visible_protocols FROM public.protocol_questions;
+  IF visible_protocols <> 1 THEN
+    RAISE EXCEPTION 'PHASE 41 REGRESSION (check 8f): Admin A sees % protocol_questions instead of 1', visible_protocols;
+  END IF;
+
+  -- Admin A cannot curate global question c003
+  UPDATE public.protocol_questions
+     SET curator_answer_text = 'Admin unauthorized curation attempt',
+         status              = 'curated',
+         curated_by          = '00000000-0000-0000-0000-000000000a01',
+         curated_at          = now()
+   WHERE id = '00000000-0000-0000-0000-00000000c003';
+  GET DIAGNOSTICS rows_updated = ROW_COUNT;
+  IF rows_updated <> 0 THEN
+    RAISE EXCEPTION 'PHASE 41 REGRESSION (check 8g): Admin A updated global question c003 (expected 0 rows updated)';
+  END IF;
+END
+$$;
+
+RESET ROLE;
+
+SELECT 'All RLS and Security Definer checks passed: Supervisor has global aggregate access & global protocol access with 0 direct case_records access; PHC Admin and Doctor are scoped locally; ASHA denied aggregates.' AS result;
+
