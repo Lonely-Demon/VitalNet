@@ -1,12 +1,13 @@
 // frontend/src/components/ProtocolAssistant.jsx
 //
-// Protocol/guideline lookup assistant (docs/DECISIONS.md §27). Never asks
+// Protocol/guideline lookup assistant (docs/DECISIONS.md §27, §40). Never asks
 // about a specific patient — the backend LLM refuses those questions and
 // points back to case submission. Grounded answers show immediately;
 // ungrounded ones are queued for a supervisor/doctor/admin to curate, and
-// curated answers join a shared, growing facility FAQ.
+// curated answers join a shared, growing FAQ.
 import { useState, useEffect, useCallback } from 'react'
 import { askProtocolQuestion, listProtocolQuestions, curateProtocolAnswer } from '../lib/api'
+import { useAuth } from '../store/authStore'
 import { useTranslation } from 'react-i18next'
 import { Check } from 'lucide-react'
 
@@ -16,7 +17,7 @@ const LANGUAGES = [
   { code: 'ta', label: 'Tamil' },
 ]
 
-function QuestionCard({ q, canCurate, onCurated }) {
+function QuestionCard({ q, canCurate, onCurated, isSupervisor = false }) {
   const [answerDraft, setAnswerDraft] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
@@ -58,7 +59,7 @@ function QuestionCard({ q, canCurate, onCurated }) {
               <textarea
                 value={answerDraft}
                 onChange={(e) => setAnswerDraft(e.target.value)}
-                placeholder="Write the answer for the shared facility FAQ..."
+                placeholder={isSupervisor ? "Write the answer for the shared organization FAQ..." : "Write the answer for the shared facility FAQ..."}
                 maxLength={2000}
                 rows={3}
                 className="w-full rounded-lg border border-leaf/40 bg-surface2 px-3 py-2 text-sm text-text placeholder:text-text3"
@@ -81,6 +82,9 @@ function QuestionCard({ q, canCurate, onCurated }) {
 
 export default function ProtocolAssistant({ canCurate = false }) {
   const { i18n } = useTranslation()
+  const { profile, role } = useAuth()
+  const isSupervisor = (profile?.role ?? role) === 'supervisor'
+
   const [questions, setQuestions] = useState([])
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState(null)
@@ -184,20 +188,20 @@ export default function ProtocolAssistant({ canCurate = false }) {
                 Needs curation ({pending.length})
               </p>
               {pending.map((q) => (
-                <QuestionCard key={q.id} q={q} canCurate={canCurate} onCurated={handleCurated} />
+                <QuestionCard key={q.id} q={q} canCurate={canCurate} onCurated={handleCurated} isSupervisor={isSupervisor} />
               ))}
             </div>
           )}
 
           <div className="space-y-2">
             <p className="text-xs font-mono font-semibold uppercase tracking-wide text-text3">
-              Facility FAQ
+              {isSupervisor ? 'Organization FAQ' : 'Facility FAQ'}
             </p>
             {answered.length === 0 ? (
               <p className="text-sm text-text3">No answered questions yet.</p>
             ) : (
               answered.map((q) => (
-                <QuestionCard key={q.id} q={q} canCurate={canCurate} onCurated={handleCurated} />
+                <QuestionCard key={q.id} q={q} canCurate={canCurate} onCurated={handleCurated} isSupervisor={isSupervisor} />
               ))
             )}
           </div>

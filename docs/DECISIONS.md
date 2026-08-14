@@ -1916,3 +1916,17 @@ are green.
 - Permissions: `REVOKE ALL FROM PUBLIC`, `GRANT EXECUTE TO authenticated`. `SECURITY DEFINER` and `SET search_path = public` hardening preserved.
 - **Clinical Data Boundary**: Supervisor remains aggregate-only with zero direct `case_records` row-level access.
 
+### 40. Protocol Assistant Supervisor global scope and nullable facility_id (phase41)
+
+**Context**: In pre-production testing on `test` commit `48335f4`, a facility-unassigned Supervisor (`supervisor@test.vitalnet`) attempted to submit a general protocol question (`POST /api/protocol/ask`), which returned HTTP 400 `{"detail": "Account has no facility assigned"}`.
+
+**Root cause analysis**:
+1. In `backend/app/api/routes/protocol_routes.py`, `ask_protocol_question` checked `if not facility_id: raise HTTPException(status_code=400, detail="Account has no facility assigned")` without checking whether the caller was a Supervisor.
+2. In the original `phase25_protocol_questions.sql` migration, `protocol_questions.facility_id` was defined with a `NOT NULL` constraint, preventing a facility-unassigned Supervisor from persisting an organisation-wide general question.
+3. The Phase 39 RLS policies (`phase39_protocol_rls_governance.sql`) had already established that Supervisors have global SELECT and UPDATE access across all protocol questions, including rows with `facility_id IS NULL`, while Doctors, PHC Admins, and ASHA Workers remain strictly facility-scoped.
+
+**Decision**:
+- Added incremental migration `phase41_protocol_supervisor_global_scope.sql` to execute `ALTER TABLE public.protocol_questions ALTER COLUMN facility_id DROP NOT NULL;`. Foreign key referential integrity and indexes are retained.
+- Updated `ask_protocol_question` route guard in `protocol_routes.py` to derive `role = user.get("resolved_role") or ""` from the verified database profile (never JWT metadata) and only reject missing `facility_id` if `role != "supervisor"`. Facility-unassigned Supervisors persist `facility_id = None`.
+- Preserved all existing security boundaries: `require_role(*ALL_ROLES)`, rate limit 20/min, max 500 chars, LLM patient-specific refusal, user-scoped Supabase client (never service role), and 0 direct patient `case_records` row access for Supervisors.
+- Updated UI wording in `ProtocolAssistant.jsx` to render "Organization FAQ" for Supervisors while retaining "Facility FAQ" for PHC-local roles.
