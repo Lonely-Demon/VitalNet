@@ -326,7 +326,7 @@ a minimum floor of 3 cases before a day is even eligible to be flagged.
 
 ## Protocol assistant (`app/api/routes/protocol_routes.py`, prefix `/api/protocol`)
 
-A grounded, non-clinical guideline lookup assistant (`docs/DECISIONS.md` §27),
+A grounded, non-clinical guideline lookup assistant (`docs/DECISIONS.md` §27, §40),
 informed by ASHABot's own published design (Khushi Baby + Microsoft Research
 India, CHI 2025). Structurally separate from the triage pipeline: the LLM
 call (`app/services/llm.py::generate_protocol_answer`) never takes patient
@@ -340,8 +340,9 @@ Asks a general protocol/guideline question, answered against a small curated
 reference document (ANC schedule, immunisation schedule, danger signs,
 referral criteria) stuffed directly into the LLM's system prompt.
 - **Body**: `{ question_text (1-500 chars), language: "en"|"hi"|"ta" }`.
-- Requires the caller to have a `facility_id` (400 otherwise — this is a
-  facility-scoped feature).
+- Requires the caller to have a resolved `facility_id` unless the caller is a
+  `supervisor` (an unassigned supervisor persists `facility_id = null`, representing
+  an organisation-wide general question; 400 for other roles missing a facility).
 - **Response**: the created row — `{ id, asked_by, facility_id,
   question_text, language, llm_answer_text, llm_grounded, status, ... }`.
   `status` is `"answered"` when the LLM found it in the reference material,
@@ -350,15 +351,18 @@ referral criteria) stuffed directly into the LLM's system prompt.
 
 ### `GET /questions` — 60/min — `asha_worker`, `doctor`, `supervisor`, `admin`
 Lists protocol questions visible to the caller — the shared, growing
-facility FAQ. RLS is the real access boundary (facility-wide for every
-role, global for admin); `status`/`facility_id` query params only narrow
+FAQ. RLS is the real access boundary (facility-wide for local roles:
+`asha_worker`, `doctor`, `admin`; global across all facilities and unassigned
+questions for `supervisor`); `status`/`facility_id` query params only narrow
 the result, they don't grant access.
 
 ### `PATCH /questions/{question_id}/curate` — 30/min — `doctor`, `supervisor`, `admin`
 Records a human curator's answer for a `pending_curation` question —
 asynchronous curation, not ASHABot's synchronous multi-reviewer consensus
 (that mechanism's own published data showed it averaged ~60h, too slow to
-be useful). Sets `status` to `"curated"`.
+be useful). Sets `status` to `"curated"`. Doctors and PHC Admins curate their
+own facility's questions; Supervisors curate organisation-wide (including
+global questions).
 - **Body**: `{ curator_answer_text (1-2000 chars) }`.
 
 ---

@@ -1,6 +1,6 @@
 """
 Protocol Routes — a grounded, non-clinical guideline lookup assistant
-(docs/DECISIONS.md §27), informed by ASHABot's own published design
+(docs/DECISIONS.md §27, §40), informed by ASHABot's own published design
 (Khushi Baby + Microsoft Research India, CHI 2025).
 
 Structurally separate from the triage pipeline: never takes patient
@@ -11,9 +11,11 @@ context-stuffed knowledge base and refuses patient-specific questions.
 Unlike case_records, `protocol_questions` carries no PHI at all, so it uses
 genuine Postgres RLS via get_supabase_for_user — NOT the supabase_admin
 aggregate-only exception used by supervisor_routes.py/outbreak_routes.py.
-The SELECT policy is intentionally facility-wide for every role (asha_worker
-included): that's what makes a shared, growing FAQ possible.
+Supervisors operate organisation-wide across all facilities and unassigned
+global questions, while Doctors, PHC Administrators, and ASHA Workers are
+strictly scoped to their own facility.
 """
+
 import logging
 from datetime import datetime, timezone
 from typing import Literal, Optional
@@ -54,12 +56,14 @@ async def ask_protocol_question(
     """
     Asks a general protocol/guideline question. Answered inline when the LLM
     finds it in the curated reference material; otherwise queued for
-    asynchronous curation by a supervisor/doctor/admin at the same facility
-    — never a synchronous multi-reviewer gate (ASHABot's own published data
-    found that mechanism averaged ~60h, too slow to be useful).
+    asynchronous curation by a supervisor (organisation-wide) or doctor/admin
+    at the caller's facility — never a synchronous multi-reviewer gate
+    (ASHABot's own published data found that mechanism averaged ~60h, too
+    slow to be useful).
     """
+    role = user.get("resolved_role") or ""
     facility_id = user.get("resolved_facility_id")
-    if not facility_id:
+    if not facility_id and role != "supervisor":
         raise HTTPException(status_code=400, detail="Account has no facility assigned")
 
     raw_token = extract_bearer_token(authorization)
@@ -81,7 +85,9 @@ async def ask_protocol_question(
         res = db.table("protocol_questions").insert(row).execute()
     except Exception as e:
         logger.warning("Protocol question insert failed: %s", e)
-        raise HTTPException(status_code=502, detail="Could not save your question — try again")
+        raise HTTPException(
+            status_code=502, detail="Could not save your question — try again"
+        )
 
     return (res.data or [row])[0]
 
@@ -97,10 +103,10 @@ async def list_protocol_questions(
 ):
     """
     Lists protocol questions visible to the caller — the shared, growing
-    facility FAQ. RLS (protocol_questions_select_policy) is the real access
-    boundary: facility-wide for every role, or global for admin; the
-    `facility_id`/`status` params here are just query narrowing, not an
-    access grant.
+    FAQ. RLS (protocol_questions_select_policy) is the real access
+    boundary: facility-wide for local roles (doctor, admin, asha_worker),
+    or global for supervisor; the `facility_id`/`status` params here are
+    just query narrowing, not an access grant.
     """
     raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
@@ -115,7 +121,9 @@ async def list_protocol_questions(
         res = query.execute()
     except Exception as e:
         logger.warning("Protocol question list query failed: %s", e)
-        raise HTTPException(status_code=502, detail="Could not load questions — try again")
+        raise HTTPException(
+            status_code=502, detail="Could not load questions — try again"
+        )
 
     return {"questions": res.data or []}
 
@@ -132,9 +140,10 @@ async def curate_protocol_answer(
     """
     Records a human curator's answer for a question the LLM couldn't
     ground. RLS (protocol_questions_update_policy) is the real access
-    boundary — a supervisor/doctor can only reach rows at their own
-    facility; require_role here is a clean 403 for other roles, not the
-    enforcement itself.
+    boundary — a doctor/admin can only reach rows at their own
+    facility, while a supervisor can curate organisation-wide (including
+    global questions); require_role here is a clean 403 for other roles,
+    not the enforcement itself.
     """
     raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
@@ -155,9 +164,13 @@ async def curate_protocol_answer(
         )
     except Exception as e:
         logger.warning("Protocol question curation update failed: %s", e)
-        raise HTTPException(status_code=502, detail="Could not save your answer — try again")
+        raise HTTPException(
+            status_code=502, detail="Could not save your answer — try again"
+        )
 
     if not res.data:
-        raise HTTPException(status_code=404, detail="Question not found or not accessible")
+        raise HTTPException(
+            status_code=404, detail="Question not found or not accessible"
+        )
 
     return res.data[0]
