@@ -1930,3 +1930,20 @@ are green.
 - Updated `ask_protocol_question` route guard in `protocol_routes.py` to derive `role = user.get("resolved_role") or ""` from the verified database profile (never JWT metadata) and only reject missing `facility_id` if `role != "supervisor"`. Facility-unassigned Supervisors persist `facility_id = None`.
 - Preserved all existing security boundaries: `require_role(*ALL_ROLES)`, rate limit 20/min, max 500 chars, LLM patient-specific refusal, user-scoped Supabase client (never service role), and 0 direct patient `case_records` row access for Supervisors.
 - Updated UI wording in `ProtocolAssistant.jsx` to render "Organization FAQ" for Supervisors while retaining "Facility FAQ" for PHC-local roles.
+
+### 41. ASHA online submission CORS preflight X-Event-Id allow-list and backend reachability probe (phase42)
+
+**Context**: In pre-production testing on `test`, an ASHA Worker's online case submission failed to reach the backend, displaying "Saved Offline" and remaining queued in the outbox.
+
+**Root cause analysis**:
+1. `apps/web/src/stores/syncStore.js` sends custom idempotency header `X-Event-Id` on case submission (`POST /api/submit`) and outbox drain.
+2. In `backend/app/main.py`, `CORSMiddleware` configured `allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Device-Id", "X-Request-ID"]` which omitted `X-Event-Id`.
+3. The browser sent an `OPTIONS /api/submit` preflight with `Access-Control-Request-Headers: authorization,content-type,x-event-id`. Because `X-Event-Id` was omitted from `allow_headers`, the backend rejected the preflight with HTTP 400 `Disallowed CORS headers`, causing the browser `fetch` to reject with a `TypeError`.
+4. `syncStore.js` caught the network failure and queued the submission in the offline outbox as intended for true network outages, resulting in the misleading "Saved Offline" state.
+5. In addition, `apps/web/src/lib/connectivity.js` probed relative path `/api/health`, hitting the frontend Vercel SPA domain (which returned HTML 200) instead of the actual configured backend URL (`VITE_API_BASE_URL`).
+
+**Decision**:
+- Explicitly added `"X-Event-Id"` to `CORSMiddleware` `allow_headers` in `backend/app/main.py`. Retained the explicit allow-list without wildcards (`*`) to preserve origin and header boundaries.
+- Added middleware-level regression tests in `backend/tests/test_cors_preflight.py` asserting 200 OK, `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, case-insensitive inclusion of `x-event-id`, `authorization`, `content-type`, and denial of untrusted origins.
+- Updated `apps/web/src/lib/connectivity.js` to probe `${apiBase('health')}/api/health`, preserving the 5-second timeout and `cache: 'no-store'` behavior while targeting the configured backend URL.
+

@@ -10,6 +10,7 @@ This file is responsible ONLY for:
 
 All route logic lives in app/api/routes/.
 """
+
 import uuid
 from contextlib import asynccontextmanager
 
@@ -27,13 +28,28 @@ from app.core.logging import setup_logging
 from app.core.correlation import set_correlation_id
 from app.core.config import settings
 from app.ml.classifier import load_classifier
-from app.api.routes import cases, admin_routes, analytics_routes, security, push_routes, referral_routes, dsr_routes, voice_routes, metrics_routes, supervisor_routes, outbreak_routes, protocol_routes, supervisor_management_routes
+from app.api.routes import (
+    cases,
+    admin_routes,
+    analytics_routes,
+    security,
+    push_routes,
+    referral_routes,
+    dsr_routes,
+    voice_routes,
+    metrics_routes,
+    supervisor_routes,
+    outbreak_routes,
+    protocol_routes,
+    supervisor_management_routes,
+)
 
 # ── 1. Structured JSON logging — must be first ────────────────────────────────
 logger = setup_logging()
 
 
 # ── 2. ML model lifespan ──────────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -53,11 +69,15 @@ async def lifespan(app: FastAPI):
     try:
         loaded = load_classifier()
         if not loaded:
-            logger.warning("ML classifier failed to load. Booting in degraded mode (rules-based fallback).")
+            logger.warning(
+                "ML classifier failed to load. Booting in degraded mode (rules-based fallback)."
+            )
         else:
             logger.info("ML classifier loaded successfully")
     except Exception as e:
-        logger.warning("Unexpected error loading ML classifier: %s. Booting in degraded mode.", e)
+        logger.warning(
+            "Unexpected error loading ML classifier: %s. Booting in degraded mode.", e
+        )
 
     logger.info("VitalNet API started")
     yield
@@ -99,20 +119,29 @@ app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
 # header value itself is not a secret — the protection is the preflight gate.
 # X-Device-Id lets future abuse/anomaly detection distinguish devices per user.
 
+
 @app.middleware("http")
 async def csrf_and_device_guard(request: Request, call_next):
-    if request.url.path.startswith("/api") and request.method.upper() in _state_changing_methods:
+    if (
+        request.url.path.startswith("/api")
+        and request.method.upper() in _state_changing_methods
+    ):
         auth_header = request.headers.get("authorization")
         if auth_header:
             csrf_header = request.headers.get("x-csrf-token", "")
             if csrf_header != settings.csrf_token:
-                return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
+                return JSONResponse(
+                    status_code=403, content={"detail": "CSRF token missing or invalid"}
+                )
             if not request.headers.get("x-device-id"):
-                return JSONResponse(status_code=400, content={"detail": "Missing X-Device-Id header"})
+                return JSONResponse(
+                    status_code=400, content={"detail": "Missing X-Device-Id header"}
+                )
     return await call_next(request)
 
 
 # ── 7. Security headers — applied to every response ───────────────────────────
+
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -126,16 +155,24 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cache-Control"] = "no-store"
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
     response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
     response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
-    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'self'")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; frame-ancestors 'none'; base-uri 'self'",
+    )
     if settings.environment != "development":
-        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=63072000; includeSubDomains; preload"
+        )
     return response
 
 
 # ── 8. Correlation ID middleware ──────────────────────────────────────────────
+
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
     """Propagates/generates X-Request-ID for request tracing across logs and responses."""
@@ -188,7 +225,14 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Device-Id", "X-Request-ID"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-CSRF-Token",
+        "X-Device-Id",
+        "X-Request-ID",
+        "X-Event-Id",
+    ],
 )
 
 
@@ -211,6 +255,7 @@ app.include_router(protocol_routes.router)
 
 # ── 11. Global exception handlers — emit structured JSON, never raw tracebacks ─
 
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled server error", extra={"path": str(request.url.path)})
@@ -227,7 +272,10 @@ def _scrub_validation_errors(errors: list) -> list:
     Strip 'input' (and the noisy 'url'/'ctx') so validation errors can be
     logged and returned without leaking patient data into logs or responses.
     """
-    return [{k: v for k, v in err.items() if k not in ("input", "url", "ctx")} for err in errors]
+    return [
+        {k: v for k, v in err.items() if k not in ("input", "url", "ctx")}
+        for err in errors
+    ]
 
 
 @app.exception_handler(RequestValidationError)
@@ -241,6 +289,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 # ── 12. Health Check ──────────────────────────────────────────────────────────
+
 
 @app.get("/api/health")
 @cases.limiter.limit("120/minute")
@@ -294,5 +343,7 @@ async def health(request: Request, authorization: str = Header(default=None)):
         }
 
     if not is_healthy:
-        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=response_body)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=response_body
+        )
     return response_body
