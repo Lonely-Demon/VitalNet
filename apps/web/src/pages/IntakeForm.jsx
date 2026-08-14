@@ -13,6 +13,7 @@ import { EmergencySmsAlert } from '../components/EmergencySmsAlert'
 import { AmbulanceCallButton } from '../components/AmbulanceCallButton'
 import { PatientKeyCard } from '../components/PatientKeyCard'
 import { getCaseHistoryByPatientKey } from '../api/cases'
+import { serializeIntakePayload } from '../lib/intakePayload'
 
 // Stable English identifiers — these are the actual values submitted to the
 // API (chief_complaint is a free-text-ish field, not a coded enum server-
@@ -132,25 +133,6 @@ const emptyForm = {
   human_review_reason: "",
   consent_captured: false,
   patient_key: "",
-}
-
-export function serializeIntakePayload(form, patientKey, consentCapturedAt = new Date().toISOString()) {
-  return {
-    ...form,
-    patient_key: patientKey,
-    chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint?.trim() || "" : form.chief_complaint,
-    patient_name: form.patient_name?.trim() || "",
-    patient_age: form.patient_age ? parseInt(form.patient_age) : undefined,
-    bp_systolic: form.bp_systolic ? parseInt(form.bp_systolic) : null,
-    bp_diastolic: form.bp_diastolic ? parseInt(form.bp_diastolic) : null,
-    spo2: form.spo2 ? parseInt(form.spo2) : null,
-    heart_rate: form.heart_rate ? parseInt(form.heart_rate) : null,
-    temperature: form.temperature ? parseFloat(form.temperature) : null,
-    is_pregnant: Boolean(form.is_pregnant),
-    human_review_requested: Boolean(form.human_review_requested),
-    human_review_reason: form.human_review_reason?.trim() || undefined,
-    consent_captured_at: consentCapturedAt,
-  }
 }
 
 export default function IntakeForm() {

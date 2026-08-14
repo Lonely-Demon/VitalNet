@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { serializeIntakePayload } from '../src/pages/IntakeForm.jsx'
+import { serializeIntakePayload } from '../src/lib/intakePayload.js'
 import { validateIntakeForm } from '@vitalnet/clinical-core'
 
 const BASE_FORM = {
