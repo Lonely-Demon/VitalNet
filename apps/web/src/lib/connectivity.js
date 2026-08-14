@@ -4,9 +4,11 @@
 // In rural clinics with satellite internet, the local Wi-Fi can be up while the backend
 // is unreachable — navigator.onLine stays true but all fetches hang for 60-90 seconds.
 
+import { apiBase } from '@/api/base'
+
 const PROBE_TIMEOUT_MS = 5000
-const PROBE_URL = '/api/health'   // VitalNet backend itself — not an external URL.
-// This correctly handles deployments where the backend is on the clinic LAN.
+const PROBE_URL = `${apiBase('health')}/api/health`
+
 
 /**
  * True connectivity check: verifies the VitalNet backend is reachable.
