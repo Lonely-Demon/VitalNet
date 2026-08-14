@@ -134,6 +134,25 @@ const emptyForm = {
   patient_key: "",
 }
 
+export function serializeIntakePayload(form, patientKey, consentCapturedAt = new Date().toISOString()) {
+  return {
+    ...form,
+    patient_key: patientKey,
+    chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint?.trim() || "" : form.chief_complaint,
+    patient_name: form.patient_name?.trim() || "",
+    patient_age: form.patient_age ? parseInt(form.patient_age) : undefined,
+    bp_systolic: form.bp_systolic ? parseInt(form.bp_systolic) : null,
+    bp_diastolic: form.bp_diastolic ? parseInt(form.bp_diastolic) : null,
+    spo2: form.spo2 ? parseInt(form.spo2) : null,
+    heart_rate: form.heart_rate ? parseInt(form.heart_rate) : null,
+    temperature: form.temperature ? parseFloat(form.temperature) : null,
+    is_pregnant: Boolean(form.is_pregnant),
+    human_review_requested: Boolean(form.human_review_requested),
+    human_review_reason: form.human_review_reason?.trim() || undefined,
+    consent_captured_at: consentCapturedAt,
+  }
+}
+
 export default function IntakeForm() {
   const { t, i18n } = useTranslation()
   const speechLang = SPEECH_LANG_MAP[i18n.language] || "en-US"
@@ -259,22 +278,7 @@ export default function IntakeForm() {
       isNewPatientKey = true
     }
 
-    const payload = {
-      ...form,
-      patient_key: patientKey,
-      chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint?.trim() || "" : form.chief_complaint,
-      patient_name: form.patient_name?.trim() || "",
-      patient_age: form.patient_age ? parseInt(form.patient_age) : undefined,
-      bp_systolic: form.bp_systolic ? parseInt(form.bp_systolic) : null,
-      bp_diastolic: form.bp_diastolic ? parseInt(form.bp_diastolic) : null,
-      spo2: form.spo2 ? parseInt(form.spo2) : null,
-      heart_rate: form.heart_rate ? parseInt(form.heart_rate) : null,
-      temperature: form.temperature ? parseFloat(form.temperature) : null,
-      is_pregnant: Boolean(form.is_pregnant),
-      human_review_requested: Boolean(form.human_review_requested),
-      human_review_reason: form.human_review_reason?.trim() || null,
-      consent_captured_at: new Date().toISOString(),
-    }
+    const payload = serializeIntakePayload(form, patientKey)
 
     // Zod clinical boundary validation — the same schema the server enforces
     const validation = validateIntakeForm(payload)
