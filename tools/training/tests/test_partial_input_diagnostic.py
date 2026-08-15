@@ -3,13 +3,17 @@ Synthetic Unit Tests for NHAMCS Root-Cause Diagnostic & Ablation Harness.
 
 Validates:
 1. Reference label freezing: Labels computed once on full_input and frozen.
-2. 4-regime transformations & invariants: undeclared fields strictly unchanged.
+2. 4-regime transformations & invariants: undeclared fields strictly unchanged;
+   asserts complaint_duration, duration_days, current_medications, and is_pregnant
+   are blanked/defaulted as declared.
 3. Controlled 4-regime ablation metrics & deltas.
 4. Neutral missing-vital analysis across 0, 1, 2, 3 missing vitals.
 5. Cross-architecture comparison between legacy backend and clinical-core rules-first.
-6. Hardened --nhamcs-diagnostic non-scoring invariants: monkeypatching scoring functions
-   proves that NHAMCS diagnostic runs in purely aggregate, non-scoring mode.
-7. Zero-patient-leakage assertions and IMMEDR caveat verification.
+6. Hardened --nhamcs-diagnostic non-scoring invariants: monkeypatching
+   load_for_evaluation, CanonicalPatientRecord, predict_triage, and assign_triage_labels
+   proves that NHAMCS diagnostic runs in a streaming, aggregate-only mode that never
+   constructs record objects or invokes scoring.
+7. Complete source provenance verification and zero-patient-leakage assertions.
 """
 
 import copy
@@ -83,18 +87,28 @@ class TestLabelFreezingAndRegimeInvariants:
         for orig, p_ns in zip(full, no_sym):
             assert p_ns["symptoms"] == []
             assert p_ns["chief_complaint"] == orig["chief_complaint"]
+            assert p_ns["complaint_duration"] == orig["complaint_duration"]
             assert p_ns["patient_age"] == orig["patient_age"]
 
         for orig, p_nt in zip(full, no_txt):
             assert p_nt["symptoms"] == orig["symptoms"]
             assert p_nt["chief_complaint"] == ""
+            assert p_nt["complaint_duration"] == ""
+            assert p_nt["duration_days"] == 0
             assert p_nt["location"] == ""
-            assert p_nt["known_conditions"] in ("", [])
+            assert p_nt["known_conditions"] in ("", [], None)
+            assert p_nt["current_medications"] in ("", [], None)
+            assert p_nt["is_pregnant"] is False
 
         for orig, p_pt in zip(full, part):
             assert p_pt["symptoms"] == []
             assert p_pt["chief_complaint"] == ""
+            assert p_pt["complaint_duration"] == ""
+            assert p_pt["duration_days"] == 0
             assert p_pt["location"] == ""
+            assert p_pt["known_conditions"] in ("", [], None)
+            assert p_pt["current_medications"] in ("", [], None)
+            assert p_pt["is_pregnant"] is False
             assert "respiratory_rate" not in p_pt or p_pt.get("respiratory_rate") is None
             for vf in FIVE_VITAL_FIELDS:
                 assert p_pt[vf] == orig[vf]
@@ -174,25 +188,39 @@ class TestArchitectureComparison:
             assert "rules_first_distribution" in data
 
 
-# ── Suite 5: Hardened Non-Scoring --nhamcs-diagnostic Invariants ─────────────
+# ── Suite 5: Hardened Non-Scoring & Streaming --nhamcs-diagnostic Invariants ─
 
 class TestHardenedNHAMCSDiagnostic:
-    """Validates that --nhamcs-diagnostic is strictly aggregate-only and cannot score."""
+    """Validates that --nhamcs-diagnostic is strictly streaming aggregate-only and cannot score."""
 
-    def test_nhamcs_diagnostic_monkeypatch_proves_non_scoring(self, monkeypatch):
+    def test_nhamcs_diagnostic_monkeypatch_proves_non_scoring_and_no_record_construction(self, monkeypatch):
         """
-        Monkeypatches predict_triage and assign_triage_labels to raise an error.
-        run_nhamcs_diagnostic MUST succeed without triggering either function.
+        Monkeypatches:
+        1. NHAMCS2022Source.load_for_evaluation
+        2. evaluation_sources.base.CanonicalPatientRecord
+        3. classifier.predict_triage
+        4. train_classifier.assign_triage_labels
+        run_nhamcs_diagnostic MUST succeed without triggering any of them.
         """
         from app.ml import classifier as _clf_mod
         import train_classifier as _tc
+        import evaluation_sources.nhamcs_2022 as _nhamcs_mod
+        import evaluation_sources.base as _base_mod
+
+        def _forbidden_load_for_evaluation(*args, **kwargs):
+            raise RuntimeError("CRITICAL VIOLATION: load_for_evaluation was invoked in diagnostic mode!")
+
+        def _forbidden_record_construction(*args, **kwargs):
+            raise RuntimeError("CRITICAL VIOLATION: CanonicalPatientRecord was constructed in diagnostic mode!")
 
         def _forbidden_predict_triage(*args, **kwargs):
-            raise RuntimeError("CRITICAL VIOLATION: predict_triage was invoked during non-scoring diagnostic!")
+            raise RuntimeError("CRITICAL VIOLATION: predict_triage was invoked in diagnostic mode!")
 
         def _forbidden_assign_triage(*args, **kwargs):
-            raise RuntimeError("CRITICAL VIOLATION: assign_triage_labels was invoked during non-scoring diagnostic!")
+            raise RuntimeError("CRITICAL VIOLATION: assign_triage_labels was invoked in diagnostic mode!")
 
+        monkeypatch.setattr(_nhamcs_mod.NHAMCS2022Source, "load_for_evaluation", _forbidden_load_for_evaluation)
+        monkeypatch.setattr(_base_mod, "CanonicalPatientRecord", _forbidden_record_construction)
         monkeypatch.setattr(_clf_mod, "predict_triage", _forbidden_predict_triage)
         monkeypatch.setattr(_tc, "assign_triage_labels", _forbidden_assign_triage)
 
@@ -200,9 +228,24 @@ class TestHardenedNHAMCSDiagnostic:
         report = run_nhamcs_diagnostic(SYNTHETIC_NHAMCS_TXT)
 
         assert report["execution_mode"] == "nhamcs_diagnostic"
+        assert "source_manifest" in report
         assert "proxy_vs_vital_derangement_cross_tabulation" in report
         assert "dataset_summary" in report
         assert "proxy_tier_breakdown" in report
+
+        # Validate complete source_manifest provenance
+        sm = report["source_manifest"]
+        assert sm["source_id"] == "nhamcs_2022"
+        assert "CDC NHAMCS" in sm["source_name"]
+        assert sm["version"] == "2022 Public Use File"
+        assert sm["official_url"] == "https://www.cdc.gov/nchs/nhamcs/documentation/index.html"
+        assert "CDC Public Use" in sm["license_note"]
+        assert isinstance(sm["file_sha256"], str) and len(sm["file_sha256"]) == 64
+        assert isinstance(sm["file_size_bytes"], int) and sm["file_size_bytes"] > 0
+        assert sm["input_mode"] == "partial_input"
+        assert "nhamcs_immediacy_v1" in sm["label_definition"]
+        assert sm["scoring_supported"] is False
+        assert sm["execution_mode"] == "nhamcs_diagnostic"
 
         cross_tab = report["proxy_vs_vital_derangement_cross_tabulation"]
         for t_name in ("ROUTINE", "URGENT", "EMERGENCY"):
@@ -221,11 +264,10 @@ class TestHardenedNHAMCSDiagnostic:
 
     def test_assert_zero_patient_leakage_enforcement(self):
         valid_report = run_nhamcs_diagnostic(SYNTHETIC_NHAMCS_TXT)
-        # Should pass without error
         assert_zero_patient_leakage(valid_report)
 
         # Adversarial check: inject forbidden keys
-        for bad_key in ("form_data", "patient_records", "symptoms", "chief_complaint", "patient_id"):
+        for bad_key in ("form_data", "patient_records", "symptoms", "chief_complaint", "patient_id", "raw_fields"):
             bad_report = copy.deepcopy(valid_report)
             bad_report["nested"] = {bad_key: "leaked_data"}
             with pytest.raises(AssertionError, match=f"Patient-level key '{bad_key}'"):

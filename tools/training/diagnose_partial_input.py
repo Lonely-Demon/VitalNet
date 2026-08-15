@@ -14,11 +14,13 @@ CRITICAL SAFETY & GOVERNANCE BOUNDARIES:
 - Never alters classifier weights, thresholds, feature engineering, or rules.
 - Freezes each synthetic patient's reference label BEFORE ablation; never recomputes labels on ablated data.
 - Hardened --nhamcs-diagnostic mode is aggregate-only and strictly cannot score (never calls predict_triage or assignTier).
+- One-pass streaming accumulator for real data; never constructs CanonicalPatientRecord or form_data for real records.
 - Emits zero patient-level rows, IDs, form_data, text, or free-text fields in reports.
 """
 
 import argparse
 import copy
+import hashlib
 import importlib.util
 import json
 import math
@@ -54,7 +56,6 @@ _spec.loader.exec_module(tc)
 
 from app.ml import classifier as clf_mod  # noqa: E402
 from app.ml.clinical_features import ClinicalFeatureEngineer  # noqa: E402
-from evaluation_sources.nhamcs_2022 import NHAMCS2022Source  # noqa: E402
 
 TIER_MAP = {0: "ROUTINE", 1: "URGENT", 2: "EMERGENCY"}
 TIER_INDICES = {"ROUTINE": 0, "URGENT": 1, "EMERGENCY": 2}
@@ -147,6 +148,16 @@ def _get_git_commit() -> str:
         return "unavailable"
 
 
+def _compute_file_sha256(file_path: str) -> Tuple[str, int]:
+    h = hashlib.sha256()
+    size = 0
+    with open(file_path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+            size += len(chunk)
+    return h.hexdigest(), size
+
+
 # ── Core Invariant 1: Reference Label Freezing ────────────────────────────────
 
 def freeze_synthetic_reference_labels(patients: List[Dict[str, Any]]) -> List[int]:
@@ -224,7 +235,8 @@ def assert_regime_invariants(
     regime_name: str,
 ) -> None:
     """
-    Asserts that undeclared fields remain strictly identical between full and ablated cohorts.
+    Asserts that undeclared fields remain strictly identical between full and ablated cohorts,
+    and declared ablated fields are strictly blanked or defaulted.
     """
     assert len(patients_full) == len(patients_ablated), "Cohort size mismatch"
     for i, (pf, pa) in enumerate(zip(patients_full, patients_ablated)):
@@ -237,16 +249,32 @@ def assert_regime_invariants(
         if regime_name == "no_symptoms":
             assert pa.get("symptoms") == [], f"symptoms not empty in no_symptoms at index {i}"
             assert pf.get("chief_complaint") == pa.get("chief_complaint"), f"Complaint mismatch at index {i}"
+            assert pf.get("complaint_duration") == pa.get("complaint_duration")
+            assert pf.get("duration_days") == pa.get("duration_days")
             assert pf.get("location") == pa.get("location"), f"Location mismatch at index {i}"
+            assert pf.get("known_conditions") == pa.get("known_conditions")
+            assert pf.get("current_medications") == pa.get("current_medications")
+            assert pf.get("is_pregnant") == pa.get("is_pregnant")
 
         elif regime_name == "no_text":
             assert pf.get("symptoms") == pa.get("symptoms"), f"Symptoms altered in no_text at index {i}"
             assert pa.get("chief_complaint") in ("", None), f"Complaint not blanked in no_text at index {i}"
+            assert pa.get("complaint_duration") in ("", None), f"Duration not blanked in no_text at index {i}"
+            assert pa.get("duration_days") == 0, f"Duration days not 0 in no_text at index {i}"
+            assert pa.get("location") in ("", None), f"Location not blanked in no_text at index {i}"
             assert pa.get("known_conditions") in ("", [], None), f"Conditions not blanked in no_text at index {i}"
+            assert pa.get("current_medications") in ("", [], None), f"Meds not blanked in no_text at index {i}"
+            assert pa.get("is_pregnant") in (False, None), f"is_pregnant not False in no_text at index {i}"
 
         elif regime_name == "partial_input":
             assert pa.get("symptoms") == [], f"symptoms not empty in partial_input at index {i}"
             assert pa.get("chief_complaint") in ("", None), f"Complaint not blanked in partial_input at index {i}"
+            assert pa.get("complaint_duration") in ("", None), f"Duration not blanked in partial_input at index {i}"
+            assert pa.get("duration_days") == 0, f"Duration days not 0 in partial_input at index {i}"
+            assert pa.get("location") in ("", None), f"Location not blanked in partial_input at index {i}"
+            assert pa.get("known_conditions") in ("", [], None), f"Conditions not blanked in partial_input at index {i}"
+            assert pa.get("current_medications") in ("", [], None), f"Meds not blanked in partial_input at index {i}"
+            assert pa.get("is_pregnant") in (False, None), f"is_pregnant not False in partial_input at index {i}"
             assert "respiratory_rate" not in pa or pa.get("respiratory_rate") is None, (
                 f"respiratory_rate present in partial_input at index {i}"
             )
@@ -622,46 +650,44 @@ def run_architecture_comparison(
     return results
 
 
-# ── Hardened --nhamcs-diagnostic (Aggregate-Only, Non-Scoring) ────────────────
+# ── Hardened --nhamcs-diagnostic (Streaming Aggregate-Only, Non-Scoring) ─────
 
 def run_nhamcs_diagnostic(file_path: str) -> Dict[str, Any]:
     """
-    Performs an aggregate-only diagnostic cross-tabulation of CDC NHAMCS 2022 encounters.
-    STRICT NON-SCORING INVARIANTS:
-    - Never loads classifier model weights.
-    - Never calls predict_triage().
+    Performs a streaming, one-pass aggregate-only diagnostic on CDC NHAMCS 2022 encounters.
+    STRICT NON-SCORING & AGGREGATE-ONLY INVARIANTS:
+    - Never calls NHAMCS2022Source.load_for_evaluation().
+    - Never constructs CanonicalPatientRecord, form_data, or raw_fields objects.
+    - Never loads classifier model weights or runs predict_triage().
     - Never calls clinical-core assignTier() on real data.
-    - Never emits patient-level records, raw fields, form_data, symptoms, or text.
+    - Never emits patient-level records, rows, IDs, form_data, predictions, probabilities, or text.
     - Produces purely aggregate distributions and derangement cross-tabulations.
     """
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"NHAMCS fixed-width file not found at: {file_path}")
 
-    source = NHAMCS2022Source(file_path=file_path)
-    records, counters, manifest = source.load_for_evaluation()
+    file_sha256, file_size_bytes = _compute_file_sha256(file_path)
 
-    total_valid = len(records)
-    if total_valid == 0:
-        raise ValueError("NHAMCS file parsed 0 valid records")
+    # Immediacy code mapping (1/2 -> EMERGENCY, 3 -> URGENT, 4/5 -> ROUTINE)
+    immedr_map = {1: 2, 2: 2, 3: 1, 4: 0, 5: 0}
 
-    # Aggregate counts by proxy IMMEDR tier
+    total_records = 0
+    valid_records = 0
+    excluded_records = 0
+    exclusion_reasons: Dict[str, int] = {}
+
+    def _exclude(reason: str):
+        nonlocal excluded_records
+        exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
+        excluded_records += 1
+
     proxy_counts = {0: 0, 1: 0, 2: 0}
-    for rec in records:
-        proxy_counts[rec.reference_tier_index] += 1
-
-    # Vital derangement definitions (objective physiological thresholds)
-    # 1. Severe BP: SBP < 90 or SBP > 200 mmHg
-    # 2. Severe HR: HR < 45 or HR > 135 bpm
-    # 3. Severe SpO2: SpO2 < 90%
-    # 4. Severe Temp: Temp < 35.0 or Temp > 39.5 C
-    # 5. Shock Index: HR / SBP > 1.0 (when both present)
-
-    cross_tab: Dict[str, Dict[str, Any]] = {}
     vital_complete_count = 0
 
+    cross_tab: Dict[str, Dict[str, Any]] = {}
     for t_idx, t_name in TIER_MAP.items():
         cross_tab[t_name] = {
-            "total_proxy_encounters": proxy_counts[t_idx],
+            "total_proxy_encounters": 0,
             "any_severe_vital_derangement_count": 0,
             "normal_or_mild_vitals_count": 0,
             "derangement_by_type": {
@@ -673,43 +699,159 @@ def run_nhamcs_diagnostic(file_path: str) -> Dict[str, Any]:
             },
         }
 
-    for rec in records:
-        fd = rec.form_data
-        ref_tier = rec.reference_tier_index
-        t_name = TIER_MAP[ref_tier]
+    with open(file_path, "r", encoding="latin-1") as f:
+        for line in f:
+            total_records += 1
+            line_clean = line.rstrip("\r\n")
 
-        # 5-vital completeness check
-        if all(fd.get(k) is not None for k in FIVE_VITAL_FIELDS):
-            vital_complete_count += 1
+            if len(line_clean) < 68:
+                _exclude("short_line_format")
+                continue
 
-        sbp = fd.get("bp_systolic")
-        hr = fd.get("heart_rate")
-        spo2 = fd.get("spo2")
-        temp = fd.get("temperature")
+            # 1. Age (Cols 16-18, [15:18])
+            raw_age = line_clean[15:18].strip()
+            if not raw_age or raw_age in ("-9", "-8"):
+                _exclude("invalid_age")
+                continue
+            try:
+                age_int = int(raw_age)
+                if not (0 <= age_int <= 94):
+                    _exclude("invalid_age")
+                    continue
+            except ValueError:
+                _exclude("invalid_age")
+                continue
 
-        is_bp_deranged = sbp is not None and (sbp < 90 or sbp > 200)
-        is_hr_deranged = hr is not None and (hr < 45 or hr > 135)
-        is_spo2_deranged = spo2 is not None and spo2 < 90
-        is_temp_deranged = temp is not None and (temp < 35.0 or temp > 39.5)
-        is_shock_deranged = (hr is not None and sbp is not None and sbp > 0 and (hr / sbp) > 1.0)
+            # 2. Sex (Col 25, [24:25])
+            raw_sex = line_clean[24:25].strip()
+            if raw_sex not in ("1", "2"):
+                _exclude("invalid_sex")
+                continue
 
-        any_deranged = is_bp_deranged or is_hr_deranged or is_spo2_deranged or is_temp_deranged or is_shock_deranged
+            # 3. IMMEDR (Cols 67-68, [66:68])
+            raw_immedr = line_clean[66:68].strip()
+            if raw_immedr == "-9":
+                _exclude("sentinel_immedr_minus_9")
+                continue
+            elif raw_immedr == "-8":
+                _exclude("sentinel_immedr_minus_8")
+                continue
+            elif raw_immedr in ("0", "00"):
+                _exclude("sentinel_immedr_0")
+                continue
+            elif raw_immedr in ("7", "07"):
+                _exclude("sentinel_immedr_7")
+                continue
+            else:
+                try:
+                    code_val = int(raw_immedr)
+                    if code_val in immedr_map:
+                        ref_tier = immedr_map[code_val]
+                    else:
+                        _exclude("sentinel_immedr_out_of_range")
+                        continue
+                except ValueError:
+                    _exclude("sentinel_immedr_invalid")
+                    continue
 
-        if is_bp_deranged:
-            cross_tab[t_name]["derangement_by_type"]["severe_hypotension_or_crisis_bp"] += 1
-        if is_hr_deranged:
-            cross_tab[t_name]["derangement_by_type"]["severe_tachycardia_or_bradycardia"] += 1
-        if is_spo2_deranged:
-            cross_tab[t_name]["derangement_by_type"]["severe_hypoxemia_spo2_under_90"] += 1
-        if is_temp_deranged:
-            cross_tab[t_name]["derangement_by_type"]["extreme_temperature"] += 1
-        if is_shock_deranged:
-            cross_tab[t_name]["derangement_by_type"]["shock_index_over_1"] += 1
+            # 4. Temperature (Cols 48-51, [47:51])
+            raw_temp = line_clean[47:51].strip()
+            temperature = None
+            if raw_temp and raw_temp not in ("-9", "-8", "9999"):
+                try:
+                    temp_val = int(raw_temp)
+                    if 896 <= temp_val <= 1056:
+                        temperature = round(((temp_val / 10.0) - 32.0) * 5.0 / 9.0, 1)
+                except ValueError:
+                    temperature = None
 
-        if any_deranged:
-            cross_tab[t_name]["any_severe_vital_derangement_count"] += 1
-        else:
-            cross_tab[t_name]["normal_or_mild_vitals_count"] += 1
+            # 5. Pulse (Cols 52-54, [51:54])
+            raw_pulse = line_clean[51:54].strip()
+            heart_rate = None
+            if raw_pulse and raw_pulse not in ("-9", "-8", "998"):
+                try:
+                    pulse_val = int(raw_pulse)
+                    if 0 <= pulse_val <= 240:
+                        heart_rate = pulse_val
+                except ValueError:
+                    heart_rate = None
+
+            # 6. SBP (Cols 58-60, [57:60])
+            raw_sbp = line_clean[57:60].strip()
+            bp_systolic = None
+            if raw_sbp and raw_sbp not in ("-9", "-8", "0", "000"):
+                try:
+                    sbp_val = int(raw_sbp)
+                    if 43 <= sbp_val <= 289:
+                        bp_systolic = sbp_val
+                except ValueError:
+                    bp_systolic = None
+
+            # 7. DBP (Cols 61-63, [60:63])
+            raw_dbp = line_clean[60:63].strip()
+            bp_diastolic = None
+            if raw_dbp and raw_dbp not in ("-9", "-8", "0", "000", "998"):
+                try:
+                    dbp_val = int(raw_dbp)
+                    if 22 <= dbp_val <= 190:
+                        bp_diastolic = dbp_val
+                except ValueError:
+                    bp_diastolic = None
+
+            # BP inversion check
+            if bp_systolic is not None and bp_diastolic is not None:
+                if bp_diastolic >= bp_systolic:
+                    bp_systolic = None
+                    bp_diastolic = None
+
+            # 8. SpO2 (Cols 64-66, [63:66])
+            raw_spo2 = line_clean[63:66].strip()
+            spo2 = None
+            if raw_spo2 and raw_spo2 not in ("-9", "-8"):
+                try:
+                    o2_val = int(raw_spo2)
+                    if 0 <= o2_val <= 100:
+                        spo2 = o2_val
+                except ValueError:
+                    spo2 = None
+
+            # Count valid included encounter
+            valid_records += 1
+            proxy_counts[ref_tier] += 1
+            t_name = TIER_MAP[ref_tier]
+            cross_tab[t_name]["total_proxy_encounters"] += 1
+
+            if (temperature is not None and heart_rate is not None and
+                bp_systolic is not None and bp_diastolic is not None and spo2 is not None):
+                vital_complete_count += 1
+
+            # Vital Derangement Evaluation
+            is_bp_deranged = bp_systolic is not None and (bp_systolic < 90 or bp_systolic > 200)
+            is_hr_deranged = heart_rate is not None and (heart_rate < 45 or heart_rate > 135)
+            is_spo2_deranged = spo2 is not None and spo2 < 90
+            is_temp_deranged = temperature is not None and (temperature < 35.0 or temperature > 39.5)
+            is_shock_deranged = (heart_rate is not None and bp_systolic is not None and bp_systolic > 0 and (heart_rate / bp_systolic) > 1.0)
+
+            any_deranged = is_bp_deranged or is_hr_deranged or is_spo2_deranged or is_temp_deranged or is_shock_deranged
+
+            if is_bp_deranged:
+                cross_tab[t_name]["derangement_by_type"]["severe_hypotension_or_crisis_bp"] += 1
+            if is_hr_deranged:
+                cross_tab[t_name]["derangement_by_type"]["severe_tachycardia_or_bradycardia"] += 1
+            if is_spo2_deranged:
+                cross_tab[t_name]["derangement_by_type"]["severe_hypoxemia_spo2_under_90"] += 1
+            if is_temp_deranged:
+                cross_tab[t_name]["derangement_by_type"]["extreme_temperature"] += 1
+            if is_shock_deranged:
+                cross_tab[t_name]["derangement_by_type"]["shock_index_over_1"] += 1
+
+            if any_deranged:
+                cross_tab[t_name]["any_severe_vital_derangement_count"] += 1
+            else:
+                cross_tab[t_name]["normal_or_mild_vitals_count"] += 1
+
+    if valid_records == 0:
+        raise ValueError("NHAMCS file parsed 0 valid records")
 
     # Compute percentages
     for t_name, data in cross_tab.items():
@@ -719,37 +861,52 @@ def run_nhamcs_diagnostic(file_path: str) -> Dict[str, Any]:
         data["severe_vital_derangement_pct"] = round((der / tot) * 100.0, 2) if tot > 0 else 0.0
         data["normal_or_mild_vitals_pct"] = round((norm / tot) * 100.0, 2) if tot > 0 else 0.0
 
-    report: Dict[str, Any] = {
+    source_manifest = {
+        "source_id": "nhamcs_2022",
+        "source_name": "CDC NHAMCS 2022 Emergency Department Summary (ed2022)",
+        "version": "2022 Public Use File",
+        "official_url": "https://www.cdc.gov/nchs/nhamcs/documentation/index.html",
+        "license_note": "CDC Public Use Data Agreement (100% de-identified)",
+        "file_sha256": file_sha256,
+        "file_size_bytes": file_size_bytes,
+        "input_mode": "partial_input",
+        "label_definition": "nhamcs_immediacy_v1: IMMEDR 1/2 -> EMERGENCY, 3 -> URGENT, 4/5 -> ROUTINE (stress-test proxy only)",
+        "scoring_supported": False,
+        "execution_mode": "nhamcs_diagnostic",
+    }
+
+    report = {
         "execution_mode": "nhamcs_diagnostic",
         "evaluation_provenance": {
             "evaluation_git_commit": _get_git_commit(),
             "evaluation_harness_version": "1.0.0",
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         },
+        "source_manifest": source_manifest,
         "dataset_summary": {
-            "source_id": manifest.source_id,
-            "source_name": manifest.source_name,
-            "total_records_parsed": counters.total_records,
-            "valid_records_analyzed": total_valid,
-            "excluded_records": counters.excluded_records,
-            "exclusion_breakdown": counters.reasons,
+            "source_id": source_manifest["source_id"],
+            "source_name": source_manifest["source_name"],
+            "total_records_parsed": total_records,
+            "valid_records_analyzed": valid_records,
+            "excluded_records": excluded_records,
+            "exclusion_breakdown": exclusion_reasons,
             "complete_five_vitals_count": vital_complete_count,
-            "complete_five_vitals_pct": round((vital_complete_count / total_valid) * 100.0, 2) if total_valid > 0 else 0.0,
+            "complete_five_vitals_pct": round((vital_complete_count / valid_records) * 100.0, 2) if valid_records > 0 else 0.0,
         },
         "proxy_tier_breakdown": {
             "EMERGENCY": {
                 "count": proxy_counts[2],
-                "pct": round((proxy_counts[2] / total_valid) * 100.0, 2),
+                "pct": round((proxy_counts[2] / valid_records) * 100.0, 2),
                 "definition": "IMMEDR 1 (Resuscitation) or 2 (Emergent: <14 min)",
             },
             "URGENT": {
                 "count": proxy_counts[1],
-                "pct": round((proxy_counts[1] / total_valid) * 100.0, 2),
+                "pct": round((proxy_counts[1] / valid_records) * 100.0, 2),
                 "definition": "IMMEDR 3 (Urgent: 15-60 min)",
             },
             "ROUTINE": {
                 "count": proxy_counts[0],
-                "pct": round((proxy_counts[0] / total_valid) * 100.0, 2),
+                "pct": round((proxy_counts[0] / valid_records) * 100.0, 2),
                 "definition": "IMMEDR 4 (Semi-urgent) or 5 (Non-urgent)",
             },
         },
@@ -792,9 +949,11 @@ def generate_synthetic_cohort(n: int, seed: int = 2026) -> List[Dict[str, Any]]:
         sev = np.random.choice(severities, p=weights)
         ped = np.random.random() < pediatric_fraction
         p = tc.generate_patient(sev, pediatric=ped)
-        # Ensure known_conditions is a string to prevent lower() errors
+        # Ensure known_conditions and medications are strings to prevent lower() errors
         if isinstance(p.get("known_conditions"), list):
             p["known_conditions"] = ", ".join(p["known_conditions"])
+        if isinstance(p.get("current_medications"), list):
+            p["current_medications"] = ", ".join(p["current_medications"])
         out.append(p)
     return out
 
