@@ -370,6 +370,7 @@ class TestNHAMCS2022FixedProperties:
         assert manifest.source_id == "nhamcs_2022"
         assert manifest.scoring_supported is True
         assert manifest.input_mode == "partial_input"
+        assert manifest.official_url == "https://www.cdc.gov/nchs/nhamcs/documentation/index.html"
 
         assert counters.total_records == 17
         assert counters.valid_records == 10
@@ -382,6 +383,16 @@ class TestNHAMCS2022FixedProperties:
         assert counters.reasons["invalid_age"] == 1
         assert counters.reasons["invalid_sex"] == 1
         assert counters.reasons["short_line_format"] == 1
+
+    def test_nhamcs_manifest_provenance_and_urls(self, nhamcs_2022_txt_path: str):
+        """Verifies exact official CDC NHAMCS documentation gateway and manifest attributes."""
+        source = NHAMCS2022Source(file_path=nhamcs_2022_txt_path)
+        manifest = source._build_manifest(nhamcs_2022_txt_path)
+        assert manifest.official_url == "https://www.cdc.gov/nchs/nhamcs/documentation/index.html"
+        assert manifest.source_id == "nhamcs_2022"
+        assert "CDC NHAMCS" in manifest.source_name
+        assert manifest.input_mode == "partial_input"
+        assert manifest.scoring_supported is True
 
     def test_short_line_format_rejection(self):
         source = NHAMCS2022Source()
