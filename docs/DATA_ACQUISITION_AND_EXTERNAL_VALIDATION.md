@@ -40,7 +40,7 @@ VitalNet structures external validation into a sequential, multi-gate hierarchy 
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                               VITALNET VALIDATION GATES                                │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
-│ GATE 1A: Iran ED Dataset (Kashani et al. 2024, CC BY 4.0 Open Access)                  │
+│ GATE 1A: Iran ED Dataset (BaniHassan et al. 2024, CC BY 4.0 Open Access)              │
 │  - Role: Inspection-only & sparse-input data quality audit                             │
 │  - Status: Implemented in adapter; model scoring strictly refused                      │
 │  - Focus: Auditing severe clinical missingness (91 complete rows / 143k total)         │

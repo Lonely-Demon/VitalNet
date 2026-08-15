@@ -210,6 +210,43 @@ class TestIranEDInspection:
         with pytest.raises(FileNotFoundError):
             source.inspect()
 
+    def test_iran_ed_manifest_provenance_banihassan(self, iran_ed_csv_path: str):
+        """Verifies updated BaniHassan et al. provenance and Mendeley release URLs."""
+        source = IranEDSource(file_path=iran_ed_csv_path)
+        manifest = source._build_manifest(iran_ed_csv_path)
+        assert "BaniHassan et al." in manifest.source_name
+        assert "mendeley.com" in manifest.official_url
+        assert manifest.scoring_supported is False
+        assert manifest.input_mode == "not_scored"
+
+    def test_iran_ed_extra_columns_resilience(self, tmp_path):
+        """Verifies that an official-style 28-column CSV is parsed without error, safely ignoring extra columns."""
+        # Create a synthetic 28-column CSV with the 10 consumed headers + 18 extra arbitrary columns
+        consumed = [
+            "BlooddpressurSystol", "BlooddpressurDiastol", "PulseRate", "Temperature",
+            "O2Saturation", "ChiefComplaint", "TriageGrade", "CriticalStatus",
+            "NeedFastExecute", "triage_code"
+        ]
+        extra = [f"ExtraCol_{i}" for i in range(1, 19)]  # 18 extra = 28 total
+        all_headers = consumed + extra
+
+        test_csv = str(tmp_path / "synthetic_28col_iran_ed.csv")
+        with open(test_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(all_headers)
+            # Row 1: complete vitals
+            writer.writerow(["120", "80", "72", "37.0", "98", "headache", "3", "0", "0", "ENC001"] + ["extra_val"] * 18)
+            # Row 2: sparse vitals
+            writer.writerow(["", "", "", "", "", "fever", "2", "1", "1", "ENC002"] + ["extra_val"] * 18)
+
+        source = IranEDSource(file_path=test_csv)
+        dq = source.inspect()
+        assert dq.total_records_inspected == 2
+        assert len(dq.headers_present) == 28
+        assert dq.complete_vitals_count == 1
+        assert dq.reference_distribution["3"] == 1
+        assert dq.reference_distribution["2"] == 1
+
 
 # ── Test Suite 2: Iran ED Scoring Refusal ────────────────────────────────────
 
@@ -238,6 +275,7 @@ class TestIranEDScoringRefusal:
         assert manifest.scoring_supported is False
         assert manifest.input_mode == "not_scored"
         assert "published_binary" in manifest.label_definition
+        assert "BaniHassan et al." in manifest.source_name
 
     def test_iran_ed_cli_dataset_refusal_exit_code_and_message(self, iran_ed_csv_path: str):
         script_path = os.path.join(TOOLS_DIR, "evaluate_on_real.py")

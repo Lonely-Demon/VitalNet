@@ -1,10 +1,15 @@
 """
 Iran ED Dataset Evaluation Source (Gate 1A: Inspection-Only and Sparse-Input Analysis).
 
-This module implements the adapter for the Kashani et al. Iranian Emergency Department
-triage dataset (CC BY 4.0). Under VitalNet's validation protocol, this source is
-strictly inspection-only due to its binary urgency ground truth and severe vital sparsity
-(only 91 complete 5-vital records out of 143,582 rows).
+This module implements the adapter for the BaniHassan et al. Iranian Emergency Department
+triage dataset (Mendeley Data v1, CC BY 4.0, Data in Brief 2024). Under VitalNet's validation
+protocol, this source is strictly inspection-only due to its binary urgency ground truth and
+severe vital sparsity (only 91 complete 5-vital records out of 143,582 rows).
+
+Note on Schema:
+The official Mendeley release of ED_triage.csv contains 28 columns. The 10 fields defined in
+PUBLISHED_HEADERS represent the specific clinical subset consumed by the VitalNet adapter
+for data quality and missingness inspection.
 
 Model evaluation / scoring is strictly refused.
 """
@@ -23,6 +28,7 @@ from .base import (
     compute_file_sha256,
 )
 
+# 10 clinical fields consumed by the VitalNet adapter from the 28-column official ED_triage.csv
 PUBLISHED_HEADERS: List[str] = [
     "BlooddpressurSystol",
     "BlooddpressurDiastol",
@@ -69,9 +75,9 @@ class IranEDSource(BaseEvaluationSource):
         size_bytes = os.path.getsize(path) if path and os.path.isfile(path) else None
         return SourceManifest(
             source_id="iran_ed",
-            source_name="Iranian Emergency Department Triage Dataset (Kashani et al.)",
-            version="2024 (Retrospective Single-Center ED)",
-            official_url="https://doi.org/10.1016/j.dib.2024.110298",
+            source_name="Iranian Emergency Department Triage Dataset (BaniHassan et al.)",
+            version="2024 (Mendeley Data v1 / Data in Brief)",
+            official_url="https://data.mendeley.com/datasets/vhzyyktrz5/1",
             license_note="Creative Commons Attribution 4.0 International (CC BY 4.0)",
             file_sha256=sha256,
             input_mode="not_scored",
