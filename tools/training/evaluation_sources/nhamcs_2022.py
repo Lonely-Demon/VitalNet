@@ -141,7 +141,8 @@ class NHAMCS2022Source(BaseEvaluationSource):
         if raw_respr and raw_respr not in ("-9", "-8"):
             try:
                 respr_val = int(raw_respr)
-                if 0 <= respr_val <= 99:
+                # Official NHAMCS codebook range: 0-150 breaths/min (metadata only, not passed to model)
+                if 0 <= respr_val <= 150:
                     respiratory_rate = respr_val
             except ValueError:
                 respiratory_rate = None

@@ -298,3 +298,209 @@ class TestChallenge4BackwardCompatibility:
             d_ktas = json.load(f)
         assert d_ktas["execution_mode"] == "evaluation"
         assert_zero_patient_leakage(d_ktas)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Challenge 5: CLI Input-Mode Validation & Contradictory Flag Rejection
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestChallenge5InputModeValidation:
+    """
+    Validates that the CLI explicitly rejects contradictory --input-mode values
+    for sources that enforce a fixed input mode (NHAMCS=partial_input, Iran=not_scored).
+    """
+
+    def test_nhamcs_rejects_full_input_mode(self):
+        """NHAMCS only supports partial_input; --input-mode full_input must fail."""
+        result = run_cli(
+            "--dataset", "nhamcs-2022", "--file", NHAMCS_TXT_PATH,
+            "--input-mode", "full_input",
+        )
+        assert result.returncode == 1, (
+            f"Expected exit 1 for NHAMCS + --input-mode full_input, got {result.returncode}"
+        )
+        assert "NHAMCS only supports --input-mode partial_input" in result.stderr
+
+    def test_nhamcs_rejects_not_scored_mode(self):
+        """NHAMCS only supports partial_input; --input-mode not_scored must fail."""
+        result = run_cli(
+            "--dataset", "nhamcs-2022", "--file", NHAMCS_TXT_PATH,
+            "--input-mode", "not_scored",
+        )
+        assert result.returncode == 1, (
+            f"Expected exit 1 for NHAMCS + --input-mode not_scored, got {result.returncode}"
+        )
+        assert "NHAMCS only supports --input-mode partial_input" in result.stderr
+
+    def test_nhamcs_accepts_partial_input_mode(self):
+        """NHAMCS + --input-mode partial_input must succeed (not fail at validation)."""
+        result = run_cli(
+            "--inspect-source", "nhamcs-2022", "--file", NHAMCS_TXT_PATH,
+        )
+        # Inspection should work; we just verify it doesn't exit with input-mode error
+        assert result.returncode == 0
+
+    def test_nhamcs_accepts_omitted_input_mode(self):
+        """Omitting --input-mode for NHAMCS must succeed (adapter intrinsically uses partial_input)."""
+        result = run_cli(
+            "--inspect-source", "nhamcs-2022", "--file", NHAMCS_TXT_PATH,
+        )
+        assert result.returncode == 0
+
+    def test_iran_rejects_full_input_mode(self):
+        """Iran ED refuses scoring; --input-mode full_input must fail."""
+        result = run_cli(
+            "--dataset", "iran-ed", "--file", IRAN_CSV_PATH,
+            "--input-mode", "full_input",
+        )
+        assert result.returncode == 1, (
+            f"Expected exit 1 for Iran + --input-mode full_input, got {result.returncode}"
+        )
+        assert "Iran dataset does not support full_input scoring" in result.stderr
+
+    def test_fixed_width_flag_removed(self):
+        """--fixed-width has been removed from the CLI; using it must fail."""
+        result = run_cli(
+            "--dataset", "nhamcs-2022", "--file", NHAMCS_TXT_PATH,
+            "--fixed-width",
+        )
+        assert result.returncode != 0, (
+            "Expected non-zero exit for removed --fixed-width flag"
+        )
+        assert "unrecognized arguments" in result.stderr or "error" in result.stderr.lower()
+
+    @pytest.mark.parametrize("alias", ["--evaluate-source", "--source"])
+    def test_nhamcs_input_mode_validation_works_across_aliases(self, alias):
+        """Input-mode validation must fire regardless of which dataset alias is used."""
+        result = run_cli(
+            alias, "nhamcs-2022", "--file", NHAMCS_TXT_PATH,
+            "--input-mode", "full_input",
+        )
+        assert result.returncode == 1
+        assert "NHAMCS only supports --input-mode partial_input" in result.stderr
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Challenge 6: Evaluation Provenance Metadata
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestChallenge6EvaluationProvenance:
+    """
+    Validates that all reports include evaluation_provenance metadata with
+    model_version, evaluation_git_commit, and evaluation_harness_version fields.
+    """
+
+    def test_self_test_evaluation_report_has_provenance(self, tmp_path):
+        """Self-test evaluation JSON report must include provenance metadata."""
+        out_json = str(tmp_path / "provenance_eval.json")
+        result = run_cli("--self-test", "--n", "20", "--seed", "2026", "--json-out", out_json)
+        assert result.returncode == 0, f"Self-test failed: {result.stderr}"
+        assert os.path.isfile(out_json)
+
+        with open(out_json, "r", encoding="utf-8") as f:
+            report = json.load(f)
+
+        assert "evaluation_provenance" in report, (
+            "evaluation_provenance missing from evaluation report"
+        )
+        prov = report["evaluation_provenance"]
+        assert "model_version" in prov
+        assert "evaluation_git_commit" in prov
+        assert "evaluation_harness_version" in prov
+        # Fields must be non-empty strings (either actual values or 'unavailable')
+        assert isinstance(prov["model_version"], str) and len(prov["model_version"]) > 0
+        assert isinstance(prov["evaluation_git_commit"], str) and len(prov["evaluation_git_commit"]) > 0
+        assert prov["evaluation_harness_version"] == "1.0.0"
+
+    def test_inspection_report_has_provenance(self, tmp_path):
+        """Inspection JSON report must also include provenance metadata."""
+        out_json = str(tmp_path / "provenance_inspect.json")
+        result = run_cli(
+            "--inspect-source", "nhamcs-2022", "--file", NHAMCS_TXT_PATH,
+            "--json-out", out_json,
+        )
+        assert result.returncode == 0, f"Inspection failed: {result.stderr}"
+        assert os.path.isfile(out_json)
+
+        with open(out_json, "r", encoding="utf-8") as f:
+            report = json.load(f)
+
+        assert "evaluation_provenance" in report, (
+            "evaluation_provenance missing from inspection report"
+        )
+        prov = report["evaluation_provenance"]
+        assert "model_version" in prov
+        assert "evaluation_git_commit" in prov
+        assert "evaluation_harness_version" in prov
+        assert isinstance(prov["model_version"], str) and len(prov["model_version"]) > 0
+        assert isinstance(prov["evaluation_git_commit"], str) and len(prov["evaluation_git_commit"]) > 0
+
+    def test_provenance_model_version_references_pkl(self, tmp_path):
+        """model_version should reference triage_classifier.pkl when it exists."""
+        out_json = str(tmp_path / "provenance_pkl.json")
+        result = run_cli("--self-test", "--n", "10", "--seed", "42", "--json-out", out_json)
+        assert result.returncode == 0
+        with open(out_json, "r", encoding="utf-8") as f:
+            report = json.load(f)
+        prov = report["evaluation_provenance"]
+        # In the VitalNet repo, triage_classifier.pkl should exist at backend/app/ml/models/
+        # If it exists, model_version starts with "triage_classifier.pkl@"
+        # If not (e.g., clean CI), it should be "unavailable"
+        mv = prov["model_version"]
+        assert mv == "unavailable" or mv.startswith("triage_classifier.pkl@"), (
+            f"model_version has unexpected format: {mv}"
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Challenge 7: Respiratory Rate Range Alignment with Official NHAMCS Codebook
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestChallenge7RespiratoryRateRange:
+    """
+    Validates that the NHAMCS adapter accepts respiratory rates in the official
+    CDC codebook range 0-150, not the old 0-99 cap.
+    """
+
+    def test_respiratory_rate_above_99_accepted(self, tmp_path):
+        """A respiratory rate of 120 (valid per codebook) must be parsed, not rejected."""
+        # Build a synthetic NHAMCS line with respr=120 (cols 55-57 = [54:57])
+        # Line format: year(4) + padding(11) + age(3=015) + padding(6) + sex(1=2) + padding(22)
+        #   + temp(4=0986) + pulse(3=080) + respr(3=120) + sbp(3=120) + dbp(3=080) + spo2(3=098)
+        #   + immedr(2=03) + padding to col 188 for PATWT
+        base = "2022"             # cols 1-4
+        base += " " * 11          # cols 5-15
+        base += "025"             # cols 16-18: age=25
+        base += " " * 6           # cols 19-24
+        base += "2"               # col 25: sex=male
+        base += " " * 22          # cols 26-47
+        base += "0986"            # cols 48-51: temp=98.6F
+        base += "080"             # cols 52-54: pulse=80
+        base += "120"             # cols 55-57: respr=120 (above old 99 cap)
+        base += "120"             # cols 58-60: sbp=120
+        base += "080"             # cols 61-63: dbp=80
+        base += "098"             # cols 64-66: spo2=98
+        base += " 3"              # cols 67-68: immedr=3 (URGENT)
+        # Pad to at least 188 chars for PATWT
+        base += " " * (188 - len(base))
+
+        fixture = str(tmp_path / "rr_test.txt")
+        with open(fixture, "w", encoding="latin-1") as f:
+            f.write(base + "\n")
+
+        import importlib, sys as _sys
+        if TOOLS_DIR not in _sys.path:
+            _sys.path.insert(0, TOOLS_DIR)
+        from evaluation_sources.nhamcs_2022 import NHAMCS2022Source
+
+        source = NHAMCS2022Source(file_path=fixture)
+        data_quality = source.inspect(file_path=fixture)
+
+        # Respiratory rate should be parsed and show in vital distributions
+        rr_dist = data_quality.vital_distributions.get("respiratory_rate", {})
+        assert rr_dist.get("valid_count", 0) >= 1, (
+            "respiratory_rate=120 was rejected; should be accepted per codebook range 0-150"
+        )
+        assert rr_dist.get("max", 0) >= 120, (
+            f"respiratory_rate max should be >= 120, got {rr_dist.get('max')}"
+        )

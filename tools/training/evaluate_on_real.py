@@ -31,9 +31,11 @@ import importlib.util
 import json
 import math
 import os
+import subprocess
 import sys
 import types
 import warnings
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -106,6 +108,36 @@ FORBIDDEN_LEAKAGE_KEYS = {
     "mrn",
     "free_text",
 }
+
+def _get_evaluation_provenance() -> Dict[str, str]:
+    """
+    Returns metadata about the model version, Git commit, and evaluation harness version.
+    Must execute purely locally with no network calls.
+    """
+    model_path = os.path.join(BACKEND_DIR, "app", "ml", "models", "triage_classifier.pkl")
+    if os.path.exists(model_path):
+        mtime = os.path.getmtime(model_path)
+        iso_ts = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+        model_version = f"triage_classifier.pkl@{iso_ts}"
+    else:
+        model_version = "unavailable"
+
+    try:
+        commit_hash = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], 
+            cwd=PROJECT_ROOT, 
+            stderr=subprocess.DEVNULL, 
+            text=True
+        ).strip()
+        evaluation_git_commit = commit_hash
+    except Exception:
+        evaluation_git_commit = "unavailable"
+
+    return {
+        "model_version": model_version,
+        "evaluation_git_commit": evaluation_git_commit,
+        "evaluation_harness_version": "1.0.0",
+    }
 
 
 # ── Strict Zero-Leakage Assertion ────────────────────────────────────────────
@@ -343,6 +375,7 @@ def build_inspection_json_report(data_quality: AggregateDataQuality) -> Dict[str
 
     return {
         "source_manifest": manifest_dict,
+        "evaluation_provenance": _get_evaluation_provenance(),
         "execution_mode": "inspection",
         "cohort_flow": {
             "total_records": total,
@@ -701,6 +734,7 @@ def build_evaluation_json_report(
 
     return {
         "source_manifest": manifest.to_dict(),
+        "evaluation_provenance": _get_evaluation_provenance(),
         "execution_mode": "evaluation",
         "cohort_flow": counters.to_dict(),
         "data_quality": data_quality,
@@ -902,16 +936,11 @@ def main():
     )
     ap.add_argument(
         "--data-dir",
-        help="Path to directory containing source files (alias for --file).",
+        help="Alias for --file (single file path).",
     )
     ap.add_argument(
         "--csv",
         help="Path to a labelled patient CSV (backward compatible alias for generic-csv --file).",
-    )
-    ap.add_argument(
-        "--fixed-width",
-        action="store_true",
-        help="Flag indicating fixed-width parsing (default for nhamcs-2022).",
     )
     ap.add_argument(
         "--linkage-file",
@@ -965,6 +994,19 @@ def main():
     )
 
     args = ap.parse_args()
+
+    # Input mode validation
+    source_id_to_check = args.evaluate_source or args.dataset or args.source
+    if source_id_to_check:
+        normalized_source = source_id_to_check.lower()
+        if "nhamcs" in normalized_source:
+            if args.input_mode is not None and args.input_mode != "partial_input":
+                sys.stderr.write("Error: NHAMCS only supports --input-mode partial_input\n")
+                sys.exit(1)
+        if "iran" in normalized_source:
+            if args.input_mode == "full_input":
+                sys.stderr.write("Error: Iran dataset does not support full_input scoring\n")
+                sys.exit(1)
 
     # Route execution mode
     json_output_path = args.json_out or args.report_json

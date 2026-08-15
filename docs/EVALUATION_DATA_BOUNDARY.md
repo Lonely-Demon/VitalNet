@@ -51,12 +51,15 @@ VitalNet/
 │   ├── evaluation_sources/             # Modular adapter package
 │   │   ├── __init__.py
 │   │   ├── base.py                     # Canonical contracts & abstract source interface
-│   │   ├── cdc_nhamcs.py               # Gate 1B fixed-width adapter
+│   │   ├── nhamcs_2022.py              # Gate 1B fixed-width adapter
 │   │   ├── iran_ed.py                  # Gate 1A inspection adapter (refuses scoring)
-│   │   └── generic_csv.py              # Backward-compatible CSV adapter
+│   │   ├── generic_csv.py              # Backward-compatible CSV adapter
+│   │   └── self_test_source.py         # Synthetic self-test source adapter
 │   ├── tests/
 │   │   ├── fixtures/                   # 100% SYNTHETIC fixtures ONLY (tracked in Git)
-│   │   └── test_evaluation_sources.py  # Pytest suite using synthetic fixtures
+│   │   ├── test_evaluation_sources.py  # Pytest suite using synthetic fixtures
+│   │   ├── test_adversarial_challenge.py # Adversarial parsing, conversion & leakage suite
+│   │   └── test_adversarial_cli_m4.py  # Adversarial CLI & refusal semantics suite
 │   ├── data/                           # LOCAL ONLY — GITIGNORED (real datasets placed manually)
 │   │   └── .gitkeep                    # Tracked empty placeholder
 │   └── outputs/                        # LOCAL ONLY — GITIGNORED (generated evaluation reports)
