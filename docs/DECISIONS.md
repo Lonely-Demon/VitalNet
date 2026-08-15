@@ -1947,3 +1947,38 @@ are green.
 - Added middleware-level regression tests in `backend/tests/test_cors_preflight.py` asserting 200 OK, `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, case-insensitive inclusion of `x-event-id`, `authorization`, `content-type`, and denial of untrusted origins.
 - Updated `apps/web/src/lib/connectivity.js` to probe `${apiBase('health')}/api/health`, preserving the 5-second timeout and `cache: 'no-store'` behavior while targeting the configured backend URL.
 
+### 42. MIMIC-IV-ED Gate 2 benchmark architecture and credentialed data governance
+
+**Context**: To conduct VitalNet's first credentialed external benchmark on a large clinical emergency dataset (MIMIC-IV-ED v2.2, ~425k stays from Beth Israel Deaconess Medical Center, Boston, MA) while keeping the production classifier frozen and strictly enforcing local-only data boundaries.
+
+**Decisions**:
+1. **Primary arm strictly triage-time (`mimic_triage_contract_v1`)**:
+   - Ingests triage vitals (`triage.csv`), anchor age (`patients.anchor_age`), and stay-level sex (`edstays.gender`).
+   - Does not claim full unrestricted or full frontline ASHA-contract validation (unmeasured fields like pregnancy, location, endemic exposures, illness duration remain uninvented empty/None placeholders).
+2. **Hard-disabled medication reconciliation arm (`mimic_full_available_context_v1`)**:
+   - `medrecon.charttime` records medication reconciliation entry time, not proven availability at triage time.
+   - Refused by default (`EvaluationRefusedError`), requiring independent temporal-eligibility review and separate authorization (`gate_medrecon_temporal_authorized=True`). Gate M4 authorization alone cannot unlock this arm.
+3. **Prohibited tables and fields constants**:
+   - `PROHIBITED_TABLE_NAMES = ["diagnosis", "pyxis", "vitalsign", "disposition", "admission", "outcomes"]` rejected at adapter instantiation.
+   - `PROHIBITED_FIELD_NAMES = ["hadm_id", "outtime", "disposition", "length_of_stay", "los", "dod", "anchor_year", "anchor_year_group"]` stripped *before* canonical patient record construction and never included in `form_data`, `raw_fields`, or output reports.
+4. **Exact source precedence and version-specific age handling**:
+   - Sex precedence: `edstays.gender` (primary) -> `patients.gender` (fallback if missing) with aggregate `gender_conflict` tracking.
+   - Age precedence: `patients.anchor_age` directly. Preserves MIMIC-IV v2.x integer `91` top-coding for patients $\ge 89$ years without attempting de-identified date reconstruction. Missing age linkages are excluded and tracked (`missing_age_linkage`).
+5. **Vital plausibility filtering & BP inversion handling**:
+   - Temperature converted from °F to °C via `(temp_f - 32.0) * 5/9` with plausible range bounds ($80.0^\circ\text{F} \le \text{temp} \le 110.0^\circ\text{F}$). Readings outside bounds are sanitized to `None` (not silently clipped or imputed) and counted under `temp_out_of_plausible_range`.
+   - Doppler sentinel code `998` sanitized to `None`.
+   - Blood pressure inversion (`sbp <= dbp`) sanitized to `None` and tracked under `invalid_bp_inversion`.
+6. **Isolation of respiratory rate and pain**:
+   - `resprate` and `pain` are isolated from model input (`form_data`) and included solely in aggregate inspection metadata.
+7. **Deterministic allow-list symptom parser (`mimic_symptom_parser_v1`)**:
+   - Regex/keyword parser mapping unstructured chief complaints into the 12 canonical `ALLOWED_SYMPTOMS`.
+   - 100% deterministic, zero external API/LLM calls, strictly sorted outputs.
+   - Local and aggregate-only: raw complaint strings are never logged, emitted in exceptions, or stored in report JSONs.
+8. **Pre-registered cohort policies**:
+   - `all_stays` (primary): evaluates all eligible `stay_id` encounters, auditing repeated `subject_id` visits in metadata.
+   - `first_stay_only` (pre-registered sensitivity): evaluates only the first chronological encounter per `subject_id`, tracking exclusions under `duplicate_subject_excluded`.
+9. **Staged scoring refusal & internal synthetic testing**:
+   - `load_for_evaluation()` refuses evaluation by default (`EvaluationRefusedError`, exit code 2) unless `--gate-m4-authorized` is explicitly provided.
+   - Test harness uses internal `_synthetic_test_mode=True`, strictly bounded to `tests/fixtures/` and rejected if pointed at any non-fixture path.
+10. **Strict zero patient data leakage assertion**:
+    - All JSON reports and console outputs are recursively validated via `assert_zero_patient_leakage()`.

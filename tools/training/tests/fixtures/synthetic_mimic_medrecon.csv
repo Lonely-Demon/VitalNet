@@ -1,0 +1,4 @@
+subject_id,stay_id,charttime,name,gsn,ndc,etc
+1001,20001,2022-01-01 08:30:00,Aspirin 81mg,001234,00093-0150-01,1 tab daily
+1003,20003,2022-01-03 11:00:00,Metformin 500mg,005678,00093-7212-01,1 tab twice daily
+1006,20061,2022-01-06 07:30:00,Lisinopril 10mg,009012,00093-1020-01,1 tab daily

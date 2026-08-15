@@ -34,6 +34,22 @@ from .nhamcs_2022 import (
     NHAMCS_IMMEDIACY_V1,
     NHAMCS2022Source,
 )
+from .mimic_iv_ed import (
+    ARM_FULL_CONTEXT,
+    ARM_TRIAGE_CONTRACT,
+    COHORT_POLICY_ALL_STAYS,
+    COHORT_POLICY_FIRST_STAY_ONLY,
+    MIMIC_ESI_V1,
+    PROHIBITED_FIELD_NAMES,
+    PROHIBITED_TABLE_NAMES,
+    MIMICIVEDSource,
+)
+from .mimic_symptom_parser import (
+    PARSER_VERSION,
+    StreamingSymptomCoverageAccumulator,
+    compute_symptom_parser_coverage,
+    parse_symptoms_from_complaint,
+)
 from .self_test_source import SyntheticSelfTestSource
 
 __all__ = [
@@ -56,6 +72,18 @@ __all__ = [
     "ALLOWED_SYMPTOMS",
     "parse_reference_tier",
     "row_to_formdata",
+    "MIMICIVEDSource",
+    "MIMIC_ESI_V1",
+    "COHORT_POLICY_ALL_STAYS",
+    "COHORT_POLICY_FIRST_STAY_ONLY",
+    "ARM_TRIAGE_CONTRACT",
+    "ARM_FULL_CONTEXT",
+    "PROHIBITED_TABLE_NAMES",
+    "PROHIBITED_FIELD_NAMES",
+    "PARSER_VERSION",
+    "StreamingSymptomCoverageAccumulator",
+    "parse_symptoms_from_complaint",
+    "compute_symptom_parser_coverage",
     "SyntheticSelfTestSource",
     "get_evaluation_source",
 ]
@@ -73,6 +101,8 @@ def get_evaluation_source(
         return IranEDSource(file_path=file_path, **kwargs)
     elif normalized_id in ("nhamcs_2022", "nhamcs", "cdc_nhamcs", "ed2022"):
         return NHAMCS2022Source(file_path=file_path, **kwargs)
+    elif normalized_id in ("mimic_iv_ed", "mimic_ed", "mimic", "mimic4_ed"):
+        return MIMICIVEDSource(file_path=file_path, **kwargs)
     elif normalized_id in ("generic_csv", "csv"):
         return GenericCSVSource(file_path=file_path, **kwargs)
     elif normalized_id in ("synthetic_self_test", "self_test", "synthetic"):
@@ -80,5 +110,5 @@ def get_evaluation_source(
     else:
         raise ValueError(
             f"Unknown evaluation source: '{source_id}'. "
-            f"Available sources: iran-ed, nhamcs-2022, generic-csv, self-test."
+            f"Available sources: iran-ed, nhamcs-2022, mimic-iv-ed, generic-csv, self-test."
         )
