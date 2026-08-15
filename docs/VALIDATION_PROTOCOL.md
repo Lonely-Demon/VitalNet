@@ -84,12 +84,10 @@ These advance the safety case and the deployment goal without new resources.
   (model-primary), gated on `docs/CLINICAL_REVIEW.md`'s clinician sign-off of
   the 51-case delta.
 - **A8 — External validation on real public data (no clinician needed).**
-  See `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`: acquire a real,
-  clinician-labelled ED dataset (MIMIC-IV-ED is the best fit) under its licence,
-  map it to VitalNet's schema, and run it through A3's harness. This is the
-  highest-probability way to attack hazard H2 without a clinician — the first
-  real-patient signal VitalNet has ever had (on a proxy population; caveats in
-  that doc). Unaffected by the language migration.
+  See `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md` and `docs/evaluation/MIMIC_IV_ED_SOURCE_CARD.md`:
+  MIMIC-IV-ED v2.2 adapter (`tools/training/evaluation_sources/mimic_iv_ed.py`), deterministic allow-list symptom parser (`mimic_symptom_parser.py`),
+  and pre-registered `mimic_esi_v1` mapping implemented in Gate M1 (code-only, synthetic fixtures). Scoring staged on explicit Gate M4 authorization.
+  This provides the foundation for credentialed external validation under strict local-only isolation. Unaffected by the language migration.
 
 ## Part B — Retrospective validation study (gated on real data)
 

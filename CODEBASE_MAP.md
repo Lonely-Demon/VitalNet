@@ -123,11 +123,16 @@ VitalNet/
 │                       backend/supabase/migrations/ (version-controlled,
 │                       idempotent SQL — the canonical schema source; see §5),
 │                       shared by both backends. Deployable until apps/api cuts over.
-├── tools/training/     Python ML training pipeline (was backend/scripts/). Generates
-│                       synthetic patients and pipes them through packages/clinical-core
-│                       (a JSONL subprocess, cli.mjs) for labels + features — Python
-│                       only does sklearn training + ONNX→tree-JSON export now.
+├── tools/training/     Python ML training & offline validation pipeline:
+│                       - train_classifier.py: generates synthetic patients and pipes them
+│                         through packages/clinical-core (cli.mjs) for labels + features.
+│                       - evaluate_on_real.py: external validation and data inspection harness.
+│                       - evaluation_sources/: modular dataset adapters (Iran ED Gate 1A,
+│                         CDC NHAMCS 2022 Gate 1B, MIMIC-IV-ED v2.2 Gate 2, generic CSV).
+│                       - evaluation_sources/mimic_symptom_parser.py: deterministic allow-list NLP.
 ├── docs/
+│   ├── evaluation/            Tracked evaluation source cards (IRAN_ED, NHAMCS_2022, MIMIC_IV_ED)
+│   ├── EVALUATION_DATA_BOUNDARY.md Strict data isolation, prohibited tables, and zero-leakage policy
 │   ├── LESSONS_LEARNED.md     Living notes for future agents (human or AI) — NOT
 │   │                     an architecture doc (see CODEBASE_MAP/DECISIONS for
 │   │                     that). Empirical-verification norms, dead ends actually

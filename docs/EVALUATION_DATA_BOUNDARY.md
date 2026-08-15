@@ -44,7 +44,8 @@ VitalNet/
 │   ├── EVALUATION_DATA_BOUNDARY.md     # This policy document
 │   ├── evaluation/                     # Tracked source cards & governance specs
 │   │   ├── IRAN_ED_SOURCE_CARD.md
-│   │   └── NHAMCS_2022_SOURCE_CARD.md
+│   │   ├── NHAMCS_2022_SOURCE_CARD.md
+│   │   └── MIMIC_IV_ED_SOURCE_CARD.md
 │   └── DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md
 ├── tools/training/
 │   ├── evaluate_on_real.py             # Evaluation & inspection CLI harness
@@ -53,11 +54,14 @@ VitalNet/
 │   │   ├── base.py                     # Canonical contracts & abstract source interface
 │   │   ├── nhamcs_2022.py              # Gate 1B fixed-width adapter
 │   │   ├── iran_ed.py                  # Gate 1A inspection adapter (refuses scoring)
+│   │   ├── mimic_iv_ed.py              # Gate 2 credentialed benchmark adapter
+│   │   ├── mimic_symptom_parser.py     # Deterministic allow-list symptom parser
 │   │   ├── generic_csv.py              # Backward-compatible CSV adapter
 │   │   └── self_test_source.py         # Synthetic self-test source adapter
 │   ├── tests/
 │   │   ├── fixtures/                   # 100% SYNTHETIC fixtures ONLY (tracked in Git)
 │   │   ├── test_evaluation_sources.py  # Pytest suite using synthetic fixtures
+│   │   ├── test_mimic_iv_ed_adapter.py # Gate 2 MIMIC adapter, parser & leakage suite
 │   │   ├── test_adversarial_challenge.py # Adversarial parsing, conversion & leakage suite
 │   │   └── test_adversarial_cli_m4.py  # Adversarial CLI & refusal semantics suite
 │   ├── data/                           # LOCAL ONLY — GITIGNORED (real datasets placed manually)

@@ -411,6 +411,11 @@ def run_inspection(
     source_id: str,
     file_path: Optional[str] = None,
     linkage_file_path: Optional[str] = None,
+    patients_file_path: Optional[str] = None,
+    edstays_file_path: Optional[str] = None,
+    medrecon_file_path: Optional[str] = None,
+    exploratory_medrecon_inspection: bool = False,
+    cohort_policy: str = "all_stays",
     json_out: Optional[str] = None,
     acuity_scale: str = "esi",
     temp_fahrenheit: bool = False,
@@ -419,10 +424,22 @@ def run_inspection(
         source_id=source_id,
         file_path=file_path,
         linkage_file_path=linkage_file_path,
+        patients_file_path=patients_file_path,
+        edstays_file_path=edstays_file_path,
+        medrecon_file_path=medrecon_file_path,
+        exploratory_medrecon_inspection=exploratory_medrecon_inspection,
+        cohort_policy=cohort_policy,
         acuity_scale=acuity_scale,
         temp_fahrenheit=temp_fahrenheit,
     )
-    data_quality = source.inspect(file_path=file_path, linkage_file_path=linkage_file_path)
+    data_quality = source.inspect(
+        file_path=file_path,
+        linkage_file_path=linkage_file_path,
+        patients_file_path=patients_file_path,
+        edstays_file_path=edstays_file_path,
+        medrecon_file_path=medrecon_file_path,
+        exploratory_medrecon_inspection=exploratory_medrecon_inspection,
+    )
     _print_inspection_report(data_quality)
 
     if json_out:
@@ -436,6 +453,7 @@ def run_inspection(
         print(f"\nAggregate-only JSON inspection report saved to: {json_out}")
 
     return data_quality
+
 
 
 # ── Evaluation Pipeline ───────────────────────────────────────────────────────
@@ -816,6 +834,12 @@ def evaluate(
 def run_evaluation(
     source_id: str,
     file_path: Optional[str] = None,
+    patients_file_path: Optional[str] = None,
+    edstays_file_path: Optional[str] = None,
+    medrecon_file_path: Optional[str] = None,
+    cohort_policy: str = "all_stays",
+    gate_m4_authorized: bool = False,
+    input_mode: str = "mimic_triage_contract_v1",
     json_out: Optional[str] = None,
     acuity_scale: str = "esi",
     temp_fahrenheit: bool = False,
@@ -825,6 +849,12 @@ def run_evaluation(
     source = get_evaluation_source(
         source_id=source_id,
         file_path=file_path,
+        patients_file_path=patients_file_path,
+        edstays_file_path=edstays_file_path,
+        medrecon_file_path=medrecon_file_path,
+        cohort_policy=cohort_policy,
+        gate_m4_authorized=gate_m4_authorized,
+        input_mode=input_mode,
         acuity_scale=acuity_scale,
         temp_fahrenheit=temp_fahrenheit,
         n=n,
@@ -832,7 +862,12 @@ def run_evaluation(
     )
 
     try:
-        records, counters, manifest = source.load_for_evaluation(file_path=file_path)
+        records, counters, manifest = source.load_for_evaluation(
+            file_path=file_path,
+            patients_file_path=patients_file_path,
+            edstays_file_path=edstays_file_path,
+            medrecon_file_path=medrecon_file_path,
+        )
     except EvaluationRefusedError as exc:
         sys.stderr.write(f"{exc}\n")
         sys.exit(2)
@@ -921,22 +956,22 @@ def main():
     )
     ap.add_argument(
         "--inspect-source",
-        choices=["iran-ed", "nhamcs-2022", "iran_ed", "nhamcs_2022", "generic-csv", "self-test"],
-        help="Runs source inspection mode and outputs data quality metrics (e.g. iran-ed, nhamcs-2022).",
+        choices=["iran-ed", "nhamcs-2022", "mimic-iv-ed", "iran_ed", "nhamcs_2022", "mimic_iv_ed", "generic-csv", "self-test"],
+        help="Runs source inspection mode and outputs data quality metrics (e.g. iran-ed, nhamcs-2022, mimic-iv-ed).",
     )
     ap.add_argument(
         "--evaluate-source",
-        choices=["iran-ed", "nhamcs-2022", "generic-csv", "self-test", "iran_ed", "nhamcs_2022"],
+        choices=["iran-ed", "nhamcs-2022", "mimic-iv-ed", "generic-csv", "self-test", "iran_ed", "nhamcs_2022", "mimic_iv_ed"],
         help="Selects dataset adapter for evaluation (canonical alias for --dataset).",
     )
     ap.add_argument(
         "--dataset",
-        choices=["iran-ed", "nhamcs-2022", "generic-csv", "self-test", "iran_ed", "nhamcs_2022"],
+        choices=["iran-ed", "nhamcs-2022", "mimic-iv-ed", "generic-csv", "self-test", "iran_ed", "nhamcs_2022", "mimic_iv_ed"],
         help="Selects dataset adapter (alias for --evaluate-source).",
     )
     ap.add_argument(
         "--source",
-        choices=["iran-ed", "nhamcs-2022", "generic-csv", "self-test", "iran_ed", "nhamcs_2022"],
+        choices=["iran-ed", "nhamcs-2022", "mimic-iv-ed", "generic-csv", "self-test", "iran_ed", "nhamcs_2022", "mimic_iv_ed"],
         help="Selects dataset adapter (alias for --evaluate-source).",
     )
     ap.add_argument(
@@ -956,14 +991,48 @@ def main():
         help="Optional linkage file path (e.g. ED_admission.csv for Iran ED).",
     )
     ap.add_argument(
+        "--patients-file",
+        "--patients",
+        dest="patients_file",
+        help="Path to MIMIC-IV patients.csv for anchor_age linkage.",
+    )
+    ap.add_argument(
+        "--edstays-file",
+        "--edstays",
+        dest="edstays_file",
+        help="Path to MIMIC-IV-ED edstays.csv for stay-level gender and encounter metadata.",
+    )
+    ap.add_argument(
+        "--medrecon-file",
+        "--medrecon",
+        dest="medrecon_file",
+        help="Path to MIMIC-IV-ED medrecon.csv (exploratory medication reconciliation).",
+    )
+    ap.add_argument(
+        "--exploratory-medrecon-inspection",
+        action="store_true",
+        help="Explicitly enable exploratory inspection of medrecon file.",
+    )
+    ap.add_argument(
+        "--cohort-policy",
+        choices=["all_stays", "first_stay_only"],
+        default="all_stays",
+        help="Pre-registered cohort policy for repeated visits (default: all_stays).",
+    )
+    ap.add_argument(
+        "--gate-m4-authorized",
+        action="store_true",
+        help="Explicit Gate M4 human authorization flag required to unlock frozen-model scoring on MIMIC-IV-ED.",
+    )
+    ap.add_argument(
         "--partial-input",
         action="store_true",
         help="Explicitly flag evaluation as partial-input mode.",
     )
     ap.add_argument(
         "--input-mode",
-        choices=["full_input", "partial_input", "not_scored"],
-        help="Evaluation input mode (full_input, partial_input, or not_scored).",
+        choices=["full_input", "partial_input", "not_scored", "mimic_triage_contract_v1", "mimic_full_available_context_v1"],
+        help="Evaluation input mode (full_input, partial_input, not_scored, mimic_triage_contract_v1, or mimic_full_available_context_v1).",
     )
     ap.add_argument(
         "--json-out",
@@ -1016,6 +1085,13 @@ def main():
             if args.input_mode == "full_input":
                 sys.stderr.write("Error: Iran dataset does not support full_input scoring\n")
                 sys.exit(1)
+        if "mimic" in normalized_source:
+            if args.input_mode == "mimic_full_available_context_v1":
+                sys.stderr.write(
+                    "Error: mimic_full_available_context_v1 is hard-disabled pending independent "
+                    "temporal-eligibility review and separate authorization.\n"
+                )
+                sys.exit(1)
 
     # Route execution mode
     json_output_path = args.json_out or args.report_json
@@ -1026,6 +1102,11 @@ def main():
             source_id=args.inspect_source,
             file_path=input_file_path,
             linkage_file_path=args.linkage_file,
+            patients_file_path=args.patients_file,
+            edstays_file_path=args.edstays_file,
+            medrecon_file_path=args.medrecon_file,
+            exploratory_medrecon_inspection=args.exploratory_medrecon_inspection,
+            cohort_policy=args.cohort_policy,
             json_out=json_output_path,
             acuity_scale=args.acuity_scale,
             temp_fahrenheit=args.temp_fahrenheit,
@@ -1043,6 +1124,12 @@ def main():
         run_evaluation(
             source_id=source_id,
             file_path=input_file_path,
+            patients_file_path=args.patients_file,
+            edstays_file_path=args.edstays_file,
+            medrecon_file_path=args.medrecon_file,
+            cohort_policy=args.cohort_policy,
+            gate_m4_authorized=args.gate_m4_authorized,
+            input_mode=args.input_mode or "mimic_triage_contract_v1",
             json_out=json_output_path,
             acuity_scale=args.acuity_scale,
             temp_fahrenheit=args.temp_fahrenheit,
@@ -1067,6 +1154,7 @@ def main():
         )
     else:
         ap.error("Must provide --inspect-source, --dataset/--source, --csv, or --self-test")
+
 
 
 if __name__ == "__main__":

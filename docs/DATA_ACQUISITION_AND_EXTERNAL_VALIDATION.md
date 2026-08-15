@@ -53,9 +53,10 @@ VitalNet structures external validation into a sequential, multi-gate hierarchy 
 │  - Documentation: docs/evaluation/NHAMCS_2022_SOURCE_CARD.md                           │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ GATE 2: MIMIC-IV-ED v2.2 (PhysioNet Credentialed DUA + CITI Certification)             │
-│  - Role: Full-input external validation (vitals + free text + ESI 1-5 + outcomes)      │
-│  - Status: Pre-data harness ready; blocked on researcher credentialing & DUA           │
-│  - Focus: Multi-modal triage agreement, clinical NLP complaint evaluation, admission   │
+│  - Role: Credentialed triage-time external benchmark (vitals + deterministic NLP)      │
+│  - Status: Gate M1 adapter & synthetic fixture ready; scoring staged on Gate M4        │
+│  - Focus: Available triage context, allow-list symptom extraction, ESI 1-5 proxy       │
+│  - Documentation: docs/evaluation/MIMIC_IV_ED_SOURCE_CARD.md                           │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ GATE 3: Prospective Rural Indian PHC Cohort (Silent / Shadow Deployment)               │
 │  - Role: Authoritative clinical safety & regulatory validation (CDSCO SaMD)            │
@@ -72,7 +73,7 @@ VitalNet structures external validation into a sequential, multi-gate hierarchy 
 |---|---|---|---|---|---|
 | **Gate 1A: Iran ED** | Single-center tertiary hospital ED, Iran | 143,582 triage rows | CC BY 4.0 Open Access | Official ED_triage.csv has 28 columns; VitalNet consumes 10 key fields for inspection; extreme sparsity (<0.07% complete vitals) | **Inspection-only audit**. Scoring strictly refused due to binary ground truth and severe missingness. |
 | **Gate 1B: CDC NHAMCS 2022** | Nationally representative sample of US hospital EDs | ~25,000 encounters / year | CDC Public Use Data | Fixed-width vitals, age, sex, arrival immediacy (1–5 scale) | **Partial-input proxy evaluation**. Unweighted discrimination on vital-only presentations. |
-| **Gate 2: MIMIC-IV-ED** (PhysioNet v2.2) | Urban academic medical center ED (Beth Israel Deaconess, Boston) | ~425,000 ED stays | Credentialed DUA (PhysioNet + CITI training required) | Complete vitals, age, sex, pain, free-text chief complaints, ESI 1–5, linkable outcomes | **Full-input multi-modal validation**. Measures end-to-end classifier + NLP text features. |
+| **Gate 2: MIMIC-IV-ED** (PhysioNet v2.2) | Urban academic medical center ED (Beth Israel Deaconess, Boston) | ~425,000 ED stays | Credentialed DUA (PhysioNet + CITI training required) | Complete vitals, anchor age, sex, chief complaint, ESI 1–5 | **Triage-time external benchmark**. Available triage context via `mimic_triage_contract_v1` and `mimic_esi_v1`. |
 | **Gate 3: Prospective Indian PHC** | Frontline Primary Health Centres & Sub-Centres, rural India | Prospective cohort | Institutional Ethics Committee (IEC) approved | Complete ASHA intake: vitals, localized symptoms, Hindi/Tamil notes, clinical outcomes | **True clinical validation**. Necessary prerequisite for regulatory clearance (CDSCO). |
 
 ---
