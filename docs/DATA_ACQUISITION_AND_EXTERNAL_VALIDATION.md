@@ -40,7 +40,7 @@ VitalNet structures external validation into a sequential, multi-gate hierarchy 
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                               VITALNET VALIDATION GATES                                │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
-│ GATE 1A: Iran ED Dataset (Kashani et al. 2024, CC BY 4.0 Open Access)                  │
+│ GATE 1A: Iran ED Dataset (BaniHassan et al. 2024, CC BY 4.0 Open Access)              │
 │  - Role: Inspection-only & sparse-input data quality audit                             │
 │  - Status: Implemented in adapter; model scoring strictly refused                      │
 │  - Focus: Auditing severe clinical missingness (91 complete rows / 143k total)         │
@@ -70,7 +70,7 @@ VitalNet structures external validation into a sequential, multi-gate hierarchy 
 
 | Dataset & Gate | Scope & Setting | Volume | License / Access | Inputs Available | Target Role in VitalNet |
 |---|---|---|---|---|---|
-| **Gate 1A: Iran ED** | Single-center tertiary hospital ED, Iran | 143,582 triage rows | CC BY 4.0 Open Access | Published 10 headers; extreme sparsity (<0.07% complete vitals) | **Inspection-only audit**. Scoring strictly refused due to binary ground truth and severe missingness. |
+| **Gate 1A: Iran ED** | Single-center tertiary hospital ED, Iran | 143,582 triage rows | CC BY 4.0 Open Access | Official ED_triage.csv has 28 columns; VitalNet consumes 10 key fields for inspection; extreme sparsity (<0.07% complete vitals) | **Inspection-only audit**. Scoring strictly refused due to binary ground truth and severe missingness. |
 | **Gate 1B: CDC NHAMCS 2022** | Nationally representative sample of US hospital EDs | ~25,000 encounters / year | CDC Public Use Data | Fixed-width vitals, age, sex, arrival immediacy (1–5 scale) | **Partial-input proxy evaluation**. Unweighted discrimination on vital-only presentations. |
 | **Gate 2: MIMIC-IV-ED** (PhysioNet v2.2) | Urban academic medical center ED (Beth Israel Deaconess, Boston) | ~425,000 ED stays | Credentialed DUA (PhysioNet + CITI training required) | Complete vitals, age, sex, pain, free-text chief complaints, ESI 1–5, linkable outcomes | **Full-input multi-modal validation**. Measures end-to-end classifier + NLP text features. |
 | **Gate 3: Prospective Indian PHC** | Frontline Primary Health Centres & Sub-Centres, rural India | Prospective cohort | Institutional Ethics Committee (IEC) approved | Complete ASHA intake: vitals, localized symptoms, Hindi/Tamil notes, clinical outcomes | **True clinical validation**. Necessary prerequisite for regulatory clearance (CDSCO). |
