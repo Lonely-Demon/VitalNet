@@ -149,12 +149,66 @@ def parse_symptoms_from_complaint(complaint: Optional[str]) -> List[str]:
     return sorted(matched_symptoms)
 
 
+class StreamingSymptomCoverageAccumulator:
+    """
+    Streaming accumulator that computes symptom parsing coverage one complaint at a time.
+    Strictly avoids storing, buffering, or retaining raw chief complaint strings.
+    """
+
+    def __init__(self) -> None:
+        self.total_count = 0
+        self.non_empty_count = 0
+        self.matched_any_count = 0
+        self.symptom_counts: Dict[str, int] = {s: 0 for s in sorted(CANONICAL_ALLOWED_SYMPTOMS)}
+
+    def update(self, complaint: Optional[str]) -> List[str]:
+        """
+        Processes a single complaint string, increments counters, and returns parsed symptoms.
+        The raw string is never stored on self or buffered in memory.
+        """
+        self.total_count += 1
+        if complaint and str(complaint).strip():
+            self.non_empty_count += 1
+            symptoms = parse_symptoms_from_complaint(complaint)
+            if symptoms:
+                self.matched_any_count += 1
+                for s in symptoms:
+                    self.symptom_counts[s] += 1
+            return symptoms
+        return []
+
+    def finalize(self) -> Dict[str, Any]:
+        """
+        Returns aggregate coverage dictionary with zero raw strings.
+        """
+        coverage_pct = (
+            round((self.matched_any_count / self.total_count * 100.0), 2)
+            if self.total_count > 0
+            else 0.0
+        )
+        non_empty_coverage_pct = (
+            round((self.matched_any_count / self.non_empty_count * 100.0), 2)
+            if self.non_empty_count > 0
+            else 0.0
+        )
+
+        return {
+            "parser_version": PARSER_VERSION,
+            "total_complaints_inspected": self.total_count,
+            "non_empty_complaints_count": self.non_empty_count,
+            "complaints_with_mapped_symptoms_count": self.matched_any_count,
+            "overall_coverage_pct": coverage_pct,
+            "non_empty_coverage_pct": non_empty_coverage_pct,
+            "symptom_frequency_distribution": self.symptom_counts,
+        }
+
+
 def compute_symptom_parser_coverage(
     complaints: Iterable[Optional[str]],
 ) -> Dict[str, Any]:
     """
-    Computes aggregate coverage statistics across a collection of chief complaints.
-    Guarantees ZERO raw complaint text is included in the output dictionary.
+    Computes aggregate coverage statistics across a collection of chief complaints using streaming accumulation.
+    Guarantees ZERO raw complaint text is included in the output dictionary or retained in memory.
 
     Args:
         complaints: Iterable of raw chief complaints.
@@ -162,32 +216,7 @@ def compute_symptom_parser_coverage(
     Returns:
         Dictionary containing total count, coverage count/pct, and per-symptom frequency.
     """
-    total_count = 0
-    non_empty_count = 0
-    matched_any_count = 0
-    symptom_counts: Dict[str, int] = {s: 0 for s in sorted(CANONICAL_ALLOWED_SYMPTOMS)}
-
+    accumulator = StreamingSymptomCoverageAccumulator()
     for comp in complaints:
-        total_count += 1
-        if comp and str(comp).strip():
-            non_empty_count += 1
-            symptoms = parse_symptoms_from_complaint(comp)
-            if symptoms:
-                matched_any_count += 1
-                for s in symptoms:
-                    symptom_counts[s] += 1
-
-    coverage_pct = round((matched_any_count / total_count * 100.0), 2) if total_count > 0 else 0.0
-    non_empty_coverage_pct = (
-        round((matched_any_count / non_empty_count * 100.0), 2) if non_empty_count > 0 else 0.0
-    )
-
-    return {
-        "parser_version": PARSER_VERSION,
-        "total_complaints_inspected": total_count,
-        "non_empty_complaints_count": non_empty_count,
-        "complaints_with_mapped_symptoms_count": matched_any_count,
-        "overall_coverage_pct": coverage_pct,
-        "non_empty_coverage_pct": non_empty_coverage_pct,
-        "symptom_frequency_distribution": symptom_counts,
-    }
+        accumulator.update(comp)
+    return accumulator.finalize()

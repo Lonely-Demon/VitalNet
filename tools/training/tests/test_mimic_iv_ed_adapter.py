@@ -306,6 +306,36 @@ class TestMIMICSymptomParser:
         for k in cov:
             assert "chest pain" not in str(k)
 
+    def test_inspection_never_retains_or_returns_raw_complaints(
+        self,
+        mimic_triage_csv_path: str,
+        mimic_patients_csv_path: str,
+        mimic_edstays_csv_path: str,
+    ):
+        source = MIMICIVEDSource(
+            file_path=mimic_triage_csv_path,
+            patients_file_path=mimic_patients_csv_path,
+            edstays_file_path=mimic_edstays_csv_path,
+        )
+        dq = source.inspect()
+
+        # Verify no raw complaint attribute exists on source
+        assert not hasattr(source, "raw_complaints")
+        assert not hasattr(source, "_raw_complaints")
+
+        # Verify inspection output dictionary contains zero raw complaint phrases
+        raw_phrases_to_test = [
+            "chest tightness and sob",
+            "severe headache and dizziness",
+            "epigastric pain and vomiting",
+            "fever and chills",
+            "sudden weakness left arm",
+            "routine annual physical",
+        ]
+        dq_dict_str = json.dumps(dq.to_dict()).lower()
+        for phrase in raw_phrases_to_test:
+            assert phrase not in dq_dict_str
+
 
 # ── Test Suite 4: Gate M4 Staged Refusal & Policies ───────────────────────────
 
@@ -327,6 +357,36 @@ class TestMIMICGateM4AndScoring:
         )
         with pytest.raises(EvaluationRefusedError, match="Gate M4 explicit authorization"):
             source.load_for_evaluation()
+
+    def test_exploratory_medrecon_inspection_hard_disabled_without_temporal_auth(
+        self,
+        mimic_triage_csv_path: str,
+        mimic_patients_csv_path: str,
+        mimic_edstays_csv_path: str,
+        mimic_medrecon_csv_path: str,
+    ):
+        # Gate M4 authorization alone MUST NOT unlock exploratory medrecon inspection
+        with pytest.raises(EvaluationRefusedError, match="Exploratory medrecon inspection is hard-disabled"):
+            MIMICIVEDSource(
+                file_path=mimic_triage_csv_path,
+                patients_file_path=mimic_patients_csv_path,
+                edstays_file_path=mimic_edstays_csv_path,
+                medrecon_file_path=mimic_medrecon_csv_path,
+                exploratory_medrecon_inspection=True,
+                gate_m4_authorized=True,
+                gate_medrecon_temporal_authorized=False,
+            )
+
+        source = MIMICIVEDSource(
+            file_path=mimic_triage_csv_path,
+            patients_file_path=mimic_patients_csv_path,
+            edstays_file_path=mimic_edstays_csv_path,
+            medrecon_file_path=mimic_medrecon_csv_path,
+            gate_m4_authorized=True,
+            gate_medrecon_temporal_authorized=False,
+        )
+        with pytest.raises(EvaluationRefusedError, match="Exploratory medrecon inspection is hard-disabled"):
+            source.inspect(exploratory_medrecon_inspection=True)
 
     def test_medrecon_arm_hard_refused_even_with_gate_m4(
         self,

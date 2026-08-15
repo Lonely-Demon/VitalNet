@@ -39,6 +39,7 @@ from .base import (
 )
 from .mimic_symptom_parser import (
     PARSER_VERSION,
+    StreamingSymptomCoverageAccumulator,
     compute_symptom_parser_coverage,
     parse_symptoms_from_complaint,
 )
@@ -138,6 +139,13 @@ class MIMICIVEDSource(BaseEvaluationSource):
         if self.cohort_policy not in VALID_COHORT_POLICIES:
             raise ValueError(
                 f"Invalid cohort policy: '{self.cohort_policy}'. Must be one of: {VALID_COHORT_POLICIES}"
+            )
+
+        if self.exploratory_medrecon_inspection and not self.gate_medrecon_temporal_authorized:
+            raise EvaluationRefusedError(
+                "Exploratory medrecon inspection is hard-disabled pending independent "
+                "temporal-eligibility review and separate temporal authorization. "
+                "Gate M4 authorization alone cannot unlock medrecon operations."
             )
 
         # Prohibited table validation across paths and kwargs
@@ -253,6 +261,16 @@ class MIMICIVEDSource(BaseEvaluationSource):
         resolved_edstays = edstays_file_path or self.edstays_file_path or kwargs.get("edstays_file")
         resolved_medrecon = medrecon_file_path or self.medrecon_file_path or kwargs.get("medrecon_file")
 
+        if (
+            self.exploratory_medrecon_inspection
+            or kwargs.get("exploratory_medrecon_inspection")
+        ) and not self.gate_medrecon_temporal_authorized:
+            raise EvaluationRefusedError(
+                "Exploratory medrecon inspection is hard-disabled pending independent "
+                "temporal-eligibility review and separate temporal authorization. "
+                "Gate M4 authorization alone cannot unlock medrecon operations."
+            )
+
         manifest = self._build_manifest(resolved_triage)
 
         patients_map = self._load_patients_demographics(resolved_patients)
@@ -260,7 +278,7 @@ class MIMICIVEDSource(BaseEvaluationSource):
 
         total_rows = 0
         headers_present: List[str] = []
-        raw_complaints: List[Optional[str]] = []
+        parser_accumulator = StreamingSymptomCoverageAccumulator()
         subject_encounter_counts: Dict[str, int] = {}
         unique_stay_ids: Set[str] = set()
 
@@ -476,9 +494,9 @@ class MIMICIVEDSource(BaseEvaluationSource):
                             max(vital_maxs[vname], val_flt) if vname in vital_maxs else val_flt
                         )
 
-                # 4. Chief Complaint
+                # 4. Chief Complaint (streamed into aggregate accumulator; raw complaint is never retained)
                 raw_comp = row.get("chiefcomplaint")
-                raw_complaints.append(raw_comp)
+                parser_accumulator.update(raw_comp)
                 if raw_comp and str(raw_comp).strip():
                     valid_counts["chiefcomplaint"] += 1
                 else:
@@ -531,8 +549,8 @@ class MIMICIVEDSource(BaseEvaluationSource):
                 "missing_pct": m_pct,
             }
 
-        # Compute deterministic symptom parser aggregate coverage
-        parser_coverage = compute_symptom_parser_coverage(raw_complaints)
+        # Finalize streaming symptom parser coverage (aggregate-only)
+        parser_coverage = parser_accumulator.finalize()
 
         # Subject repetition statistics
         unique_subject_count = len(subject_encounter_counts)
@@ -545,9 +563,9 @@ class MIMICIVEDSource(BaseEvaluationSource):
         max_visits = max(encounters_per_subject) if encounters_per_subject else 0
         repeated_subjects_count = sum(1 for c in encounters_per_subject if c > 1)
 
-        # Medrecon inspection note
+        # Medrecon inspection note - primary triage contract inspection strictly ignores medrecon
         medrecon_ignored_note = False
-        if resolved_medrecon and not self.exploratory_medrecon_inspection:
+        if resolved_medrecon:
             medrecon_ignored_note = True
 
         linkage_summary = {

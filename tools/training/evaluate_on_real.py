@@ -414,7 +414,6 @@ def run_inspection(
     patients_file_path: Optional[str] = None,
     edstays_file_path: Optional[str] = None,
     medrecon_file_path: Optional[str] = None,
-    exploratory_medrecon_inspection: bool = False,
     cohort_policy: str = "all_stays",
     json_out: Optional[str] = None,
     acuity_scale: str = "esi",
@@ -427,7 +426,6 @@ def run_inspection(
         patients_file_path=patients_file_path,
         edstays_file_path=edstays_file_path,
         medrecon_file_path=medrecon_file_path,
-        exploratory_medrecon_inspection=exploratory_medrecon_inspection,
         cohort_policy=cohort_policy,
         acuity_scale=acuity_scale,
         temp_fahrenheit=temp_fahrenheit,
@@ -438,7 +436,6 @@ def run_inspection(
         patients_file_path=patients_file_path,
         edstays_file_path=edstays_file_path,
         medrecon_file_path=medrecon_file_path,
-        exploratory_medrecon_inspection=exploratory_medrecon_inspection,
     )
     _print_inspection_report(data_quality)
 
@@ -1009,11 +1006,6 @@ def main():
         help="Path to MIMIC-IV-ED medrecon.csv (exploratory medication reconciliation).",
     )
     ap.add_argument(
-        "--exploratory-medrecon-inspection",
-        action="store_true",
-        help="Explicitly enable exploratory inspection of medrecon file.",
-    )
-    ap.add_argument(
         "--cohort-policy",
         choices=["all_stays", "first_stay_only"],
         default="all_stays",
@@ -1105,7 +1097,6 @@ def main():
             patients_file_path=args.patients_file,
             edstays_file_path=args.edstays_file,
             medrecon_file_path=args.medrecon_file,
-            exploratory_medrecon_inspection=args.exploratory_medrecon_inspection,
             cohort_policy=args.cohort_policy,
             json_out=json_output_path,
             acuity_scale=args.acuity_scale,

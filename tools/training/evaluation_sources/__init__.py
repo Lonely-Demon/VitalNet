@@ -46,6 +46,7 @@ from .mimic_iv_ed import (
 )
 from .mimic_symptom_parser import (
     PARSER_VERSION,
+    StreamingSymptomCoverageAccumulator,
     compute_symptom_parser_coverage,
     parse_symptoms_from_complaint,
 )
@@ -80,6 +81,7 @@ __all__ = [
     "PROHIBITED_TABLE_NAMES",
     "PROHIBITED_FIELD_NAMES",
     "PARSER_VERSION",
+    "StreamingSymptomCoverageAccumulator",
     "parse_symptoms_from_complaint",
     "compute_symptom_parser_coverage",
     "SyntheticSelfTestSource",
