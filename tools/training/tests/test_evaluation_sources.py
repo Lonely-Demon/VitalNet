@@ -215,7 +215,7 @@ class TestIranEDInspection:
         source = IranEDSource(file_path=iran_ed_csv_path)
         manifest = source._build_manifest(iran_ed_csv_path)
         assert "BaniHassan et al." in manifest.source_name
-        assert "mendeley.com" in manifest.official_url
+        assert manifest.official_url == "https://data.mendeley.com/datasets/vhzyyktrz5/1"
         assert manifest.scoring_supported is False
         assert manifest.input_mode == "not_scored"
 
