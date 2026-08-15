@@ -16,6 +16,10 @@
 | **Issuing Authority** | Centers for Disease Control and Prevention (CDC) / National Center for Health Statistics (NCHS) |
 | **File Designation** | `ed2022` (Single-record fixed-width ASCII flat file) |
 | **License / DUA** | CDC Public Use Data Agreement (100% de-identified public use dataset) |
+| **Documentation Gateway** | [https://www.cdc.gov/nchs/nhamcs/documentation/index.html](https://www.cdc.gov/nchs/nhamcs/documentation/index.html) |
+| **Direct Dataset Download** | [https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Datasets/NHAMCS/ED2022.zip](https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Datasets/NHAMCS/ED2022.zip) |
+| **Technical Documentation** | [https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/NHAMCS/doc22-ed-508.pdf](https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/NHAMCS/doc22-ed-508.pdf) |
+| **README / DUA Text** | [https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/NHAMCS/readme2022.txt](https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/NHAMCS/readme2022.txt) |
 | **Target Setting** | Nationally representative sample of hospital-based emergency departments across the United States |
 | **Access Requirements** | Free public download; manually placed locally under `tools/training/data/nhamcs_2022/ed2022` |
 
@@ -37,7 +41,7 @@ The CDC NHAMCS 2022 ED file (`ed2022`) uses fixed-width ASCII formatting. Below 
 | `SEX` | 25 | 1 | `[24:25]` | int | 1, 2 | `1` -> `"female"`, `2` -> `"male"` | `-9`, blanks, non-1/2 -> Exclude row (`invalid_sex`) | `form_data["patient_sex"]` (`Literal["male", "female"]`) |
 | `TEMPF` | 48–51 | 4 | `[47:51]` | int | 896–1056 | Tenths of °F (89.6°F to 105.6°F). Formula: `round((raw / 10.0 - 32.0) * 5.0 / 9.0, 1)` | `-9`, blanks, <896, >1056 -> `temperature = None` | `form_data["temperature"]` (`Optional[float]`) |
 | `PULSE` | 52–54 | 3 | `[51:54]` | int | 0–240 | Heart rate in beats per minute | `998` (Doppler), `-9`, blanks, >240 -> `heart_rate = None` | `form_data["heart_rate"]` (`Optional[int]`) |
-| `RESPR` | 55–57 | 3 | `[54:57]` | int | 0–99 | Respiratory rate (breaths/min) | `-9`, blanks -> None. **STRICT: Never pass to model** | Cohort Metadata ONLY (`respiratory_rate`); omitted from `form_data` |
+| `RESPR` | 55–57 | 3 | `[54:57]` | int | 0–150 | Respiratory rate (breaths/min) | `-9`, blanks -> None. **STRICT: Never pass to model** | Cohort Metadata ONLY (`respiratory_rate`); omitted from `form_data` |
 | `BPSYS` | 58–60 | 3 | `[57:60]` | int | 0 or 43–289 | Systolic BP in mmHg | `0` (pulseless), `-9`, blanks, <43, >289 -> `bp_systolic = None` | `form_data["bp_systolic"]` (`Optional[int]`) |
 | `BPDIAS` | 61–63 | 3 | `[60:63]` | int | 0 or 22–190 | Diastolic BP in mmHg | `998` (Doppler), `0`, `-9`, blanks, <22, >190 -> `bp_diastolic = None` | `form_data["bp_diastolic"]` (`Optional[int]`) |
 | `POPCT` | 64–66 | 3 | `[63:66]` | int | 0–100 | Pulse oximetry SpO₂ (%) | `-9`, `-8`, blanks, <0, >100 -> `spo2 = None` | `form_data["spo2"]` (`Optional[int]`) |

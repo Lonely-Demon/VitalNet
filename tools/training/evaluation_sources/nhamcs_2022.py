@@ -4,6 +4,12 @@ CDC NHAMCS 2022 Emergency Department File Evaluation Source (Gate 1B).
 This module implements the fixed-width ASCII parser and partial-input adapter for the
 CDC National Hospital Ambulatory Medical Care Survey 2022 Emergency Department file (ed2022).
 
+Official Source References:
+- Documentation Gateway: https://www.cdc.gov/nchs/nhamcs/documentation/index.html
+- Dataset Download (ZIP): https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Datasets/NHAMCS/ED2022.zip
+- Technical Documentation: https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/NHAMCS/doc22-ed-508.pdf
+- README / Data-Use Agreement: https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/NHAMCS/readme2022.txt
+
 Enforces:
 - Exact CDC fixed-width column offsets.
 - Fahrenheit tenths to Celsius conversion for body temperature.
@@ -51,7 +57,7 @@ class NHAMCS2022Source(BaseEvaluationSource):
             source_id="nhamcs_2022",
             source_name="CDC NHAMCS 2022 Emergency Department Summary (ed2022)",
             version="2022 Public Use File",
-            official_url="https://www.cdc.gov/nchs/ahcd/datasets_documentation_related.htm",
+            official_url="https://www.cdc.gov/nchs/nhamcs/documentation/index.html",
             license_note="CDC Public Use Data Agreement (100% de-identified)",
             file_sha256=sha256,
             input_mode="partial_input",
