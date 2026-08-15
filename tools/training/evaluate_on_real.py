@@ -80,6 +80,15 @@ from app.ml import classifier as clf_mod  # noqa: E402
 TIER = {"ROUTINE": 0, "URGENT": 1, "EMERGENCY": 2}
 TIER_NAME = {0: "ROUTINE", 1: "URGENT", 2: "EMERGENCY"}
 
+# Canonical five vital sign fields for completeness auditing and subgroup slicing
+FIVE_VITAL_FIELDS: Tuple[str, ...] = (
+    "temperature",
+    "heart_rate",
+    "bp_systolic",
+    "bp_diastolic",
+    "spo2",
+)
+
 LIMITATIONS_AND_NON_CLAIMS: List[str] = [
     "Cohort-specific proxy evaluation: Results reflect dataset-specific population characteristics and triage proxy mapping conventions.",
     "Non-equivalence to clinical safety evidence: Does not constitute medical device clearance, prospective clinical trial evidence, or rural/ASHA validation.",
@@ -526,7 +535,7 @@ def calculate_evaluation_metrics(
     ages = np.array([fd.get("patient_age", 0) or 0 for fd in formdatas])
     sexes = np.array([fd.get("patient_sex", "other") for fd in formdatas])
     incomplete = np.array([
-        any(fd.get(k) is None for k in ("bp_systolic", "spo2", "heart_rate", "temperature"))
+        any(fd.get(k) is None for k in FIVE_VITAL_FIELDS)
         for fd in formdatas
     ])
 
@@ -679,7 +688,7 @@ def build_evaluation_json_report(
     formdatas: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     n_records = len(formdatas)
-    vital_fields = ["temperature", "heart_rate", "bp_systolic", "bp_diastolic", "spo2"]
+    vital_fields = list(FIVE_VITAL_FIELDS)
     present_counts = {vf: 0 for vf in vital_fields}
     vital_sums = {vf: 0.0 for vf in vital_fields}
     vital_mins = {vf: float("inf") for vf in vital_fields}

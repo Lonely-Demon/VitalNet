@@ -504,3 +504,116 @@ class TestChallenge7RespiratoryRateRange:
         assert rr_dist.get("max", 0) >= 120, (
             f"respiratory_rate max should be >= 120, got {rr_dist.get('max')}"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Challenge 8: Five-Vital Subgroup & Aggregate Completeness Consistency
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestChallenge8FiveVitalSubgroupCompleteness:
+    """
+    Validates that subgroup vital completeness and aggregate vital completeness
+    both evaluate all five physiological fields: temperature, heart_rate,
+    bp_systolic, bp_diastolic, and spo2.
+    """
+
+    def test_missing_only_bp_diastolic_is_classified_as_vitals_incomplete(self):
+        """A record with 4 vitals present but bp_diastolic missing must be vitals_incomplete."""
+        import sys as _sys
+        import numpy as _np
+        if TOOLS_DIR not in _sys.path:
+            _sys.path.insert(0, TOOLS_DIR)
+        from evaluate_on_real import (
+            FIVE_VITAL_FIELDS,
+            calculate_evaluation_metrics,
+            build_evaluation_json_report,
+        )
+        from evaluation_sources.base import SourceManifest, ExclusionCounters
+
+        assert set(FIVE_VITAL_FIELDS) == {
+            "temperature", "heart_rate", "bp_systolic", "bp_diastolic", "spo2"
+        }
+
+        fd_missing_dbp = {
+            "patient_age": 45,
+            "patient_sex": "female",
+            "temperature": 37.2,
+            "heart_rate": 85,
+            "bp_systolic": 130,
+            "bp_diastolic": None,  # ONLY THIS IS MISSING
+            "spo2": 97,
+            "chief_complaint": "",
+            "symptoms": [],
+        }
+
+        metrics = calculate_evaluation_metrics(
+            y_ref=_np.array([2]),
+            y_prod=_np.array([2]),
+            y_raw=_np.array([2]),
+            conf=_np.array([0.85]),
+            guardrail=_np.array([0]),
+            formdatas=[fd_missing_dbp],
+        )
+
+        subgroups = metrics["subgroups"]
+        assert subgroups["vitals_incomplete"]["total_encounters"] == 1, (
+            "Record missing only bp_diastolic must be counted under vitals_incomplete"
+        )
+        assert subgroups["vitals_complete"]["total_encounters"] == 0, (
+            "Record missing bp_diastolic must NOT be counted under vitals_complete"
+        )
+
+        manifest = SourceManifest(
+            source_id="synthetic_test",
+            source_name="Synthetic Test",
+            version="1.0",
+            official_url="https://example.org",
+            license_note="Synthetic",
+            file_sha256=None,
+            input_mode="partial_input",
+            label_definition="test",
+            scoring_supported=True,
+        )
+        report = build_evaluation_json_report(
+            manifest=manifest,
+            counters=ExclusionCounters(),
+            metrics=metrics,
+            formdatas=[fd_missing_dbp],
+        )
+        dq = report["data_quality"]
+        assert dq["complete_vitals_count"] == 0
+        assert dq["complete_vitals_pct"] == 0.0
+        assert dq["field_missingness"]["bp_diastolic"]["missing_count"] == 1
+
+    def test_complete_five_vitals_is_classified_as_vitals_complete(self):
+        """A record with all five vitals populated must be vitals_complete."""
+        import sys as _sys
+        import numpy as _np
+        if TOOLS_DIR not in _sys.path:
+            _sys.path.insert(0, TOOLS_DIR)
+        from evaluate_on_real import calculate_evaluation_metrics
+
+        fd_complete = {
+            "patient_age": 50,
+            "patient_sex": "male",
+            "temperature": 36.8,
+            "heart_rate": 72,
+            "bp_systolic": 120,
+            "bp_diastolic": 80,
+            "spo2": 99,
+            "chief_complaint": "",
+            "symptoms": [],
+        }
+
+        metrics = calculate_evaluation_metrics(
+            y_ref=_np.array([2]),
+            y_prod=_np.array([2]),
+            y_raw=_np.array([2]),
+            conf=_np.array([0.85]),
+            guardrail=_np.array([0]),
+            formdatas=[fd_complete],
+        )
+
+        subgroups = metrics["subgroups"]
+        assert subgroups["vitals_complete"]["total_encounters"] == 1
+        assert subgroups["vitals_incomplete"]["total_encounters"] == 0
