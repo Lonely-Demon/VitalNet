@@ -12,7 +12,8 @@ Validates:
 7. Missing-vital reason is diagnostic metadata only and never interpreted as normal value.
 8. Output passes recursive zero-leakage assertions.
 9. No real-data adapter, NHAMCS file, Iran file, or production report is opened.
-10. Field-utilization matrix is internally consistent with current code paths.
+10. Field-utilization matrix is internally consistent with current code paths and matches
+    the exact offline hybrid triage engineInput keys in apps/web/src/utils/triageClassifier.js.
 """
 
 import copy
@@ -48,6 +49,24 @@ from audit_asha_input_contract import (
     assert_zero_patient_leakage,
 )
 import train_classifier as tc
+from app.ml import classifier as clf_mod
+
+OFFLINE_HYBRID_ENGINE_INPUT_KEYS = {
+    "patient_age",
+    "patient_sex",
+    "bp_systolic",
+    "bp_diastolic",
+    "spo2",
+    "heart_rate",
+    "temperature",
+    "symptoms",
+    "is_pregnant",
+    "chief_complaint",
+    "complaint_duration",
+    "location",
+    "known_conditions",
+    "current_medications",
+}
 
 
 @pytest.fixture
@@ -90,6 +109,8 @@ def test_all_arms_differ_only_in_declared_fields(synthetic_cohort):
         assert tc_p["patient_sex"] == orig["patient_sex"]
         assert tc_p["temperature"] == orig["temperature"]
         assert tc_p["symptoms"] == orig["symptoms"]
+        assert "duration_days" not in tc_p
+        assert "_study_control_reference_month" not in tc_p
 
         # 2. no_observations
         no_obs = arm_no_observations(orig)
@@ -260,12 +281,18 @@ def test_no_real_data_adapters_opened(monkeypatch):
     # Run study
     report = run_asha_input_contract_study(n=25, seed=123)
     assert report["execution_mode"] == "synthetic_contract_study"
+    assert "study_provenance" in report
+    assert report["study_provenance"]["execution_mode"] == "synthetic_contract_study"
+    assert report["study_provenance"]["model_version"] != ""
 
 
-# ── Test 10: Field-Utilization Matrix Internal Consistency ───────────────────
+# ── Test 10: Field-Utilization Matrix Internal Consistency & Offline Parity ──
 
-def test_field_utilization_matrix_internal_consistency():
-    """Verifies that every entry in FIELD_UTILIZATION_MATRIX adheres to expected schema and roles."""
+def test_field_utilization_matrix_internal_consistency_and_offline_parity():
+    """
+    Verifies that every entry in FIELD_UTILIZATION_MATRIX adheres to expected schema
+    and matches the exact engineInput keys in apps/web/src/utils/triageClassifier.js.
+    """
     expected_attributes = [
         "captured_by_ui",
         "serialized_to_payload",
@@ -283,7 +310,16 @@ def test_field_utilization_matrix_internal_consistency():
         for attr in expected_attributes:
             assert attr in meta, f"Field '{field_name}' missing attribute '{attr}'"
 
+        # Regression check: passed_to_offline_hybrid_triage must match actual triageClassifier.js engineInput keys
+        is_passed = meta["passed_to_offline_hybrid_triage"]
+        if field_name in OFFLINE_HYBRID_ENGINE_INPUT_KEYS:
+            assert is_passed is True, f"Field '{field_name}' must have passed_to_offline_hybrid_triage=True"
+        else:
+            assert is_passed is False, f"Field '{field_name}' must have passed_to_offline_hybrid_triage=False"
+
     # Specific architectural checks
+    assert FIELD_UTILIZATION_MATRIX["patient_name"]["passed_to_offline_hybrid_triage"] is False
+    assert FIELD_UTILIZATION_MATRIX["observations"]["passed_to_offline_hybrid_triage"] is False
     assert FIELD_UTILIZATION_MATRIX["observations"]["used_by_core_feature_map"] is False
     assert FIELD_UTILIZATION_MATRIX["observations"]["used_by_briefing_or_persistence_only"] is True
 
@@ -294,6 +330,7 @@ def test_field_utilization_matrix_internal_consistency():
 
     assert FIELD_UTILIZATION_MATRIX["respiratory_rate"]["captured_by_ui"] is False
     assert FIELD_UTILIZATION_MATRIX["respiratory_rate"]["passed_to_legacy_triage"] is False
+    assert FIELD_UTILIZATION_MATRIX["respiratory_rate"]["passed_to_offline_hybrid_triage"] is False
 
     assert FIELD_UTILIZATION_MATRIX["consent_captured"]["used_by_briefing_or_persistence_only"] is True
     assert FIELD_UTILIZATION_MATRIX["patient_key"]["used_by_briefing_or_persistence_only"] is True

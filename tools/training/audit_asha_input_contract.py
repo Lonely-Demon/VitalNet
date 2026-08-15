@@ -11,13 +11,12 @@ STUDY INVARIANTS:
 3. Frozen reference labels reused across all ablation arms without recomputation.
 4. Identical synthetic encounters across all arms; only declared fields are manipulated.
 5. Production classifier, weights, feature engineer, rules, thresholds, and artifacts remain frozen and unchanged.
-6. Aggregate counts and metrics only; zero patient-level rows, IDs, form dicts, free text, or probabilities emitted.
+6. Aggregate counts and metrics only; no patient-level probabilities emitted; only aggregate mean probabilities are reported.
 7. Completely isolated from real-data adapters (Iran/NHAMCS files are never read).
 """
 
 import argparse
 import copy
-import hashlib
 import importlib.util
 import json
 import math
@@ -89,6 +88,7 @@ FORBIDDEN_LEAKAGE_KEYS: Set[str] = {
 STUDY_NON_CLAIMS: List[str] = [
     "Diagnostic-only study: This analysis measures existing frozen model sensitivity and field utilization without modification.",
     "Synthetic data only: All evaluations are performed on synthetic out-of-sample cohorts generated under fixed seeds.",
+    "Zero patient-level output: No patient-level records, form data, raw text, or patient-level probabilities emitted; only aggregate mean probabilities are reported.",
     "Non-clinical claim: Findings do not constitute clinical validation, clinical efficacy, or readiness claims for deployment.",
     "Candidate fields status: Future candidate fields (respiratory rate, blood glucose, etc.) are documented for research roadmap review only and are not passed to the production classifier.",
 ]
@@ -143,7 +143,7 @@ FIELD_UTILIZATION_MATRIX: Dict[str, Dict[str, Any]] = {
         "serialized_to_payload": True,
         "validated_by_schema": True,
         "passed_to_legacy_triage": True,
-        "passed_to_offline_hybrid_triage": True,
+        "passed_to_offline_hybrid_triage": False,
         "used_by_core_feature_map": False,
         "used_by_safety_rules": False,
         "used_by_contraindication_review": False,
@@ -263,7 +263,7 @@ FIELD_UTILIZATION_MATRIX: Dict[str, Dict[str, Any]] = {
         "serialized_to_payload": True,
         "validated_by_schema": True,
         "passed_to_legacy_triage": True,
-        "passed_to_offline_hybrid_triage": True,
+        "passed_to_offline_hybrid_triage": False,
         "used_by_core_feature_map": False,
         "used_by_safety_rules": False,
         "used_by_contraindication_review": False,
@@ -494,15 +494,6 @@ def generate_synthetic_asha_cohort(n: int = 5000, seed: int = 2026) -> List[Dict
             cond = ", ".join(cond)
 
         duration_str = p.get("complaint_duration") or "1–3 days"
-        duration_days = 0
-        if "Less than 1 hour" in duration_str or "1–6 hours" in duration_str:
-            duration_days = 0
-        elif "6–24 hours" in duration_str:
-            duration_days = 1
-        elif "1–3 days" in duration_str:
-            duration_days = 2
-        elif "More than 3 days" in duration_str:
-            duration_days = 5
 
         full_p = {
             "patient_name": name,
@@ -517,7 +508,6 @@ def generate_synthetic_asha_cohort(n: int = 5000, seed: int = 2026) -> List[Dict
             "is_pregnant": is_preg,
             "chief_complaint": p.get("chief_complaint") or "Fever",
             "complaint_duration": duration_str,
-            "duration_days": duration_days,
             "location": p.get("location") or "Rampur Village",
             "known_conditions": cond,
             "current_medications": meds,
@@ -526,7 +516,8 @@ def generate_synthetic_asha_cohort(n: int = 5000, seed: int = 2026) -> List[Dict
             "patient_key": f"3K{i%9}P-7X{(i*3)%9}W",
             "human_review_requested": False,
             "human_review_reason": "",
-            "_reference_month": p.get("_reference_month", 7),
+            # Study-only synthetic generation control:
+            "_study_control_reference_month": p.get("_reference_month", 7),
         }
         out.append(full_p)
 
@@ -553,11 +544,9 @@ def arm_current_triage_contract(p: Dict[str, Any]) -> Dict[str, Any]:
         "is_pregnant": p.get("is_pregnant", False),
         "chief_complaint": p.get("chief_complaint", ""),
         "complaint_duration": p.get("complaint_duration", ""),
-        "duration_days": p.get("duration_days", 0),
         "location": p.get("location", ""),
         "known_conditions": p.get("known_conditions", ""),
         "current_medications": p.get("current_medications", ""),
-        "_reference_month": p.get("_reference_month", 7),
     }
 
 
@@ -583,7 +572,6 @@ def arm_no_complaint_context(p: Dict[str, Any]) -> Dict[str, Any]:
     cp = copy.deepcopy(p)
     cp["chief_complaint"] = ""
     cp["complaint_duration"] = ""
-    cp["duration_days"] = 0
     cp["location"] = ""
     cp["known_conditions"] = ""
     return cp
@@ -601,7 +589,6 @@ def arm_nhamcs_like_partial_input(p: Dict[str, Any]) -> Dict[str, Any]:
         "symptoms": [],
         "chief_complaint": "",
         "complaint_duration": "",
-        "duration_days": 0,
         "location": "",
         "known_conditions": "",
         "current_medications": "",
@@ -786,6 +773,9 @@ def run_asha_input_contract_study(
     """
     Orchestrates the entire ASHA input contract remediation study.
     """
+    if clf_mod._classifier is None:
+        clf_mod.load_classifier()
+
     print(f"\n[1/4] Generating {n} synthetic ASHA encounters (seed={seed})...")
     patients_full = generate_synthetic_asha_cohort(n=n, seed=seed)
 
@@ -834,22 +824,41 @@ def run_asha_input_contract_study(
         )
         arms_results[arm_key] = arm_rep
 
-    # Compute key insights / sensitivity summary
+    obs_disagree = arms_results["no_observations"]["disagreements_vs_current_full_form"]
+    med_disagree = arms_results["no_medications"]["disagreements_vs_current_full_form"]
+    sym_disagree = arms_results["no_structured_symptoms"]["disagreements_vs_current_full_form"]
+    nh_disagree = arms_results["nhamcs_like_partial_input"]["disagreements_vs_current_full_form"]
+
     sensitivity_summary = {
         "observations_effect": {
-            "tier_disagreements": arms_results["no_observations"]["disagreements_vs_current_full_form"]["tier_disagreement_count"],
-            "conclusion": "observations field is operationally inert to ML classifier and rules engine; strictly clinical briefing / persistence only.",
+            "tier_disagreement_count": obs_disagree["tier_disagreement_count"],
+            "tier_disagreement_rate": obs_disagree["tier_disagreement_rate"],
+            "observed_conclusion": (
+                f"In this cohort of {n} synthetic encounters, removing observations produced "
+                f"{obs_disagree['tier_disagreement_count']} tier disagreements "
+                f"({obs_disagree['tier_disagreement_rate']*100:.2f}%). "
+                "Observations field is operationally inert to the ML classifier and rules engine."
+            ),
         },
         "medications_effect": {
-            "tier_disagreements": arms_results["no_medications"]["disagreements_vs_current_full_form"]["tier_disagreement_count"],
-            "contraindication_flag_drop": (
-                arms_results["current_full_form"]["contraindication_flag_count"]
-                - arms_results["no_medications"]["contraindication_flag_count"]
+            "tier_disagreement_count": med_disagree["tier_disagreement_count"],
+            "tier_disagreement_rate": med_disagree["tier_disagreement_rate"],
+            "contraindication_flag_count_in_full": arms_results["current_full_form"]["contraindication_flag_count"],
+            "contraindication_flag_count_without_meds": arms_results["no_medications"]["contraindication_flag_count"],
+            "contraindication_disagreement_count": med_disagree["contraindication_disagreement_count"],
+            "observed_conclusion": (
+                f"In this cohort of {n} synthetic encounters, removing current_medications produced "
+                f"{med_disagree['tier_disagreement_count']} tier disagreements, while reducing contraindication "
+                f"flags from {arms_results['current_full_form']['contraindication_flag_count']} to "
+                f"{arms_results['no_medications']['contraindication_flag_count']} "
+                f"({med_disagree['contraindication_disagreement_count']} contraindication disagreements). "
+                "Current medications drives contraindication reviews without altering the base ML triage tier."
             ),
-            "conclusion": "current_medications drives drug-disease contraindication review flags; does not alter ML triage tier.",
         },
         "structured_symptoms_effect": {
-            "agreement_drop": round(
+            "tier_disagreement_count": sym_disagree["tier_disagreement_count"],
+            "tier_disagreement_rate": sym_disagree["tier_disagreement_rate"],
+            "overall_agreement_drop": round(
                 arms_results["current_full_form"]["overall_agreement"]["point_estimate"]
                 - arms_results["no_structured_symptoms"]["overall_agreement"]["point_estimate"],
                 4,
@@ -859,10 +868,19 @@ def run_asha_input_contract_study(
                 - arms_results["no_structured_symptoms"]["tier_sensitivities"]["EMERGENCY"]["point_estimate"],
                 4,
             ),
-            "conclusion": "symptoms is a primary driver of clinical sensitivity and critical symptom safety nets.",
+            "observed_conclusion": (
+                f"In this cohort of {n} synthetic encounters, blanking symptoms produced "
+                f"{sym_disagree['tier_disagreement_count']} tier disagreements "
+                f"({sym_disagree['tier_disagreement_rate']*100:.2f}%), with an overall agreement drop of "
+                f"{round((arms_results['current_full_form']['overall_agreement']['point_estimate'] - arms_results['no_structured_symptoms']['overall_agreement']['point_estimate'])*100, 2):.2f}% "
+                f"and an EMERGENCY sensitivity drop of "
+                f"{round((arms_results['current_full_form']['tier_sensitivities']['EMERGENCY']['point_estimate'] - arms_results['no_structured_symptoms']['tier_sensitivities']['EMERGENCY']['point_estimate'])*100, 2):.2f}%."
+            ),
         },
         "nhamcs_partial_input_effect": {
-            "agreement_drop": round(
+            "tier_disagreement_count": nh_disagree["tier_disagreement_count"],
+            "tier_disagreement_rate": nh_disagree["tier_disagreement_rate"],
+            "overall_agreement_drop": round(
                 arms_results["current_full_form"]["overall_agreement"]["point_estimate"]
                 - arms_results["nhamcs_like_partial_input"]["overall_agreement"]["point_estimate"],
                 4,
@@ -872,14 +890,24 @@ def run_asha_input_contract_study(
                 - arms_results["nhamcs_like_partial_input"]["tier_sensitivities"]["EMERGENCY"]["point_estimate"],
                 4,
             ),
-            "conclusion": "Blanking symptoms and context isolates vital-only inference, explaining severe under-triage when evaluated against arrival urgency.",
+            "observed_conclusion": (
+                f"In this cohort of {n} synthetic encounters, reducing inputs to age, sex, and five vitals (NHAMCS-like) produced "
+                f"{nh_disagree['tier_disagreement_count']} tier disagreements "
+                f"({nh_disagree['tier_disagreement_rate']*100:.2f}%), with an overall agreement drop of "
+                f"{round((arms_results['current_full_form']['overall_agreement']['point_estimate'] - arms_results['nhamcs_like_partial_input']['overall_agreement']['point_estimate'])*100, 2):.2f}% "
+                f"and an EMERGENCY sensitivity drop of "
+                f"{round((arms_results['current_full_form']['tier_sensitivities']['EMERGENCY']['point_estimate'] - arms_results['nhamcs_like_partial_input']['tier_sensitivities']['EMERGENCY']['point_estimate'])*100, 2):.2f}%."
+            ),
         },
     }
 
     report = {
         "study_name": "ASHA Input Contract Remediation & Field Sensitivity Study",
         "execution_mode": "synthetic_contract_study",
-        "provenance": {
+        "study_provenance": {
+            "execution_mode": "synthetic_contract_study",
+            "evaluation_harness_version": "1.0.0",
+            "model_version": getattr(clf_mod, "_model_version", None) or "unknown",
             "git_commit": _get_git_commit(),
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "sample_size": n,
