@@ -238,26 +238,26 @@ SYNTHETIC_KTAS_HEADERS = list(EXPECTED_DATA_HEADERS)
 # - row 8: Regional ED (Group 2), adult female (Sex=1), invalid KTAS_expert 9, complete vitals
 # - row 9: Local ED (Group 1), adult female (Sex=1), KTAS_expert 3, NRS_pain "#NULL!", Saturation "측불"
 SYNTHETIC_KTAS_DATA_ROWS = [
-    # 0: Group 1, Sex 1 (Female), KTAS 1, missing sat (측불)
-    [1, 1, 45, 1, 2, "가슴 통증", 1, 1, 8, 120, 80, 85, 18, 36.5, "측불", 2, "Angina", 2, 1, 0, 120, 5, 0],
-    # 1: Group 2, Sex 2 (Male), KTAS 2, complete 5 vitals
-    [2, 2, 62, 1, 2, "호흡 곤란", 1, 1, 7, 140, 90, 110, 24, 37.8, 92, 2, "Pneumonia", 2, 2, 0, 180, 8, 0],
-    # 2: Group 2, Sex 1 (Female), KTAS 3, complete 5 vitals
-    [2, 1, 75, 2, 2, "복통", 1, 1, 5, 130, 85, 78, 16, 36.8, 98, 3, "Gastritis", 1, 3, 0, 90, 4, 0],
-    # 3: Group 2, Sex 2 (Male), KTAS 4, decimal age 4.7, complete 5 vitals
-    [2, 2, 4.7, 2, 1, "발열", 1, 1, 3, 100, 60, 95, 20, 38.5, 99, 4, "URI", 1, 4, 0, 45, 3, 0],
-    # 4: Group 2, Sex 1 (Female), KTAS 5, complete 5 vitals
-    [2, 1, 22, 2, 1, "찰과상", 1, 2, 0, 115, 75, 72, 14, 36.4, 100, 5, "Abrasion", 1, 5, 0, 30, 2, 0],
-    # 5: Group 1, Sex 2 (Male), KTAS 3, missing sat (None)
-    [1, 2, 38, 2, 2, "두통", 1, 1, 4, 125, 82, 80, 18, 36.7, None, 3, "Migraine", 1, 3, 0, 60, 5, 0],
-    # 6: Group 2, Sex 1 (Female), KTAS 2, missing DBP only
-    [2, 1, 50, 1, 2, "어지러움", 1, 1, 6, 110, None, 90, 18, 36.6, 96, 2, "Vertigo", 1, 2, 0, 75, 4, 0],
-    # 7: Group 2, Sex 2 (Male), KTAS 1, inverted BP (SBP 80 <= DBP 90)
-    [2, 2, 70, 1, 2, "쇼크 의심", 3, 2, 0, 80, 90, 125, 28, 35.8, 88, 1, "Septic shock", 3, 1, 0, 240, 10, 0],
-    # 8: Group 2, Sex 1 (Female), invalid KTAS 9
-    [2, 1, 30, 2, 2, "불안", 1, 2, 0, 120, 80, 70, 16, 36.5, 98, 4, "Anxiety", 1, 9, 0, 40, 3, 0],
-    # 9: Group 1, Sex 1 (Female), KTAS 3, NRS_pain #NULL!, sat 측불
-    [1, 1, 55, 2, 2, "요통", 1, 1, "#NULL!", 135, 88, 76, 16, 36.9, "측불", 3, "Lumbago", 1, 3, 0, 80, 4, 0],
+    # 0: Group 1, Sex 1 (Female), Age 45, Patients/hr 8, KTAS 1, missing sat (측불)
+    [1, 1, 45, 8, 1, 2, "가슴 통증", 1, 1, 8, 120, 80, 85, 18, 36.5, "측불", 2, "Angina", 2, 1, 0, 120, 5, 0],
+    # 1: Group 2, Sex 2 (Male), Age 62, Patients/hr 12, KTAS 2, complete 5 vitals
+    [2, 2, 62, 12, 1, 2, "호흡 곤란", 1, 1, 7, 140, 90, 110, 24, 37.8, 92, 2, "Pneumonia", 2, 2, 0, 180, 8, 0],
+    # 2: Group 2, Sex 1 (Female), Age 75, Patients/hr 5, KTAS 3, complete 5 vitals
+    [2, 1, 75, 5, 2, 2, "복통", 1, 1, 5, 130, 85, 78, 16, 36.8, 98, 3, "Gastritis", 1, 3, 0, 90, 4, 0],
+    # 3: Group 2, Sex 2 (Male), Age 4.7, Patients/hr 15, KTAS 4, decimal age 4.7, complete 5 vitals
+    [2, 2, 4.7, 15, 2, 1, "발열", 1, 1, 3, 100, 60, 95, 20, 38.5, 99, 4, "URI", 1, 4, 0, 45, 3, 0],
+    # 4: Group 2, Sex 1 (Female), Age 22, Patients/hr 6, KTAS 5, complete 5 vitals
+    [2, 1, 22, 6, 2, 1, "찰과상", 1, 2, 0, 115, 75, 72, 14, 36.4, 100, 5, "Abrasion", 1, 5, 0, 30, 2, 0],
+    # 5: Group 1, Sex 2 (Male), Age 38, Patients/hr 10, KTAS 3, missing sat (None)
+    [1, 2, 38, 10, 2, 2, "두통", 1, 1, 4, 125, 82, 80, 18, 36.7, None, 3, "Migraine", 1, 3, 0, 60, 5, 0],
+    # 6: Group 2, Sex 1 (Female), Age 50, Patients/hr 9, KTAS 2, missing DBP only
+    [2, 1, 50, 9, 1, 2, "어지러움", 1, 1, 6, 110, None, 90, 18, 36.6, 96, 2, "Vertigo", 1, 2, 0, 75, 4, 0],
+    # 7: Group 2, Sex 2 (Male), Age 70, Patients/hr 14, KTAS 1, inverted BP (SBP 80 <= DBP 90)
+    [2, 2, 70, 14, 1, 2, "쇼크 의심", 3, 2, 0, 80, 90, 125, 28, 35.8, 88, 1, "Septic shock", 3, 1, 0, 240, 10, 0],
+    # 8: Group 2, Sex 1 (Female), Age 30, Patients/hr 4, invalid KTAS 9
+    [2, 1, 30, 4, 2, 2, "불안", 1, 2, 0, 120, 80, 70, 16, 36.5, 98, 4, "Anxiety", 1, 9, 0, 40, 3, 0],
+    # 9: Group 1, Sex 1 (Female), Age 55, Patients/hr 7, KTAS 3, NRS_pain #NULL!, sat 측불
+    [1, 1, 55, 7, 2, 2, "요통", 1, 1, "#NULL!", 135, 88, 76, 16, 36.9, "측불", 3, "Lumbago", 1, 3, 0, 80, 4, 0],
 ]
 
 SYNTHETIC_CODING_HEADERS = ["Variable", "Description", "Coding"]
@@ -265,6 +265,7 @@ SYNTHETIC_CODING_ROWS = [
     ["Group", "Hospital group", "1=Local ED, 2=Regional ED"],
     ["Sex", "Gender", "1: Female / 2: Male"],
     ["Age", "Patient age in years", "Numeric"],
+    ["Patients number per hour", "ED crowding level", "Patients per hour (numeric)"],
     ["Arrival mode", "Mode of arrival", "1=119, 2=Other"],
     ["Injury", "Injury status", "1=Injury, 2=Non-injury"],
     ["Chief_complain", "Chief complaint", "Free text"],
@@ -499,7 +500,8 @@ class TestKTASInspectionAndSiteStratification:
 
         assert isinstance(dq, AggregateDataQuality)
         assert dq.total_records_inspected == 10
-        assert len(dq.headers_present) == 23
+        assert len(dq.headers_present) == 24
+        assert "Patients number per hour" in dq.headers_present
         assert "KTAS_expert" in dq.headers_present
 
         # Both hashes tracked
@@ -608,7 +610,7 @@ class TestKTASInspectionAndSiteStratification:
         assert dq.exclusion_summary["invalid_or_missing_ktas_expert_label"] == 1
 
         # 2. Implausible vital value test (BT = 50.0 C)
-        implausible_row = [2, 1, 45, 1, 2, "발열", 1, 1, 5, 120, 80, 80, 16, 50.0, 98, 2, "Fever", 1, 2, 0, 60, 5, 0]
+        implausible_row = [2, 1, 45, 10, 1, 2, "발열", 1, 1, 5, 120, 80, 80, 16, 50.0, 98, 2, "Fever", 1, 2, 0, 60, 5, 0]
         rows = [SYNTHETIC_KTAS_HEADERS, implausible_row]
         content = create_synthetic_xlsx_bytes(EXPECTED_DATA_SHEET_NAME, rows)
         path = os.path.join(str(tmp_path), "implausible_bt.xlsx")
@@ -714,6 +716,44 @@ class TestKTASGate3AGovernanceAndScoring:
         assert not hasattr(source, "data_records")
         assert not hasattr(source, "raw_rows")
         assert not hasattr(source, "encounters")
+
+    def test_patients_number_per_hour_influence_isolation_and_exclusion(self, tmp_path: Any):
+        # 1. Base row with Patients number per hour = 5
+        base_row_1 = [2, 1, 45, 5, 1, 2, "가슴 통증", 1, 1, 8, 120, 80, 85, 18, 36.5, 98, 2, "Angina", 2, 1, 0, 120, 5, 0]
+        # 2. Modified row with Patients number per hour = 999
+        mod_row_2 = [2, 1, 45, 999, 1, 2, "가슴 통증", 1, 1, 8, 120, 80, 85, 18, 36.5, 98, 2, "Angina", 2, 1, 0, 120, 5, 0]
+        # 3. Modified row with Patients number per hour = None
+        mod_row_3 = [2, 1, 45, None, 1, 2, "가슴 통증", 1, 1, 8, 120, 80, 85, 18, 36.5, 98, 2, "Angina", 2, 1, 0, 120, 5, 0]
+
+        rows = [SYNTHETIC_KTAS_HEADERS, base_row_1, mod_row_2, mod_row_3]
+        content = create_synthetic_xlsx_bytes(EXPECTED_DATA_SHEET_NAME, rows)
+        path = os.path.join(str(tmp_path), "patients_per_hour_test.xlsx")
+        with open(path, "wb") as f:
+            f.write(content)
+
+        source = KTAS2019Source(file_path=path, gate_3a_scoring_authorized=True)
+
+        # Aggregate inspection succeeds on 24 headers
+        dq = source.inspect()
+        assert len(dq.headers_present) == 24
+        assert "Patients number per hour" in dq.headers_present
+        assert dq.extra_metadata.get("ignored_source_metadata_fields") == ["Patients number per hour"]
+
+        # Canonical evaluation records are identical across all 3 rows despite varying Patients number per hour
+        records, counters, _ = source.load_for_evaluation()
+        assert len(records) == 3
+        r1, r2, r3 = records
+
+        # Field isolation: absent from form_data and raw_fields
+        for r in records:
+            assert "Patients number per hour" not in r.form_data
+            assert "patients_number_per_hour" not in r.form_data
+            assert "Patients number per hour" not in r.raw_fields
+            assert r.raw_fields == {}
+
+        # Canonical inputs and reference labels are invariant to Patients number per hour
+        assert r1.form_data == r2.form_data == r3.form_data
+        assert r1.reference_label == r2.reference_label == r3.reference_label == "EMERGENCY"
 
 
 # ── Test Suite 5: Bilingual Symptom Parser & Negation Handling ───────────────

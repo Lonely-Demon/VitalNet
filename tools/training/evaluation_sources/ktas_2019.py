@@ -18,7 +18,11 @@ Enforces:
 - Strict separation of data workbook ("N=1267 data") and coding workbook ("coding sheet").
   Coding rows are never treated as patient encounters.
 - Exact sheet and schema requirements: exact data sheet name ("N=1267 data"), exact coding sheet name
-  ("coding sheet"), all 23 expected headers present, zero unexpected headers, zero duplicate headers.
+  ("coding sheet"), all 24 expected headers present (including "Patients number per hour"),
+  zero unexpected headers, zero duplicate headers.
+- "Patients number per hour" is accepted as part of the official source schema but explicitly
+  classified in KTAS_IGNORED_INPUT_FIELDS and excluded from CanonicalPatientRecord form_data,
+  raw_fields, labels, metrics, scoring features, and model inputs.
 - Conservative nonnumeric token handling: "#NULL!" and "측불" (observed Korean nonnumeric
   measurement-unavailable token) are treated as missing (None), never coerced to zero.
 - Canonical five-vital completeness definition requiring BT, HR, SBP, DBP, and Saturation.
@@ -90,15 +94,21 @@ KTAS_PROHIBITED_FIELDS: Tuple[str, ...] = (
     "KTAS_RN",
 )
 
+# Ignored source metadata fields (present in official schema but excluded from CanonicalPatientRecord)
+KTAS_IGNORED_INPUT_FIELDS: Tuple[str, ...] = (
+    "Patients number per hour",
+)
+
 # Expected sheet names (fail closed on any deviation)
 EXPECTED_DATA_SHEET_NAME: str = "N=1267 data"
 EXPECTED_CODING_SHEET_NAME: str = "coding sheet"
 
-# Canonical 23 column headers expected in the Moon et al. data workbook
+# Canonical 24 column headers expected in the official Moon et al. data workbook
 EXPECTED_DATA_HEADERS: Tuple[str, ...] = (
     "Group",
     "Sex",
     "Age",
+    "Patients number per hour",
     "Arrival mode",
     "Injury",
     "Chief_complain",
@@ -347,10 +357,11 @@ def _stream_ktas_sheet_rows(
                     elem.clear()
 
 
-def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]]]:
+# TEST / UTILITY ONLY - NOT USED IN PRODUCTION OR ADAPTER RUNTIME PATHS
+def _read_ktas_xlsx_sheets_for_testing(file_path: str) -> Dict[str, List[List[Optional[str]]]]:
     """
-    Non-streaming helper function used for tests and inspection utilities.
-    Parses sheets using the standard library.
+    Non-streaming helper function used ONLY for tests and offline debugging utilities.
+    The production Gate 3A path strictly uses _stream_ktas_sheet_rows() for O(1) memory streaming.
     """
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"XLSX file not found: {file_path}")
@@ -378,6 +389,9 @@ def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]
         result[sname] = list(_stream_ktas_sheet_rows(file_path, sname))
 
     return result
+
+
+_read_ktas_xlsx_sheets = _read_ktas_xlsx_sheets_for_testing
 
 
 # ── Parsing Helpers ──────────────────────────────────────────────────────────
@@ -800,6 +814,7 @@ class KTAS2019Source(BaseEvaluationSource):
             },
             "symptom_parser_coverage": symptom_accumulator.finalize(),
             "coding_sheet_provenance": coding_info,
+            "ignored_source_metadata_fields": list(KTAS_IGNORED_INPUT_FIELDS),
         }
 
         return AggregateDataQuality(
@@ -889,7 +904,8 @@ class KTAS2019Source(BaseEvaluationSource):
                 counters.increment(exclusion_reason)
 
             # 4. Input Arm Construction
-            # Raw free-text Chief_complain is NEVER retained or exposed.
+            # Raw free-text Chief_complain and ignored metadata fields (e.g. Patients number per hour)
+            # are NEVER passed into CanonicalPatientRecord form_data or raw_fields.
             if active_input_mode == ARM_KTAS_PRIMARY:
                 # Primary arm: complaint allow-listed symptoms, never raw text
                 symptoms = parse_ktas_symptoms(row.get("Chief_complain"))
@@ -920,7 +936,7 @@ class KTAS2019Source(BaseEvaluationSource):
             else:
                 raise ValueError(f"Unsupported input mode for evaluation: {active_input_mode}")
 
-            # 5. Build Canonical Record (Zero Prohibited Fields, Zero Raw Complaint Text)
+            # 5. Build Canonical Record (Zero Prohibited Fields, Zero Ignored Fields, Zero Raw Complaint Text)
             rec = CanonicalPatientRecord(
                 form_data=form_data,
                 reference_label=ref_tier,
