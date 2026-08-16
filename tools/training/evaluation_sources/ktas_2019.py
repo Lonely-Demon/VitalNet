@@ -13,6 +13,8 @@ Official Source References:
 
 Enforces:
 - Deterministic, fail-closed standard-library XLSX parsing (zipfile + xml.etree.ElementTree).
+- True streaming row processing at the OpenXML reader boundary via iterparse (clearing XML elements immediately;
+  never materializing raw row lists in memory).
 - Strict separation of data workbook ("N=1267 data") and coding workbook ("coding sheet").
   Coding rows are never treated as patient encounters.
 - Exact sheet and schema requirements: exact data sheet name ("N=1267 data"), exact coding sheet name
@@ -22,6 +24,7 @@ Enforces:
 - Canonical five-vital completeness definition requiring BT, HR, SBP, DBP, and Saturation.
   RR is tracked in inspection metadata only.
 - Unified physiological plausibility bounds and rules applied identically to inspection and scoring.
+  Granular exclusion reasons recorded in both inspection and evaluation exclusion summaries.
 - Correct official KTAS sex mapping: 1 = Female, 2 = Male.
 - Empirical site-stratified completeness analysis (Local ED vs Regional ED) documenting that
   complete-five-vital records are confined to Regional ED (0 in Local ED due to missing saturation).
@@ -187,7 +190,7 @@ def check_vital_plausibility(
     return sanitized, is_complete, exclusion_reason
 
 
-# ── Fail-Closed Deterministic XLSX Parser (Standard Library) ─────────────────
+# ── True Streaming Deterministic XLSX Parser (Standard Library) ──────────────
 
 def _col2idx(col_str: str) -> int:
     """Converts Excel column letters (e.g. 'A', 'Z', 'AA') to 0-based column index."""
@@ -199,11 +202,14 @@ def _col2idx(col_str: str) -> int:
     return idx - 1
 
 
-def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]]]:
+def _stream_ktas_sheet_rows(
+    file_path: str, expected_sheet_name: str
+) -> Iterator[List[Optional[str]]]:
     """
-    Deterministically parses an OpenXML (.xlsx) workbook using Python's standard library.
-    Fail-closed on corrupt archives, missing required parts, unexpected formulas, or duplicate headers.
-    Supports inline strings even when xl/sharedStrings.xml is absent.
+    True streaming OpenXML (.xlsx) worksheet reader.
+    Streams worksheet XML elements one row at a time using ET.iterparse without materializing
+    the full worksheet DOM or a raw row list in memory.
+    Fail-closed on corrupt archives, missing sheet, formula cells, or duplicate headers.
     """
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"XLSX file not found: {file_path}")
@@ -271,24 +277,24 @@ def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]
         if not sheets:
             raise ValueError(f"No worksheets declared in workbook: {file_path}")
 
-        # 4. Parse worksheet XML content
-        result: Dict[str, List[List[Optional[str]]]] = {}
-        for s_name, s_target in sheets.items():
-            if s_target not in namelist:
-                continue
+        if expected_sheet_name not in sheets:
+            raise ValueError(
+                f"Expected worksheet '{expected_sheet_name}' not found in workbook sheets: {list(sheets.keys())}"
+            )
 
-            try:
-                ws_tree = ET.fromstring(zf.read(s_target))
-            except Exception as exc:
-                raise ValueError(f"Failed parsing worksheet '{s_name}' in {file_path}") from exc
+        target_xml = sheets[expected_sheet_name]
+        if target_xml not in namelist:
+            raise ValueError(f"Worksheet XML target '{target_xml}' not found in archive: {file_path}")
 
-            rows_data: List[List[Optional[str]]] = []
-            for row_el in ws_tree.iter():
-                if row_el.tag.split("}")[-1] == "row":
+        # 4. Stream rows using iterparse (clearing XML elements immediately to maintain O(1) memory)
+        with zf.open(target_xml) as ws_file:
+            for event, elem in ET.iterparse(ws_file, events=("end",)):
+                tag_name = elem.tag.split("}")[-1]
+                if tag_name == "row":
                     row_cells: Dict[int, Optional[str]] = {}
                     max_col = -1
 
-                    for c in row_el:
+                    for c in elem:
                         if c.tag.split("}")[-1] != "c":
                             continue
 
@@ -303,10 +309,9 @@ def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]
                         t = c.attrib.get("t")
                         val: Optional[str] = None
 
-                        # Check for child value elements
                         for child in c:
-                            tag_name = child.tag.split("}")[-1]
-                            if tag_name == "v":
+                            child_tag = child.tag.split("}")[-1]
+                            if child_tag == "v":
                                 raw_v = child.text or ""
                                 if t == "s":
                                     try:
@@ -315,21 +320,20 @@ def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]
                                     except ValueError:
                                         val = raw_v
                                 elif t == "e":
-                                    val = raw_v  # Error code e.g. #NULL!, #VALUE!
+                                    val = raw_v
                                 elif t == "b":
                                     val = "1" if raw_v in ("1", "TRUE", "true") else "0"
                                 else:
                                     val = raw_v
                                 break
-                            elif tag_name == "is" or t == "inlineStr":
+                            elif child_tag == "is" or t == "inlineStr":
                                 val = "".join(
                                     el.text or ""
                                     for el in child.iter()
                                     if el.tag.split("}")[-1] == "t"
                                 )
                                 break
-                            elif tag_name == "f":
-                                # Fail-closed on formula cells
+                            elif child_tag == "f":
                                 raise ValueError(
                                     f"Formula cells are unsupported in static evaluation workbook at cell {r_ref}"
                                 )
@@ -338,9 +342,40 @@ def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]
 
                     if max_col >= 0:
                         row_list = [row_cells.get(i) for i in range(max_col + 1)]
-                        rows_data.append(row_list)
+                        yield row_list
 
-            result[s_name] = rows_data
+                    elem.clear()
+
+
+def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]]]:
+    """
+    Non-streaming helper function used for tests and inspection utilities.
+    Parses sheets using the standard library.
+    """
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"XLSX file not found: {file_path}")
+
+    try:
+        zf = zipfile.ZipFile(file_path, "r")
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"Malformed or corrupt XLSX archive: {file_path}") from exc
+
+    with zf:
+        namelist = zf.namelist()
+        if "xl/workbook.xml" not in namelist:
+            raise ValueError("Invalid XLSX structure: missing xl/workbook.xml")
+
+        wb_tree = ET.fromstring(zf.read("xl/workbook.xml"))
+        sheet_names: List[str] = []
+        for sheet in wb_tree.iter():
+            if sheet.tag.split("}")[-1] == "sheet":
+                s_name = sheet.attrib.get("name")
+                if s_name:
+                    sheet_names.append(s_name.strip())
+
+    result: Dict[str, List[List[Optional[str]]]] = {}
+    for sname in sheet_names:
+        result[sname] = list(_stream_ktas_sheet_rows(file_path, sname))
 
     return result
 
@@ -452,27 +487,20 @@ class KTAS2019Source(BaseEvaluationSource):
         self, file_path: str
     ) -> Tuple[List[str], Iterator[Dict[str, Any]]]:
         """
-        Validates the exact expected data sheet name and schema headers fail-closed,
-        and yields sanitized/extracted row dictionaries one at a time via a streaming iterator.
+        Validates exact data sheet name and schema headers fail-closed,
+        and yields sanitized row dictionaries one at a time via a true streaming generator.
         Zero in-memory raw row list materialization.
         """
-        sheets = _read_ktas_xlsx_sheets(file_path)
-
-        if EXPECTED_DATA_SHEET_NAME not in sheets:
-            raise ValueError(
-                f"Expected data worksheet '{EXPECTED_DATA_SHEET_NAME}' not found in workbook sheets: {list(sheets.keys())}"
-            )
-
-        raw_rows = sheets[EXPECTED_DATA_SHEET_NAME]
-        if not raw_rows or len(raw_rows) < 2:
+        row_iter = _stream_ktas_sheet_rows(file_path, EXPECTED_DATA_SHEET_NAME)
+        try:
+            header_row_raw = next(row_iter)
+        except StopIteration:
             raise ValueError(f"Data worksheet '{EXPECTED_DATA_SHEET_NAME}' contains insufficient rows.")
 
-        # Header validation
-        header_row = [str(cell).strip() if cell is not None else "" for cell in raw_rows[0]]
+        header_row = [str(cell).strip() if cell is not None else "" for cell in header_row_raw]
         if not any(header_row):
             raise ValueError(f"Empty header row in sheet '{EXPECTED_DATA_SHEET_NAME}'")
 
-        # Check for duplicate headers
         seen_headers: Set[str] = set()
         clean_headers: List[str] = []
         for h in header_row:
@@ -483,7 +511,6 @@ class KTAS2019Source(BaseEvaluationSource):
             seen_headers.add(h)
             clean_headers.append(h)
 
-        # Exact schema validation: all expected headers present, no unexpected headers
         missing_headers = [h for h in EXPECTED_DATA_HEADERS if h not in clean_headers]
         if missing_headers:
             raise ValueError(
@@ -497,8 +524,7 @@ class KTAS2019Source(BaseEvaluationSource):
             )
 
         def row_generator() -> Iterator[Dict[str, Any]]:
-            for row in raw_rows[1:]:
-                # Skip empty trailing rows
+            for row in row_iter:
                 if not any(c is not None and str(c).strip() != "" for c in row):
                     continue
                 row_dict: Dict[str, Any] = {}
@@ -511,7 +537,7 @@ class KTAS2019Source(BaseEvaluationSource):
 
     def _extract_coding_definitions(self, coding_path: Optional[str]) -> Dict[str, Any]:
         """
-        Parses variable definitions from the exact coding sheet ('coding sheet').
+        Parses variable definitions from the exact coding sheet ('coding sheet') in a streaming fashion.
         Guarantees that coding definitions are retained in metadata and never parsed as patient encounters.
         """
         if not coding_path or not os.path.isfile(coding_path):
@@ -520,23 +546,19 @@ class KTAS2019Source(BaseEvaluationSource):
                 "provided_path": coding_path,
             }
 
-        sheets = _read_ktas_xlsx_sheets(coding_path)
-        if EXPECTED_CODING_SHEET_NAME not in sheets:
-            raise ValueError(
-                f"Expected coding worksheet '{EXPECTED_CODING_SHEET_NAME}' not found in workbook sheets: {list(sheets.keys())}"
-            )
-
-        raw_rows = sheets[EXPECTED_CODING_SHEET_NAME]
-        if not raw_rows or len(raw_rows) < 2:
+        row_iter = _stream_ktas_sheet_rows(coding_path, EXPECTED_CODING_SHEET_NAME)
+        try:
+            header_row_raw = next(row_iter)
+        except StopIteration:
             return {
                 "status": "empty_coding_sheet",
                 "sheet_name": EXPECTED_CODING_SHEET_NAME,
             }
 
-        coding_headers = [str(c).strip() if c is not None else "" for c in raw_rows[0]]
+        coding_headers = [str(c).strip() if c is not None else "" for c in header_row_raw]
         definitions: List[Dict[str, str]] = []
 
-        for r in raw_rows[1:]:
+        for r in row_iter:
             if not any(c is not None and str(c).strip() != "" for c in r):
                 continue
             item = {}
@@ -597,6 +619,7 @@ class KTAS2019Source(BaseEvaluationSource):
         site_saturation_missing: Dict[str, int] = {"local_ed_group_1": 0, "regional_ed_group_2": 0, "other_group": 0}
 
         overall_complete_5_vitals = 0
+        exclusion_summary: Dict[str, int] = {}
         symptom_accumulator = StreamingKTASSymptomCoverageAccumulator()
 
         # Stream row by row — never materializing an in-memory patient row list
@@ -634,7 +657,14 @@ class KTAS2019Source(BaseEvaluationSource):
             age = _safe_float(row.get("Age"))
 
             # Unified plausibility check
-            sanitized_vitals, has_5_vitals, _ = check_vital_plausibility(bt, hr, sbp, dbp, sat)
+            sanitized_vitals, has_5_vitals, exclusion_reason = check_vital_plausibility(
+                bt, hr, sbp, dbp, sat
+            )
+
+            if exclusion_reason:
+                exclusion_summary[exclusion_reason] = (
+                    exclusion_summary.get(exclusion_reason, 0) + 1
+                )
 
             numeric_map = {
                 "BT": sanitized_vitals["BT"],
@@ -670,6 +700,9 @@ class KTAS2019Source(BaseEvaluationSource):
             else:
                 ktas_expert_dist["other"] += 1
                 mapped_expert_tiers["unmapped"] += 1
+                exclusion_summary["invalid_or_missing_ktas_expert_label"] = (
+                    exclusion_summary.get("invalid_or_missing_ktas_expert_label", 0) + 1
+                )
 
             # KTAS RN nurse distribution (audit metadata only)
             raw_rn = _safe_int(row.get("KTAS_RN"))
@@ -778,7 +811,7 @@ class KTAS2019Source(BaseEvaluationSource):
             reference_distribution=mapped_expert_tiers,
             complete_vitals_count=overall_complete_5_vitals,
             complete_vitals_pct=complete_vitals_pct,
-            exclusion_summary={},
+            exclusion_summary=exclusion_summary,
             linkage_summary=None,
             extra_metadata=extra_meta,
         )

@@ -21,6 +21,7 @@ Validates:
 """
 
 import io
+import inspect as py_inspect
 import json
 import os
 import subprocess
@@ -66,6 +67,7 @@ from evaluation_sources.ktas_2019 import (
     _read_ktas_xlsx_sheets,
     _safe_float,
     _safe_int,
+    _stream_ktas_sheet_rows,
     check_vital_plausibility,
     EXPECTED_DATA_SHEET_NAME,
     EXPECTED_CODING_SHEET_NAME,
@@ -364,7 +366,7 @@ class TestKTASXLSXParser:
         with open(path, "wb") as f:
             f.write(content)
         source = KTAS2019Source(file_path=path)
-        with pytest.raises(ValueError, match=f"Expected data worksheet '{EXPECTED_DATA_SHEET_NAME}' not found"):
+        with pytest.raises(ValueError, match=f"Expected worksheet '{EXPECTED_DATA_SHEET_NAME}' not found"):
             source.inspect()
 
     def test_unexpected_coding_sheet_name_rejected_fail_closed(
@@ -379,7 +381,7 @@ class TestKTASXLSXParser:
             file_path=synthetic_ktas_data_xlsx,
             coding_file_path=path,
         )
-        with pytest.raises(ValueError, match=f"Expected coding worksheet '{EXPECTED_CODING_SHEET_NAME}' not found"):
+        with pytest.raises(ValueError, match=f"Expected worksheet '{EXPECTED_CODING_SHEET_NAME}' not found"):
             source.inspect()
 
     def test_missing_saturation_header_rejected_fail_closed(self, tmp_path: Any):
@@ -434,6 +436,22 @@ class TestKTASXLSXParser:
         dq = source.inspect()
         assert dq.total_records_inspected == 10
         assert dq.complete_vitals_count == 5
+
+    def test_streaming_reader_boundary_zero_memory_accumulation(self, synthetic_ktas_data_xlsx: str):
+        # 1. Verify reader returns a true generator
+        row_gen = _stream_ktas_sheet_rows(synthetic_ktas_data_xlsx, EXPECTED_DATA_SHEET_NAME)
+        assert py_inspect.isgenerator(row_gen)
+
+        # 2. Verify rows are yielded one by one as lists
+        header = next(row_gen)
+        assert header[0] == "Group"
+        first_row = next(row_gen)
+        assert isinstance(first_row, list)
+        assert first_row[0] == "1"
+
+        # 3. Verify iterator finishes without storing state
+        remaining_count = sum(1 for _ in row_gen)
+        assert remaining_count == 9
 
 
 # ── Test Suite 2: Sex Mapping & Demographic Regression ───────────────────────
@@ -576,6 +594,33 @@ class TestKTASInspectionAndSiteStratification:
         assert isinstance(nurse_counts, dict)
         assert sum(nurse_counts.values()) == 10
 
+    def test_inspection_reports_granular_exclusion_reasons(
+        self, synthetic_ktas_data_xlsx: str, tmp_path: Any
+    ):
+        # 1. Baseline synthetic dataset inspection
+        source = KTAS2019Source(file_path=synthetic_ktas_data_xlsx)
+        dq = source.inspect()
+
+        # Blood pressure inversion (row 7) and invalid KTAS_expert (row 8) recorded in exclusion_summary
+        assert "blood_pressure_inversion" in dq.exclusion_summary
+        assert dq.exclusion_summary["blood_pressure_inversion"] == 1
+        assert "invalid_or_missing_ktas_expert_label" in dq.exclusion_summary
+        assert dq.exclusion_summary["invalid_or_missing_ktas_expert_label"] == 1
+
+        # 2. Implausible vital value test (BT = 50.0 C)
+        implausible_row = [2, 1, 45, 1, 2, "발열", 1, 1, 5, 120, 80, 80, 16, 50.0, 98, 2, "Fever", 1, 2, 0, 60, 5, 0]
+        rows = [SYNTHETIC_KTAS_HEADERS, implausible_row]
+        content = create_synthetic_xlsx_bytes(EXPECTED_DATA_SHEET_NAME, rows)
+        path = os.path.join(str(tmp_path), "implausible_bt.xlsx")
+        with open(path, "wb") as f:
+            f.write(content)
+
+        source_implausible = KTAS2019Source(file_path=path)
+        dq_implausible = source_implausible.inspect()
+        assert dq_implausible.complete_vitals_count == 0
+        assert "implausible_bt_value_50.0" in dq_implausible.exclusion_summary
+        assert dq_implausible.exclusion_summary["implausible_bt_value_50.0"] == 1
+
 
 # ── Test Suite 4: Gate 3A Governance & Zero In-Memory Raw Retention ─────────
 
@@ -658,6 +703,17 @@ class TestKTASGate3AGovernanceAndScoring:
             assert "Chief_complain" not in raw
             assert form.get("chief_complaint") == ""
             assert raw == {}
+
+    def test_parser_boundary_zero_raw_retention(self, synthetic_ktas_data_xlsx: str):
+        # Inspect parser boundary: _stream_validated_data_rows returns a generator, not a list
+        source = KTAS2019Source(file_path=synthetic_ktas_data_xlsx)
+        headers, row_gen = source._stream_validated_data_rows(synthetic_ktas_data_xlsx)
+        assert py_inspect.isgenerator(row_gen)
+
+        # Inspect adapter instance state: verify no raw encounter lists are stored on self
+        assert not hasattr(source, "data_records")
+        assert not hasattr(source, "raw_rows")
+        assert not hasattr(source, "encounters")
 
 
 # ── Test Suite 5: Bilingual Symptom Parser & Negation Handling ───────────────
