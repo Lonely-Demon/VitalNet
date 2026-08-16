@@ -646,13 +646,57 @@ class TestKTASGate3AGovernanceAndScoring:
         records, counters, manifest = source.load_for_evaluation()
 
         assert manifest.scoring_supported is True
+        assert counters.total_records == 10
+        assert counters.valid_records == 9
         assert len(records) == 9  # 1 excluded due to invalid KTAS_expert 9 (row 8)
+        assert counters.excluded_records == 2  # 1 invalid label + 1 BP inversion exclusion reason
         assert counters.reasons.get("invalid_or_missing_ktas_expert_label") == 1
         assert counters.reasons.get("blood_pressure_inversion") == 1
 
         # Check demographic mappings (Row 0 has Sex=1 -> female; Row 1 has Sex=2 -> male)
         assert records[0].form_data["patient_sex"] == "female"
         assert records[1].form_data["patient_sex"] == "male"
+
+    def test_cohort_flow_valid_records_accounting(
+        self, synthetic_ktas_data_xlsx: str, tmp_path: Any
+    ):
+        source = KTAS2019Source(
+            file_path=synthetic_ktas_data_xlsx,
+            gate_3a_scoring_authorized=True,
+        )
+        records, counters, manifest = source.load_for_evaluation()
+
+        # Total rows processed
+        assert counters.total_records == 10
+        # Valid accepted records exactly equals len(records)
+        assert counters.valid_records == 9
+        assert len(records) == 9
+        assert counters.excluded_records == 2  # 1 invalid label + 1 BP inversion exclusion reason
+
+        # Verify exclusion reason breakdown
+        assert counters.reasons.get("invalid_or_missing_ktas_expert_label") == 1
+        assert counters.reasons.get("blood_pressure_inversion") == 1
+
+        # Test with multiple invalid labels
+        row_invalid_1 = [2, 1, 45, 5, 1, 2, "흉통", 1, 1, 8, 120, 80, 85, 18, 36.5, 98, 2, "Angina", 2, 0, 0, 120, 5, 0]  # KTAS 0 (invalid)
+        row_invalid_2 = [2, 1, 45, 5, 1, 2, "흉통", 1, 1, 8, 120, 80, 85, 18, 36.5, 98, 2, "Angina", 2, None, 0, 120, 5, 0]  # KTAS None (invalid)
+        row_valid_1 = [2, 1, 45, 5, 1, 2, "흉통", 1, 1, 8, 120, 80, 85, 18, 36.5, 98, 2, "Angina", 2, 1, 0, 120, 5, 0]  # KTAS 1 (valid)
+
+        rows = [SYNTHETIC_KTAS_HEADERS, row_invalid_1, row_invalid_2, row_valid_1]
+        content = create_synthetic_xlsx_bytes(EXPECTED_DATA_SHEET_NAME, rows)
+        path = os.path.join(str(tmp_path), "cohort_flow_test.xlsx")
+        with open(path, "wb") as f:
+            f.write(content)
+
+        source_custom = KTAS2019Source(file_path=path, gate_3a_scoring_authorized=True)
+        records_custom, counters_custom, _ = source_custom.load_for_evaluation()
+
+        assert counters_custom.total_records == 3
+        assert counters_custom.valid_records == 1
+        assert len(records_custom) == 1
+        assert counters_custom.excluded_records == 2
+        assert counters_custom.valid_records == counters_custom.total_records - counters_custom.excluded_records
+        assert counters_custom.reasons.get("invalid_or_missing_ktas_expert_label") == 2
 
     def test_input_mode_isolation_and_partial_arm(
         self, synthetic_ktas_data_xlsx: str
