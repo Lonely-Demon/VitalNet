@@ -13,10 +13,11 @@
 > **Updated for the completed public-data evaluation cycle**: points to `tools/training/evaluate_on_real.py`
 > and `tools/training/evaluation_sources/`, governed by `docs/EVALUATION_DATA_BOUNDARY.md`.
 > Source cards for specific datasets are tracked under `docs/evaluation/`. The consolidated outcome is recorded in
-> `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`; the next phase is safety-remediation design, not another dataset hunt.
+> `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`; the safety-remediation design specification is established in
+> `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`.
 
-Companion to `docs/EVALUATION_DATA_BOUNDARY.md`, `docs/CLINICAL_RISK_MANAGEMENT.md`,
-`docs/VALIDATION_PROTOCOL.md`, and `backend/app/ml/MODEL_CARD.md`.
+Companion to `docs/EVALUATION_DATA_BOUNDARY.md`, `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`,
+`docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/VALIDATION_PROTOCOL.md`, and `backend/app/ml/MODEL_CARD.md`.
 
 ---
 
