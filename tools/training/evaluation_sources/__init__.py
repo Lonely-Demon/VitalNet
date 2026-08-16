@@ -50,6 +50,21 @@ from .mimic_symptom_parser import (
     compute_symptom_parser_coverage,
     parse_symptoms_from_complaint,
 )
+from .ktas_2019 import (
+    ARM_KTAS_PRIMARY,
+    ARM_KTAS_VITAL_ONLY,
+    EXACT_KTAS_REFUSAL_MESSAGE,
+    EXPECTED_DATA_HEADERS,
+    KTAS_PROHIBITED_FIELDS,
+    KTAS_V1,
+    KTAS2019Source,
+)
+from .ktas_symptom_parser import (
+    PARSER_VERSION as KTAS_PARSER_VERSION,
+    StreamingKTASSymptomCoverageAccumulator,
+    compute_ktas_symptom_parser_coverage,
+    parse_ktas_symptoms,
+)
 from .self_test_source import SyntheticSelfTestSource
 
 __all__ = [
@@ -84,6 +99,17 @@ __all__ = [
     "StreamingSymptomCoverageAccumulator",
     "parse_symptoms_from_complaint",
     "compute_symptom_parser_coverage",
+    "KTAS_PARSER_VERSION",
+    "StreamingKTASSymptomCoverageAccumulator",
+    "parse_ktas_symptoms",
+    "compute_ktas_symptom_parser_coverage",
+    "KTAS2019Source",
+    "KTAS_V1",
+    "ARM_KTAS_PRIMARY",
+    "ARM_KTAS_VITAL_ONLY",
+    "KTAS_PROHIBITED_FIELDS",
+    "EXPECTED_DATA_HEADERS",
+    "EXACT_KTAS_REFUSAL_MESSAGE",
     "SyntheticSelfTestSource",
     "get_evaluation_source",
 ]
@@ -103,6 +129,8 @@ def get_evaluation_source(
         return NHAMCS2022Source(file_path=file_path, **kwargs)
     elif normalized_id in ("mimic_iv_ed", "mimic_ed", "mimic", "mimic4_ed"):
         return MIMICIVEDSource(file_path=file_path, **kwargs)
+    elif normalized_id in ("ktas_2019", "ktas", "korean_ktas"):
+        return KTAS2019Source(file_path=file_path, **kwargs)
     elif normalized_id in ("generic_csv", "csv"):
         return GenericCSVSource(file_path=file_path, **kwargs)
     elif normalized_id in ("synthetic_self_test", "self_test", "synthetic"):
@@ -110,5 +138,5 @@ def get_evaluation_source(
     else:
         raise ValueError(
             f"Unknown evaluation source: '{source_id}'. "
-            f"Available sources: iran-ed, nhamcs-2022, mimic-iv-ed, generic-csv, self-test."
+            f"Available sources: iran-ed, nhamcs-2022, mimic-iv-ed, ktas-2019, generic-csv, self-test."
         )
