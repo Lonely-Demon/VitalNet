@@ -59,6 +59,7 @@ from evaluation_sources import (
     ExclusionCounters,
     GenericCSVSource,
     IranEDSource,
+    KTAS2019Source,
     NHAMCS2022Source,
     SourceManifest,
     SyntheticSelfTestSource,
@@ -414,6 +415,7 @@ def run_inspection(
     patients_file_path: Optional[str] = None,
     edstays_file_path: Optional[str] = None,
     medrecon_file_path: Optional[str] = None,
+    coding_file_path: Optional[str] = None,
     cohort_policy: str = "all_stays",
     json_out: Optional[str] = None,
     acuity_scale: str = "esi",
@@ -426,6 +428,7 @@ def run_inspection(
         patients_file_path=patients_file_path,
         edstays_file_path=edstays_file_path,
         medrecon_file_path=medrecon_file_path,
+        coding_file_path=coding_file_path,
         cohort_policy=cohort_policy,
         acuity_scale=acuity_scale,
         temp_fahrenheit=temp_fahrenheit,
@@ -436,6 +439,7 @@ def run_inspection(
         patients_file_path=patients_file_path,
         edstays_file_path=edstays_file_path,
         medrecon_file_path=medrecon_file_path,
+        coding_file_path=coding_file_path,
     )
     _print_inspection_report(data_quality)
 
@@ -834,8 +838,10 @@ def run_evaluation(
     patients_file_path: Optional[str] = None,
     edstays_file_path: Optional[str] = None,
     medrecon_file_path: Optional[str] = None,
+    coding_file_path: Optional[str] = None,
     cohort_policy: str = "all_stays",
     gate_m4_authorized: bool = False,
+    gate_3a_scoring_authorized: bool = False,
     input_mode: str = "mimic_triage_contract_v1",
     json_out: Optional[str] = None,
     acuity_scale: str = "esi",
@@ -849,8 +855,10 @@ def run_evaluation(
         patients_file_path=patients_file_path,
         edstays_file_path=edstays_file_path,
         medrecon_file_path=medrecon_file_path,
+        coding_file_path=coding_file_path,
         cohort_policy=cohort_policy,
         gate_m4_authorized=gate_m4_authorized,
+        gate_3a_scoring_authorized=gate_3a_scoring_authorized,
         input_mode=input_mode,
         acuity_scale=acuity_scale,
         temp_fahrenheit=temp_fahrenheit,
@@ -864,6 +872,8 @@ def run_evaluation(
             patients_file_path=patients_file_path,
             edstays_file_path=edstays_file_path,
             medrecon_file_path=medrecon_file_path,
+            coding_file_path=coding_file_path,
+            gate_3a_scoring_authorized=gate_3a_scoring_authorized,
         )
     except EvaluationRefusedError as exc:
         sys.stderr.write(f"{exc}\n")
@@ -953,27 +963,83 @@ def main():
     )
     ap.add_argument(
         "--inspect-source",
-        choices=["iran-ed", "nhamcs-2022", "mimic-iv-ed", "iran_ed", "nhamcs_2022", "mimic_iv_ed", "generic-csv", "self-test"],
-        help="Runs source inspection mode and outputs data quality metrics (e.g. iran-ed, nhamcs-2022, mimic-iv-ed).",
+        choices=[
+            "iran-ed",
+            "nhamcs-2022",
+            "mimic-iv-ed",
+            "ktas-2019",
+            "iran_ed",
+            "nhamcs_2022",
+            "mimic_iv_ed",
+            "ktas_2019",
+            "korean-ktas",
+            "korean_ktas",
+            "ktas",
+            "generic-csv",
+            "self-test",
+        ],
+        help="Runs source inspection mode and outputs data quality metrics (e.g. iran-ed, nhamcs-2022, mimic-iv-ed, ktas-2019).",
     )
     ap.add_argument(
         "--evaluate-source",
-        choices=["iran-ed", "nhamcs-2022", "mimic-iv-ed", "generic-csv", "self-test", "iran_ed", "nhamcs_2022", "mimic_iv_ed"],
+        choices=[
+            "iran-ed",
+            "nhamcs-2022",
+            "mimic-iv-ed",
+            "ktas-2019",
+            "generic-csv",
+            "self-test",
+            "iran_ed",
+            "nhamcs_2022",
+            "mimic_iv_ed",
+            "ktas_2019",
+            "korean-ktas",
+            "korean_ktas",
+            "ktas",
+        ],
         help="Selects dataset adapter for evaluation (canonical alias for --dataset).",
     )
     ap.add_argument(
         "--dataset",
-        choices=["iran-ed", "nhamcs-2022", "mimic-iv-ed", "generic-csv", "self-test", "iran_ed", "nhamcs_2022", "mimic_iv_ed"],
+        choices=[
+            "iran-ed",
+            "nhamcs-2022",
+            "mimic-iv-ed",
+            "ktas-2019",
+            "generic-csv",
+            "self-test",
+            "iran_ed",
+            "nhamcs_2022",
+            "mimic_iv_ed",
+            "ktas_2019",
+            "korean-ktas",
+            "korean_ktas",
+            "ktas",
+        ],
         help="Selects dataset adapter (alias for --evaluate-source).",
     )
     ap.add_argument(
         "--source",
-        choices=["iran-ed", "nhamcs-2022", "mimic-iv-ed", "generic-csv", "self-test", "iran_ed", "nhamcs_2022", "mimic_iv_ed"],
+        choices=[
+            "iran-ed",
+            "nhamcs-2022",
+            "mimic-iv-ed",
+            "ktas-2019",
+            "generic-csv",
+            "self-test",
+            "iran_ed",
+            "nhamcs_2022",
+            "mimic_iv_ed",
+            "ktas_2019",
+            "korean-ktas",
+            "korean_ktas",
+            "ktas",
+        ],
         help="Selects dataset adapter (alias for --evaluate-source).",
     )
     ap.add_argument(
         "--file",
-        help="Source data file path (CSV or fixed-width text).",
+        help="Source data file path (CSV, fixed-width text, or XLSX workbook).",
     )
     ap.add_argument(
         "--data-dir",
@@ -986,6 +1052,11 @@ def main():
     ap.add_argument(
         "--linkage-file",
         help="Optional linkage file path (e.g. ED_admission.csv for Iran ED).",
+    )
+    ap.add_argument(
+        "--coding-file",
+        dest="coding_file",
+        help="Path to coding sheet workbook (e.g. plos_ktas_s002.xlsx for KTAS 2019).",
     )
     ap.add_argument(
         "--patients-file",
@@ -1017,14 +1088,27 @@ def main():
         help="Explicit Gate M4 human authorization flag required to unlock frozen-model scoring on MIMIC-IV-ED.",
     )
     ap.add_argument(
+        "--gate-3a-scoring-authorized",
+        action="store_true",
+        help="Explicit Gate 3A human scoring authorization flag required to unlock frozen-model scoring on Korean KTAS 2019.",
+    )
+    ap.add_argument(
         "--partial-input",
         action="store_true",
         help="Explicitly flag evaluation as partial-input mode.",
     )
     ap.add_argument(
         "--input-mode",
-        choices=["full_input", "partial_input", "not_scored", "mimic_triage_contract_v1", "mimic_full_available_context_v1"],
-        help="Evaluation input mode (full_input, partial_input, not_scored, mimic_triage_contract_v1, or mimic_full_available_context_v1).",
+        choices=[
+            "full_input",
+            "partial_input",
+            "not_scored",
+            "mimic_triage_contract_v1",
+            "mimic_full_available_context_v1",
+            "ktas_triage_contract_v1",
+            "ktas_vital_only_partial_v1",
+        ],
+        help="Evaluation input mode (full_input, partial_input, not_scored, mimic_triage_contract_v1, mimic_full_available_context_v1, ktas_triage_contract_v1, or ktas_vital_only_partial_v1).",
     )
     ap.add_argument(
         "--json-out",
@@ -1084,6 +1168,18 @@ def main():
                     "temporal-eligibility review and separate authorization.\n"
                 )
                 sys.exit(1)
+        if "ktas" in normalized_source:
+            if args.input_mode is not None and args.input_mode not in (
+                "ktas_triage_contract_v1",
+                "ktas_vital_only_partial_v1",
+                "full_input",
+                "partial_input",
+                "not_scored",
+            ):
+                sys.stderr.write(
+                    f"Error: KTAS only supports --input-mode ktas_triage_contract_v1 or ktas_vital_only_partial_v1\n"
+                )
+                sys.exit(1)
 
     # Route execution mode
     json_output_path = args.json_out or args.report_json
@@ -1097,6 +1193,7 @@ def main():
             patients_file_path=args.patients_file,
             edstays_file_path=args.edstays_file,
             medrecon_file_path=args.medrecon_file,
+            coding_file_path=args.coding_file,
             cohort_policy=args.cohort_policy,
             json_out=json_output_path,
             acuity_scale=args.acuity_scale,
@@ -1112,15 +1209,22 @@ def main():
         )
     elif args.evaluate_source or args.dataset or args.source:
         source_id = args.evaluate_source or args.dataset or args.source
+        default_input_mode = (
+            "ktas_triage_contract_v1"
+            if "ktas" in source_id.lower()
+            else "mimic_triage_contract_v1"
+        )
         run_evaluation(
             source_id=source_id,
             file_path=input_file_path,
             patients_file_path=args.patients_file,
             edstays_file_path=args.edstays_file,
             medrecon_file_path=args.medrecon_file,
+            coding_file_path=args.coding_file,
             cohort_policy=args.cohort_policy,
             gate_m4_authorized=args.gate_m4_authorized,
-            input_mode=args.input_mode or "mimic_triage_contract_v1",
+            gate_3a_scoring_authorized=args.gate_3a_scoring_authorized,
+            input_mode=args.input_mode or default_input_mode,
             json_out=json_output_path,
             acuity_scale=args.acuity_scale,
             temp_fahrenheit=args.temp_fahrenheit,
