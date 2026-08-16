@@ -945,6 +945,7 @@ class KTAS2019Source(BaseEvaluationSource):
                 raw_fields={},  # Strict zero-leakage: raw fields dictionary left empty
             )
 
+            counters.record_valid()
             records.append(rec)
 
         return records, counters, manifest
