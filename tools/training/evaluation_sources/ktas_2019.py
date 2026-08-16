@@ -15,20 +15,26 @@ Enforces:
 - Deterministic, fail-closed standard-library XLSX parsing (zipfile + xml.etree.ElementTree).
 - Strict separation of data workbook ("N=1267 data") and coding workbook ("coding sheet").
   Coding rows are never treated as patient encounters.
+- Exact sheet and schema requirements: exact data sheet name ("N=1267 data"), exact coding sheet name
+  ("coding sheet"), all 23 expected headers present, zero unexpected headers, zero duplicate headers.
 - Conservative nonnumeric token handling: "#NULL!" and "측불" (observed Korean nonnumeric
   measurement-unavailable token) are treated as missing (None), never coerced to zero.
 - Canonical five-vital completeness definition requiring BT, HR, SBP, DBP, and Saturation.
   RR is tracked in inspection metadata only.
+- Unified physiological plausibility bounds and rules applied identically to inspection and scoring.
+- Correct official KTAS sex mapping: 1 = Female, 2 = Male.
 - Empirical site-stratified completeness analysis (Local ED vs Regional ED) documenting that
   complete-five-vital records are confined to Regional ED (0 in Local ED due to missing saturation).
-- Candidate reference label: KTAS_expert exclusively. KTAS_RN is retained only for audit
-  comparison metadata and is never used as ground truth or model input.
+- Candidate reference label: KTAS_expert exclusively. KTAS_RN is retained only for aggregate audit
+  comparison metadata and is never stored in patient encounter records.
 - Pre-registered named mapping ktas_v1: 1-2 -> EMERGENCY, 3 -> URGENT, 4-5 -> ROUTINE.
 - Primary input contract ktas_triage_contract_v1 (age, sex, five vitals, allow-listed symptoms,
   empty complaint string); distinct sensitivity arm ktas_vital_only_partial_v1 (empty complaint,
   empty symptoms). Raw complaint text is never retained.
 - Hard pre-canonicalization stripping of prohibited fields: "Diagnosis in ED", "Disposition",
   "Error_group", "Length of stay_min", "KTAS duration_min", "mistriage", "KTAS_RN".
+- Strict zero in-memory materialization of raw rows or prohibited fields. Streaming row processor
+  immediately extracts only aggregate counts or sanitized canonical fields.
 - Gate 3A staged scoring refusal by default: load_for_evaluation() raises EvaluationRefusedError
   unless explicitly authorized via task conversation and --gate-3a-scoring-authorized.
 - Strict zero patient-level data leakage guaranteed in all reports and metadata containers.
@@ -36,7 +42,7 @@ Enforces:
 
 import os
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Union
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -81,7 +87,11 @@ KTAS_PROHIBITED_FIELDS: Tuple[str, ...] = (
     "KTAS_RN",
 )
 
-# Canonical 24 column headers expected in the Moon et al. data workbook
+# Expected sheet names (fail closed on any deviation)
+EXPECTED_DATA_SHEET_NAME: str = "N=1267 data"
+EXPECTED_CODING_SHEET_NAME: str = "coding sheet"
+
+# Canonical 23 column headers expected in the Moon et al. data workbook
 EXPECTED_DATA_HEADERS: Tuple[str, ...] = (
     "Group",
     "Sex",
@@ -113,6 +123,69 @@ EXACT_KTAS_REFUSAL_MESSAGE: str = (
     "Scoring requires separate human authorization and --gate-3a-scoring-authorized."
 )
 
+# ── Unified Physiological Plausibility Policy ────────────────────────────────
+# Physiologically plausible vital bounds applied identically to inspection and scoring.
+# Allows severe hypoxia (SpO2 down to 0-20% observed in arrest/severe respiratory failure).
+VITAL_PLAUSIBILITY_BOUNDS: Dict[str, Tuple[float, float]] = {
+    "BT": (20.0, 46.0),         # Body temperature in Celsius (hypothermia to hyperpyrexia)
+    "HR": (10.0, 350.0),        # Heart rate in bpm (severe bradycardia to extreme SVT/VT)
+    "SBP": (20.0, 350.0),       # Systolic BP in mmHg (severe shock to extreme hypertension)
+    "DBP": (10.0, 250.0),       # Diastolic BP in mmHg
+    "Saturation": (0.0, 100.0),  # SpO2 percentage (0% to 100%, severe hypoxia observed down to 20%)
+    "RR": (0.0, 120.0),         # Respiratory rate in breaths/min
+    "Age": (0.0, 130.0),        # Age in years
+}
+
+
+def check_vital_plausibility(
+    bt: Optional[float],
+    hr: Optional[float],
+    sbp: Optional[float],
+    dbp: Optional[float],
+    sat: Optional[float],
+) -> Tuple[Dict[str, Optional[float]], bool, Optional[str]]:
+    """
+    Unified plausibility validation applied identically in inspection and evaluation.
+
+    Returns:
+        sanitized_vitals: dict mapping vital name to valid float or None.
+        is_5_vital_complete: True if all 5 vitals are present, within physiological bounds, and SBP > DBP.
+        exclusion_reason: string reason if any vital was present but implausible / inverted.
+    """
+    vitals = {"BT": bt, "HR": hr, "SBP": sbp, "DBP": dbp, "Saturation": sat}
+    sanitized: Dict[str, Optional[float]] = {}
+    exclusion_reason: Optional[str] = None
+
+    for k, v in vitals.items():
+        if v is None:
+            sanitized[k] = None
+            continue
+        min_v, max_v = VITAL_PLAUSIBILITY_BOUNDS[k]
+        if min_v <= v <= max_v:
+            sanitized[k] = v
+        else:
+            sanitized[k] = None
+            if not exclusion_reason:
+                exclusion_reason = f"implausible_{k.lower()}_value_{v}"
+
+    # Check BP inversion if both SBP and DBP are present
+    if sanitized["SBP"] is not None and sanitized["DBP"] is not None:
+        if sanitized["SBP"] <= sanitized["DBP"]:
+            sanitized["SBP"] = None
+            sanitized["DBP"] = None
+            if not exclusion_reason:
+                exclusion_reason = "blood_pressure_inversion"
+
+    is_complete = (
+        sanitized["BT"] is not None
+        and sanitized["HR"] is not None
+        and sanitized["SBP"] is not None
+        and sanitized["DBP"] is not None
+        and sanitized["Saturation"] is not None
+    )
+
+    return sanitized, is_complete, exclusion_reason
+
 
 # ── Fail-Closed Deterministic XLSX Parser (Standard Library) ─────────────────
 
@@ -130,6 +203,7 @@ def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]
     """
     Deterministically parses an OpenXML (.xlsx) workbook using Python's standard library.
     Fail-closed on corrupt archives, missing required parts, unexpected formulas, or duplicate headers.
+    Supports inline strings even when xl/sharedStrings.xml is absent.
     """
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"XLSX file not found: {file_path}")
@@ -144,7 +218,7 @@ def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]
         if "xl/workbook.xml" not in namelist:
             raise ValueError("Invalid XLSX structure: missing xl/workbook.xml")
 
-        # 1. Read shared strings table if present
+        # 1. Read shared strings table if present (optional in OpenXML standard)
         shared_strings: List[str] = []
         if "xl/sharedStrings.xml" in namelist:
             try:
@@ -247,7 +321,7 @@ def _read_ktas_xlsx_sheets(file_path: str) -> Dict[str, List[List[Optional[str]]
                                 else:
                                     val = raw_v
                                 break
-                            elif tag_name == "is":
+                            elif tag_name == "is" or t == "inlineStr":
                                 val = "".join(
                                     el.text or ""
                                     for el in child.iter()
@@ -284,7 +358,6 @@ def _safe_float(val: Any) -> Optional[float]:
     if not s:
         return None
     s_lower = s.lower()
-    # Explicitly check for sentinel missing tokens and measurement-unavailable tokens
     if (
         s_lower in ("null", "none", "nan", "n/a", "-9", "-8", "?", "#null!", "#n/a", "#value!")
         or s in ("측불", "#NULL!")
@@ -313,13 +386,17 @@ def _safe_int(val: Any) -> Optional[int]:
 def _map_sex(val: Any) -> str:
     """
     Maps Sex coding to VitalNet canonical sex string ('male', 'female', 'other').
-    Standard KTAS coding: 1 = Male, 2 = Female.
+    Official KTAS coding sheet definition:
+      1 = Female
+      2 = Male
     """
-    s = str(val).strip().lower() if val is not None else ""
-    if s in ("1", "1.0", "m", "male", "남", "남자"):
-        return "male"
-    elif s in ("2", "2.0", "f", "female", "여", "여자"):
+    if val is None:
+        return "other"
+    s = str(val).strip().lower()
+    if s in ("1", "1.0", "f", "female", "여", "여자", "여성"):
         return "female"
+    elif s in ("2", "2.0", "m", "male", "남", "남자", "남성"):
+        return "male"
     return "other"
 
 
@@ -371,36 +448,29 @@ class KTAS2019Source(BaseEvaluationSource):
             file_size_bytes=size_bytes,
         )
 
-    def _extract_data_rows(self, file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
+    def _stream_validated_data_rows(
+        self, file_path: str
+    ) -> Tuple[List[str], Iterator[Dict[str, Any]]]:
         """
-        Extracts and validates patient rows from the data workbook sheet ('N=1267 data').
-        Fails closed on missing or duplicate headers.
+        Validates the exact expected data sheet name and schema headers fail-closed,
+        and yields sanitized/extracted row dictionaries one at a time via a streaming iterator.
+        Zero in-memory raw row list materialization.
         """
         sheets = _read_ktas_xlsx_sheets(file_path)
 
-        # Locate target data sheet: either 'N=1267 data' or the single sheet present
-        target_sheet_name: Optional[str] = None
-        for sname in sheets.keys():
-            if "1267" in sname or "data" in sname.lower():
-                target_sheet_name = sname
-                break
+        if EXPECTED_DATA_SHEET_NAME not in sheets:
+            raise ValueError(
+                f"Expected data worksheet '{EXPECTED_DATA_SHEET_NAME}' not found in workbook sheets: {list(sheets.keys())}"
+            )
 
-        if not target_sheet_name:
-            if len(sheets) == 1:
-                target_sheet_name = list(sheets.keys())[0]
-            else:
-                raise ValueError(
-                    f"Could not find expected data sheet ('N=1267 data') in workbook: {list(sheets.keys())}"
-                )
-
-        raw_rows = sheets[target_sheet_name]
+        raw_rows = sheets[EXPECTED_DATA_SHEET_NAME]
         if not raw_rows or len(raw_rows) < 2:
-            raise ValueError(f"Data worksheet '{target_sheet_name}' contains insufficient rows.")
+            raise ValueError(f"Data worksheet '{EXPECTED_DATA_SHEET_NAME}' contains insufficient rows.")
 
         # Header validation
         header_row = [str(cell).strip() if cell is not None else "" for cell in raw_rows[0]]
         if not any(header_row):
-            raise ValueError(f"Empty header row in sheet '{target_sheet_name}'")
+            raise ValueError(f"Empty header row in sheet '{EXPECTED_DATA_SHEET_NAME}'")
 
         # Check for duplicate headers
         seen_headers: Set[str] = set()
@@ -409,27 +479,39 @@ class KTAS2019Source(BaseEvaluationSource):
             if not h:
                 continue
             if h in seen_headers:
-                raise ValueError(f"Duplicate header '{h}' detected in data sheet '{target_sheet_name}'")
+                raise ValueError(f"Duplicate header '{h}' detected in data sheet '{EXPECTED_DATA_SHEET_NAME}'")
             seen_headers.add(h)
             clean_headers.append(h)
 
-        # Build dict rows
-        data_records: List[Dict[str, Any]] = []
-        for row in raw_rows[1:]:
-            # Skip completely empty trailing rows
-            if not any(c is not None and str(c).strip() != "" for c in row):
-                continue
-            row_dict: Dict[str, Any] = {}
-            for col_idx, h in enumerate(clean_headers):
-                val = row[col_idx] if col_idx < len(row) else None
-                row_dict[h] = val
-            data_records.append(row_dict)
+        # Exact schema validation: all expected headers present, no unexpected headers
+        missing_headers = [h for h in EXPECTED_DATA_HEADERS if h not in clean_headers]
+        if missing_headers:
+            raise ValueError(
+                f"Missing required headers in data sheet '{EXPECTED_DATA_SHEET_NAME}': {missing_headers}"
+            )
 
-        return clean_headers, data_records
+        unexpected_headers = [h for h in clean_headers if h not in EXPECTED_DATA_HEADERS]
+        if unexpected_headers:
+            raise ValueError(
+                f"Unexpected extra headers in data sheet '{EXPECTED_DATA_SHEET_NAME}': {unexpected_headers}"
+            )
+
+        def row_generator() -> Iterator[Dict[str, Any]]:
+            for row in raw_rows[1:]:
+                # Skip empty trailing rows
+                if not any(c is not None and str(c).strip() != "" for c in row):
+                    continue
+                row_dict: Dict[str, Any] = {}
+                for col_idx, h in enumerate(clean_headers):
+                    val = row[col_idx] if col_idx < len(row) else None
+                    row_dict[h] = val
+                yield row_dict
+
+        return clean_headers, row_generator()
 
     def _extract_coding_definitions(self, coding_path: Optional[str]) -> Dict[str, Any]:
         """
-        Parses variable definitions from the coding workbook sheet ('coding sheet').
+        Parses variable definitions from the exact coding sheet ('coding sheet').
         Guarantees that coding definitions are retained in metadata and never parsed as patient encounters.
         """
         if not coding_path or not os.path.isfile(coding_path):
@@ -439,25 +521,16 @@ class KTAS2019Source(BaseEvaluationSource):
             }
 
         sheets = _read_ktas_xlsx_sheets(coding_path)
-        coding_sheet_name: Optional[str] = None
-        for sname in sheets.keys():
-            if "coding" in sname.lower() or "sheet" in sname.lower():
-                coding_sheet_name = sname
-                break
+        if EXPECTED_CODING_SHEET_NAME not in sheets:
+            raise ValueError(
+                f"Expected coding worksheet '{EXPECTED_CODING_SHEET_NAME}' not found in workbook sheets: {list(sheets.keys())}"
+            )
 
-        if not coding_sheet_name:
-            if len(sheets) == 1:
-                coding_sheet_name = list(sheets.keys())[0]
-            else:
-                raise ValueError(
-                    f"Could not find coding sheet in workbook: {list(sheets.keys())}"
-                )
-
-        raw_rows = sheets[coding_sheet_name]
+        raw_rows = sheets[EXPECTED_CODING_SHEET_NAME]
         if not raw_rows or len(raw_rows) < 2:
             return {
                 "status": "empty_coding_sheet",
-                "sheet_name": coding_sheet_name,
+                "sheet_name": EXPECTED_CODING_SHEET_NAME,
             }
 
         coding_headers = [str(c).strip() if c is not None else "" for c in raw_rows[0]]
@@ -477,7 +550,7 @@ class KTAS2019Source(BaseEvaluationSource):
             "status": "loaded",
             "coding_file": os.path.basename(coding_path),
             "coding_file_sha256": compute_file_sha256(coding_path),
-            "sheet_name": coding_sheet_name,
+            "sheet_name": EXPECTED_CODING_SHEET_NAME,
             "total_definitions_documented": len(definitions),
             "definitions": definitions,
         }
@@ -489,8 +562,8 @@ class KTAS2019Source(BaseEvaluationSource):
         **kwargs,
     ) -> AggregateDataQuality:
         """
-        Performs aggregate-only data quality inspection of the Korean KTAS 2019 dataset.
-        Zero patient-level records, individual predictions, or free-text complaints are exposed.
+        Performs static inspection and generates aggregate quality metrics.
+        Guarantees ZERO raw patient encounter records or free-text complaint strings are retained.
         """
         resolved_data_path = self._resolve_file_path(file_path)
         if not resolved_data_path or not os.path.isfile(resolved_data_path):
@@ -499,10 +572,10 @@ class KTAS2019Source(BaseEvaluationSource):
         resolved_coding_path = coding_file_path or self.coding_file_path or kwargs.get("coding_file_path")
 
         manifest = self._build_manifest(resolved_data_path, resolved_coding_path)
-        headers, data_records = self._extract_data_rows(resolved_data_path)
+        headers, data_row_iterator = self._stream_validated_data_rows(resolved_data_path)
         coding_info = self._extract_coding_definitions(resolved_coding_path)
 
-        total_rows = len(data_records)
+        total_rows = 0
         missing_counts: Dict[str, int] = {h: 0 for h in headers}
         valid_counts: Dict[str, int] = {h: 0 for h in headers}
 
@@ -526,7 +599,10 @@ class KTAS2019Source(BaseEvaluationSource):
         overall_complete_5_vitals = 0
         symptom_accumulator = StreamingKTASSymptomCoverageAccumulator()
 
-        for row in data_records:
+        # Stream row by row — never materializing an in-memory patient row list
+        for row in data_row_iterator:
+            total_rows += 1
+
             # Field missingness
             for col in headers:
                 raw_val = row.get(col)
@@ -535,7 +611,7 @@ class KTAS2019Source(BaseEvaluationSource):
                 else:
                     valid_counts[col] += 1
 
-            # Update symptom coverage (never stores raw string)
+            # Update symptom coverage in streaming fashion (raw string immediately discarded)
             symptom_accumulator.update(row.get("Chief_complain"))
 
             # Site identification
@@ -557,14 +633,17 @@ class KTAS2019Source(BaseEvaluationSource):
             sat = _safe_float(row.get("Saturation"))
             age = _safe_float(row.get("Age"))
 
+            # Unified plausibility check
+            sanitized_vitals, has_5_vitals, _ = check_vital_plausibility(bt, hr, sbp, dbp, sat)
+
             numeric_map = {
-                "BT": bt,
-                "HR": hr,
-                "SBP": sbp,
-                "DBP": dbp,
-                "RR": rr,
-                "Saturation": sat,
-                "Age": age,
+                "BT": sanitized_vitals["BT"],
+                "HR": sanitized_vitals["HR"],
+                "SBP": sanitized_vitals["SBP"],
+                "DBP": sanitized_vitals["DBP"],
+                "RR": rr if (rr is not None and VITAL_PLAUSIBILITY_BOUNDS["RR"][0] <= rr <= VITAL_PLAUSIBILITY_BOUNDS["RR"][1]) else None,
+                "Saturation": sanitized_vitals["Saturation"],
+                "Age": age if (age is not None and VITAL_PLAUSIBILITY_BOUNDS["Age"][0] <= age <= VITAL_PLAUSIBILITY_BOUNDS["Age"][1]) else None,
             }
 
             for vf, vval in numeric_map.items():
@@ -578,16 +657,6 @@ class KTAS2019Source(BaseEvaluationSource):
 
             if sat is None:
                 site_saturation_missing[site_key] += 1
-
-            # 5-vital completeness: BT, HR, SBP, DBP, Saturation all present and non-inverted
-            has_5_vitals = (
-                bt is not None
-                and hr is not None
-                and sbp is not None
-                and dbp is not None
-                and sat is not None
-                and (sbp > dbp)
-            )
 
             if has_5_vitals:
                 overall_complete_5_vitals += 1
@@ -749,12 +818,12 @@ class KTAS2019Source(BaseEvaluationSource):
         manifest.input_mode = active_input_mode
         manifest.scoring_supported = True
 
-        headers, data_records = self._extract_data_rows(resolved_data_path)
+        headers, data_row_iterator = self._stream_validated_data_rows(resolved_data_path)
         counters = ExclusionCounters()
 
         records: List[CanonicalPatientRecord] = []
 
-        for row_idx, row in enumerate(data_records):
+        for row_idx, row in enumerate(data_row_iterator):
             counters.record_total()
 
             # 1. Reference Label Validation (KTAS_expert)
@@ -765,31 +834,26 @@ class KTAS2019Source(BaseEvaluationSource):
 
             ref_tier = KTAS_V1[raw_expert]
 
-            # 2. Demographics
+            # 2. Demographics (Official KTAS coding: 1 = Female, 2 = Male)
             raw_age = _safe_int(row.get("Age"))
-            age = raw_age if raw_age is not None and 0 <= raw_age <= 125 else 0
+            age = raw_age if (raw_age is not None and VITAL_PLAUSIBILITY_BOUNDS["Age"][0] <= raw_age <= VITAL_PLAUSIBILITY_BOUNDS["Age"][1]) else 0
 
             raw_sex = row.get("Sex")
             sex = _map_sex(raw_sex)
 
-            # 3. Canonical Five Vitals (Celsius BT, HR, SBP, DBP, Saturation)
+            # 3. Canonical Five Vitals with Unified Plausibility Validation
             bt = _safe_float(row.get("BT"))
             hr = _safe_float(row.get("HR"))
             sbp = _safe_float(row.get("SBP"))
             dbp = _safe_float(row.get("DBP"))
             sat = _safe_float(row.get("Saturation"))
 
-            # Vital sign plausibility filtering
-            valid_bt = bt if bt is not None and 25.0 <= bt <= 45.0 else None
-            valid_hr = hr if hr is not None and 20.0 <= hr <= 300.0 else None
-            valid_sbp = sbp if sbp is not None and 40.0 <= sbp <= 300.0 else None
-            valid_dbp = dbp if dbp is not None and 20.0 <= dbp <= 200.0 else None
-            valid_sat = sat if sat is not None and 50.0 <= sat <= 100.0 else None
+            sanitized_vitals, is_complete_5, exclusion_reason = check_vital_plausibility(
+                bt, hr, sbp, dbp, sat
+            )
 
-            # Blood pressure inversion check
-            if valid_sbp is not None and valid_dbp is not None and valid_sbp <= valid_dbp:
-                valid_sbp = None
-                valid_dbp = None
+            if exclusion_reason:
+                counters.increment(exclusion_reason)
 
             # 4. Input Arm Construction
             # Raw free-text Chief_complain is NEVER retained or exposed.
@@ -799,11 +863,11 @@ class KTAS2019Source(BaseEvaluationSource):
                 form_data = {
                     "patient_age": age,
                     "patient_sex": sex,
-                    "temperature": valid_bt,
-                    "heart_rate": valid_hr,
-                    "bp_systolic": valid_sbp,
-                    "bp_diastolic": valid_dbp,
-                    "spo2": valid_sat,
+                    "temperature": sanitized_vitals["BT"],
+                    "heart_rate": sanitized_vitals["HR"],
+                    "bp_systolic": sanitized_vitals["SBP"],
+                    "bp_diastolic": sanitized_vitals["DBP"],
+                    "spo2": sanitized_vitals["Saturation"],
                     "chief_complaint": "",
                     "symptoms": symptoms,
                 }
@@ -812,11 +876,11 @@ class KTAS2019Source(BaseEvaluationSource):
                 form_data = {
                     "patient_age": age,
                     "patient_sex": sex,
-                    "temperature": valid_bt,
-                    "heart_rate": valid_hr,
-                    "bp_systolic": valid_sbp,
-                    "bp_diastolic": valid_dbp,
-                    "spo2": valid_sat,
+                    "temperature": sanitized_vitals["BT"],
+                    "heart_rate": sanitized_vitals["HR"],
+                    "bp_systolic": sanitized_vitals["SBP"],
+                    "bp_diastolic": sanitized_vitals["DBP"],
+                    "spo2": sanitized_vitals["Saturation"],
                     "chief_complaint": "",
                     "symptoms": [],
                 }
@@ -833,6 +897,5 @@ class KTAS2019Source(BaseEvaluationSource):
             )
 
             records.append(rec)
-            counters.record_valid()
 
         return records, counters, manifest
