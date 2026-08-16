@@ -10,12 +10,17 @@
 > formalizes VitalNet's multi-gate external validation framework, data boundary
 > rules, and evaluation roadmap.
 >
-> **Updated for the Evaluation Foundation**: points to `tools/training/evaluate_on_real.py`
-> and `tools/training/evaluation_sources/`, governed by `docs/EVALUATION_DATA_BOUNDARY.md`.
+> **Cycle Closure Status**: The public-data external evaluation cycle is officially
+> **closed**. Evaluated on Gate 1A (Iran ED inspection), Gate 1B (CDC NHAMCS 2022 proxy),
+> Gate 2 (MIMIC-IV-ED deferred pending credentialing), and Gate 3A (Korean KTAS 2019 benchmark).
+> Empirical findings across NHAMCS (14.4% emergency sensitivity) and KTAS (25.2% primary / 17.9% vital-only)
+> demonstrated severe under-triage when symptoms/complaints are missing.
+> The active focus is now **Safety Remediation Design** (`docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`).
+>
 > Source cards for specific datasets are tracked under `docs/evaluation/`.
 
-Companion to `docs/EVALUATION_DATA_BOUNDARY.md`, `docs/CLINICAL_RISK_MANAGEMENT.md`,
-`docs/VALIDATION_PROTOCOL.md`, and `backend/app/ml/MODEL_CARD.md`.
+Companion to `docs/EVALUATION_DATA_BOUNDARY.md`, `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`,
+`docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/VALIDATION_PROTOCOL.md`, and `backend/app/ml/MODEL_CARD.md`.
 
 ---
 
@@ -34,7 +39,7 @@ Ranked hierarchy of public data utility for clinical safety:
 
 ## 2. Multi-Gate Validation Architecture
 
-VitalNet structures external validation into a sequential, multi-gate hierarchy spanning public uncredentialed inspection, public proxy evaluation, credentialed full-input validation, and prospective clinical trials:
+VitalNet structured external validation into a sequential, multi-gate hierarchy. With the public-data cycle now closed, empirical performance and status across all gates are recorded below:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -42,25 +47,34 @@ VitalNet structures external validation into a sequential, multi-gate hierarchy 
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ GATE 1A: Iran ED Dataset (BaniHassan et al. 2024, CC BY 4.0 Open Access)              │
 │  - Role: Inspection-only & sparse-input data quality audit                             │
-│  - Status: Implemented in adapter; model scoring strictly refused                      │
-│  - Focus: Auditing severe clinical missingness (91 complete rows / 143k total)         │
+│  - Status: COMPLETED (Inspection-only; model scoring strictly refused)                 │
+│  - Findings: Extreme sparsity (<0.07% complete vitals / 91 complete of 143,582 rows);   │
+│    binary published urgency unsuited for 3-tier scoring.                               │
 │  - Documentation: docs/evaluation/IRAN_ED_SOURCE_CARD.md                              │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ GATE 1B: CDC NHAMCS 2022 ED Component (CDC Public Use Data)                           │
 │  - Role: Fixed-width partial-input proxy evaluation                                    │
-│  - Status: Implemented (unweighted vital-only proxy triage via nhamcs_immediacy_v1)    │
-│  - Focus: Vital-only triage resilience, unweighted under-triage, guardrail lift        │
+│  - Status: COMPLETED (Unweighted vital-only proxy triage via nhamcs_immediacy_v1)      │
+│  - Findings: Critical safety signal: 14.4% emergency sensitivity, 85.6% miss rate      │
+│    (1,848 / 2,159 emergencies missed); vital signs alone fail to drive emergency recall│
 │  - Documentation: docs/evaluation/NHAMCS_2022_SOURCE_CARD.md                           │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ GATE 2: MIMIC-IV-ED v2.2 (PhysioNet Credentialed DUA + CITI Certification)             │
 │  - Role: Credentialed triage-time external benchmark (vitals + deterministic NLP)      │
-│  - Status: Gate M1 adapter & synthetic fixture ready; scoring staged on Gate M4        │
-│  - Focus: Available triage context, allow-list symptom extraction, ESI 1-5 proxy       │
+│  - Status: DEFERRED (Credentialing not completed; adapter & synthetic tests staged)    │
 │  - Documentation: docs/evaluation/MIMIC_IV_ED_SOURCE_CARD.md                           │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
-│ GATE 3: Prospective Rural Indian PHC Cohort (Silent / Shadow Deployment)               │
+│ GATE 3A: Korean KTAS 2019 Dataset (Moon et al. 2019, PLOS ONE, CC BY 4.0)             │
+│  - Role: Multi-center external triage benchmark (bilingual NLP + vitals vs. vital-only)│
+│  - Status: COMPLETED (Evaluated under explicit authorization)                          │
+│  - Findings: Primary contract (ktas_triage_contract_v1) achieved 25.2% emergency sens.;│
+│    vital-only arm (ktas_vital_only_partial_v1) achieved 17.9% emergency sensitivity.   │
+│    Complete 5-vital cohort confined to Regional ED (563 records; 0 in Local ED).       │
+│  - Documentation: docs/evaluation/KTAS_2019_SOURCE_CARD.md                            │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ GATE 3B / 4: Prospective Rural Indian PHC Cohort (Silent / Shadow Deployment)          │
 │  - Role: Authoritative clinical safety & regulatory validation (CDSCO SaMD)            │
-│  - Status: Blocked on institutional ethics approval & clinical partner onboarding      │
+│  - Status: Future phase; blocked on ethics approval, clinical onboarding & remediation │
 │  - Focus: ASHA frontline workflow, local epidemiological conditions, true clinical POC │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -69,12 +83,13 @@ VitalNet structures external validation into a sequential, multi-gate hierarchy 
 
 ## 3. Dataset Portfolio & Gate Characterization
 
-| Dataset & Gate | Scope & Setting | Volume | License / Access | Inputs Available | Target Role in VitalNet |
+| Dataset & Gate | Scope & Setting | Volume | License / Access | Inputs Available | Status & Empirical Role in VitalNet |
 |---|---|---|---|---|---|
-| **Gate 1A: Iran ED** | Single-center tertiary hospital ED, Iran | 143,582 triage rows | CC BY 4.0 Open Access | Official ED_triage.csv has 28 columns; VitalNet consumes 10 key fields for inspection; extreme sparsity (<0.07% complete vitals) | **Inspection-only audit**. Scoring strictly refused due to binary ground truth and severe missingness. |
-| **Gate 1B: CDC NHAMCS 2022** | Nationally representative sample of US hospital EDs | ~25,000 encounters / year | CDC Public Use Data | Fixed-width vitals, age, sex, arrival immediacy (1–5 scale) | **Partial-input proxy evaluation**. Unweighted discrimination on vital-only presentations. |
-| **Gate 2: MIMIC-IV-ED** (PhysioNet v2.2) | Urban academic medical center ED (Beth Israel Deaconess, Boston) | ~425,000 ED stays | Credentialed DUA (PhysioNet + CITI training required) | Complete vitals, anchor age, sex, chief complaint, ESI 1–5 | **Triage-time external benchmark**. Available triage context via `mimic_triage_contract_v1` and `mimic_esi_v1`. |
-| **Gate 3: Prospective Indian PHC** | Frontline Primary Health Centres & Sub-Centres, rural India | Prospective cohort | Institutional Ethics Committee (IEC) approved | Complete ASHA intake: vitals, localized symptoms, Hindi/Tamil notes, clinical outcomes | **True clinical validation**. Necessary prerequisite for regulatory clearance (CDSCO). |
+| **Gate 1A: Iran ED** | Single-center tertiary hospital ED, Iran | 143,582 triage rows | CC BY 4.0 Open Access | Official ED_triage.csv has 28 columns; VitalNet consumes 10 key fields for inspection; extreme sparsity (<0.07% complete vitals) | **Completed inspection-only audit**. Model scoring strictly refused due to binary ground truth and severe missingness. |
+| **Gate 1B: CDC NHAMCS 2022** | Nationally representative sample of US hospital EDs | 12,347 evaluated encounters | CDC Public Use Data | Fixed-width vitals, age, sex, arrival immediacy (1–5 scale) | **Completed partial-input proxy evaluation**. Demonstrated severe safety signal (14.4% emergency sensitivity; 85.6% miss rate). |
+| **Gate 2: MIMIC-IV-ED** (PhysioNet v2.2) | Urban academic medical center ED (Beth Israel Deaconess, Boston) | ~425,000 ED stays | Credentialed DUA (PhysioNet + CITI training required) | Complete vitals, anchor age, sex, chief complaint, ESI 1–5 | **Deferred**. PhysioNet credentialing was not completed. Staged code-only adapter & synthetic fixtures (Gate M1). |
+| **Gate 3A: Korean KTAS 2019** | Multi-center EDs (Local vs Regional), South Korea | 1,267 encounters (563 complete 5-vital rows) | CC BY 4.0 Open Access / PLOS ONE | Five vitals, age, sex, bilingual complaints, expert KTAS 1–5 | **Completed external benchmark**. 25.2% emergency sensitivity on primary contract; 17.9% on vital-only sensitivity arm. |
+| **Gate 3B / 4: Prospective Indian PHC** | Frontline Primary Health Centres & Sub-Centres, rural India | Prospective cohort | Institutional Ethics Committee (IEC) approved | Complete ASHA intake: vitals, localized symptoms, Hindi/Tamil notes, clinical outcomes | **Future clinical validation**. Necessary prerequisite for regulatory clearance (CDSCO). Requires shadow-deployment first. |
 
 ---
 
@@ -132,24 +147,25 @@ All external validation activities are governed by `docs/EVALUATION_DATA_BOUNDAR
 
 ## 6. Schema Mapping & Feature Alignment Reference
 
-| VitalNet Intake Field | Gate 1A: Iran ED | Gate 1B: CDC NHAMCS 2022 | Gate 2: MIMIC-IV-ED | Target Handling & Conversions |
-|---|---|---|---|---|
-| `patient_age` | Not published in primary triage | `AGE` (cols 16–18, slice `[15:18]`) | `patients.anchor_age` | Direct integer (0–94; 94 represents 94+ top-coding) |
-| `patient_sex` | Not published in primary triage | `SEX` (col 25, slice `[24:25]`) | `patients.gender` | `1`->`female`, `2`->`male` (`M`->`male`, `F`->`female`) |
-| `bp_systolic` | `BlooddpressurSystol` | `BPSYS` (cols 58–60, slice `[57:60]`) | `triage.sbp` | Integer mmHg (43–289; 0=pulseless) |
-| `bp_diastolic` | `BlooddpressurDiastol` | `BPDIAS` (cols 61–63, slice `[60:63]`) | `triage.dbp` | Integer mmHg (22–190; Doppler 998 rejected) |
-| `heart_rate` | `PulseRate` | `PULSE` (cols 52–54, slice `[51:54]`) | `triage.heartrate` | Integer bpm (0–240; Doppler 998 rejected) |
-| `temperature` | `Temperature` | `TEMPF` (cols 48–51, slice `[47:51]`) | `triage.temperature` | Converted to Celsius (°F tenths -> °C) |
-| `spo2` | `O2Saturation` | `POPCT` (cols 64–66, slice `[63:66]`) | `triage.o2sat` | Integer percentage (0–100%) |
-| `chief_complaint` | `ChiefComplaint` | Strict Empty String `""` | `triage.chiefcomplaint` | Free text NLP evaluation (Gate 2 only) |
-| `symptoms` | Empty List `[]` | Strict Empty List `[]` | Parsed from text | Allow-listed symptoms list |
-| `reference_acuity` | `TriageGrade` (1–5) | `IMMEDR` (1–5) | `triage.acuity` (ESI 1–5) | Canonical proxy mapping (e.g., `nhamcs_immediacy_v1`) |
-| (Metadata only) | `CriticalStatus`, `NeedFastExecute` | `RESPR`, `PATWT`, `CPSU` | `triage.resprate`, `pain` | Recorded in cohort inspection metadata only |
+| VitalNet Intake Field | Gate 1A: Iran ED | Gate 1B: CDC NHAMCS 2022 | Gate 2: MIMIC-IV-ED | Gate 3A: Korean KTAS 2019 | Target Handling & Conversions |
+|---|---|---|---|---|---|
+| `patient_age` | Not in primary triage | `AGE` (cols 16–18, slice `[15:18]`) | `patients.anchor_age` | `Age` | Direct integer (0–130; top-coded values preserved) |
+| `patient_sex` | Not in primary triage | `SEX` (col 25, slice `[24:25]`) | `patients.gender` | `Sex` | `1`->`female`, `2`->`male` (`M`->`male`, `F`->`female`) |
+| `bp_systolic` | `BlooddpressurSystol` | `BPSYS` (cols 58–60, slice `[57:60]`) | `triage.sbp` | `SBP` | Integer mmHg (20–350; Doppler/pulseless sanitized) |
+| `bp_diastolic` | `BlooddpressurDiastol` | `BPDIAS` (cols 61–63, slice `[60:63]`) | `triage.dbp` | `DBP` | Integer mmHg (10–250; inverted BP sanitized to `None`) |
+| `heart_rate` | `PulseRate` | `PULSE` (cols 52–54, slice `[51:54]`) | `triage.heartrate` | `HR` | Integer bpm (0–350; Doppler 998 sanitized to `None`) |
+| `temperature` | `Temperature` | `TEMPF` (cols 48–51, slice `[47:51]`) | `triage.temperature` | `BT` | Converted to Celsius (°F -> °C where needed) |
+| `spo2` | `O2Saturation` | `POPCT` (cols 64–66, slice `[63:66]`) | `triage.o2sat` | `Saturation` | Integer percentage (0–100%; severe hypoxia preserved) |
+| `chief_complaint` | `ChiefComplaint` | Strict Empty String `""` | `triage.chiefcomplaint` | `Chief_complain` (purged) | Purged to empty string in record construction |
+| `symptoms` | Empty List `[]` | Strict Empty List `[]` | Parsed from text | Bilingual parsed | Allow-listed 12 canonical symptoms |
+| `reference_acuity` | `TriageGrade` (1–5) | `IMMEDR` (1–5) | `triage.acuity` (ESI 1–5) | `KTAS_expert` (1–5) | Canonical proxy mapping (e.g., `ktas_v1`, `nhamcs_immediacy_v1`) |
+| (Metadata only) | `CriticalStatus`, `NeedFastExecute` | `RESPR`, `PATWT`, `CPSU` | `triage.resprate`, `pain` | `Patients number per hour`, `RR`, `Pain`, `Mental` | Recorded in cohort inspection metadata only |
 
 ---
 
-## 7. Honest Bottom Line & Regulatory Disclaimers
+## 7. Honest Bottom Line, Safety Failure Modes & Non-Claims
 
-1. **Proxy Evaluations Are Not Indian Clinical Trials**: Validation against US (NHAMCS, MIMIC) or Iranian (Iran ED) emergency cohorts measures the fundamental physiological discrimination and safety properties of VitalNet's algorithms on real human presentations. However, foreign hospital ED cohorts do not match the disease prevalence, nutritional status, baseline vitals, or presentation delays of rural Indian primary care.
-2. **Partial-Input Testing Is a Resilience Benchmark**: Partial-input evaluation in Gate 1B verifies that VitalNet's classifier degrades gracefully and maintains high safety recall even when clinical text and structured symptom checklists are missing. It does not replace comprehensive multi-modal validation.
-3. **Mandatory Human Clinical Oversight**: VitalNet is a clinical decision-support prototype. It does not provide autonomous clinical diagnosis, and all triage recommendations must be reviewed and confirmed by trained human healthcare professionals.
+1. **Demonstrated Missing-Context Failure Mode**: External evaluations across CDC NHAMCS 2022 (Gate 1B) and Korean KTAS 2019 (Gate 3A) empirically demonstrated that VitalNet's frozen production classifier **severely under-triages emergency cases when symptoms and clinical narrative context are missing** (14.4% emergency sensitivity in NHAMCS; 17.9% in KTAS vital-only). Vital signs alone are insufficient to trigger emergency classification in the majority of acute presentations under the frozen model.
+2. **Public-Data Cycle Closed; Safety Remediation Active**: The public-data external validation cycle is officially closed. The findings necessitate structural safety remediation (`docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`), including mandatory structured symptom capture, explicit indeterminate acuity states, conservative fail-safe escalation, and clinical adjudication pathways.
+3. **Proxy Evaluations Are Not Indian Clinical Trials**: Validation against US (NHAMCS, MIMIC), Korean (KTAS), or Iranian (Iran ED) emergency cohorts measures the algorithmic properties of VitalNet's classifier on real human presentations. However, foreign hospital ED cohorts do not match the disease prevalence, nutritional status, baseline vitals, or presentation delays of rural Indian primary care.
+4. **No Medical Device or Clinical Validation Claim**: Results from this evaluation framework do not constitute medical device certification, clinical trial validation, or autonomous diagnostic safety clearance under CDSCO, FDA, or CE frameworks. VitalNet remains a decision-support research prototype requiring human clinical oversight for all patient care.

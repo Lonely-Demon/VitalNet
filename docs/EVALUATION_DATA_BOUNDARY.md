@@ -2,23 +2,23 @@
 
 > **Status**: Authoritative Governance & Security Specification
 > **Applies to**: `tools/training/evaluate_on_real.py`, `tools/training/evaluation_sources/`, local evaluation datasets, CI pipelines, developer workstations, and external validation harnesses.
-> **Related Documents**: `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`, `docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/SECURITY.md`, `docs/CLINICAL_GOVERNANCE.md`, `AGENTS.md`.
+> **Related Documents**: `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`, `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`, `docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/SECURITY.md`, `docs/CLINICAL_GOVERNANCE.md`, `AGENTS.md`.
 
 ---
 
 ## 1. Non-Negotiable Zero Patient Data Leakage Policy
 
-VitalNet is a clinical decision-support system designed for frontline healthcare settings (ASHA community health workers and Primary Health Centre medical officers in rural India). When evaluating VitalNet's triage classifier against external public or research datasets (e.g., CDC NHAMCS, Iran ED, MIMIC-IV-ED), the integrity, confidentiality, and legal boundaries of clinical data must be maintained with absolute zero tolerance for leakage.
+VitalNet is a clinical decision-support system designed for frontline healthcare settings (ASHA community health workers and Primary Health Centre medical officers in rural India). When evaluating VitalNet's triage classifier against external public or research datasets (e.g., CDC NHAMCS, Iran ED, MIMIC-IV-ED, Korean KTAS 2019), the integrity, confidentiality, and legal boundaries of clinical data must be maintained with absolute zero tolerance for leakage.
 
 ### 1.1 Strict Commit and Ingestion Prohibitions
 Under no circumstances may any of the following artifacts be committed to Git, pushed to remote branches, staged in repositories, included in CI/CD build artifacts, written to persistent cloud logs, transmitted over networks, or deployed to pre-production/production environments:
 
-1. **Raw Source Files**: Original un-processed dataset files (e.g., `ed2022`, `triage.csv`, `ED_admission.csv`, `mimic_iv_ed.csv`, or any `.csv`, `.dat`, `.txt`, `.parquet`, `.feather`, `.json` data extracts).
+1. **Raw Source Files**: Original un-processed dataset files (e.g., `ed2022`, `triage.csv`, `ED_admission.csv`, `mimic_iv_ed.csv`, `ktas_2019.xlsx`, or any `.csv`, `.dat`, `.txt`, `.xlsx`, `.parquet`, `.feather`, `.json` data extracts).
 2. **Transformed / Intermediate Records**: Intermediate tabular, pickled, or serialized patient-level representations.
 3. **Record-Level Predictions**: Per-patient inference results, per-encounter predicted triage categories, class probability vectors, or raw feature attribution vectors linked to real encounter instances.
 4. **Patient Identifiers & Keys**: Medical Record Numbers (MRNs), encounter IDs, visit keys, hospital codes, serial numbers, admission IDs, geographic subdivision codes, or dates of service.
 5. **Free-Text Clinical Data**: Unstructured chief complaint narratives, triage nurse notes, triage observations, reasons for visit, or clinician commentary.
-6. **Authentication Credentials & Tokens**: Physionet credentials, CITI completion tokens, Kaggle API keys, cloud access keys, database connection strings, or bearer tokens.
+6. **Authentication Credentials & Tokens**: PhysioNet credentials, CITI completion tokens, Kaggle API keys, cloud access keys, database connection strings, or bearer tokens.
 7. **Source-Derived Sample Rows**: Mock, snippet, or "first 5 rows" examples derived from real patient datasets embedded in code comments, test files, documentation, or commit messages.
 
 ### 1.2 Synthetic Test Isolation Principle
@@ -26,7 +26,7 @@ All automated unit tests, integration tests, CI checks, and regression suites MU
 
 ---
 
-## 2. Runtime Isolation & Automated Download Prohibition
+## 2. Runtime Isolation, Data Boundaries & Authorization Flags
 
 ### 2.1 Prohibition on Automated Data Fetching
 VitalNet code must NEVER attempt to automatically download datasets, scrape web portals, or fetch remote credentials over the internet:
@@ -34,7 +34,13 @@ VitalNet code must NEVER attempt to automatically download datasets, scrape web 
 - **Manual Local Placement**: All real datasets must be acquired out-of-band by authorized research personnel under applicable Data Use Agreements (DUAs) and placed locally on disk by human operators into `tools/training/data/<source_id>/`.
 - **Offline Execution Guarantee**: The evaluation harness (`tools/training/evaluate_on_real.py`) must operate fully offline without external network dependencies.
 
-### 2.2 Filesystem Boundaries & Git Ignore Enforcement
+### 2.2 Dataset-Specific Explicit Authorization Requirement
+To prevent accidental or unauthorized inference on real patient data:
+- **Default Refusal**: Adapters for benchmark datasets (e.g. Gate 1A Iran ED, Gate 2 MIMIC-IV-ED, Gate 3A Korean KTAS 2019) strictly refuse model scoring by default, raising `EvaluationRefusedError` with a non-zero exit code (`sys.exit(2)`).
+- **Explicit Authorization Flags**: Any scoring of real datasets requires explicit dataset-specific command-line authorization flags (e.g., `--gate-3a-scoring-authorized` for KTAS 2019, Gate M4 authorization for MIMIC-IV-ED).
+- **Inspection Unlocked**: Aggregate inspection mode (`--inspect-source <name>`) remains available for schema audit and data quality analysis without authorizing model scoring.
+
+### 2.3 Filesystem Boundaries & Git Ignore Enforcement
 The repository filesystem enforces strict physical isolation between code, synthetic test fixtures, local raw data, and generated evaluation reports:
 
 ```
@@ -42,26 +48,35 @@ VitalNet/
 ├── .gitignore                          # Enforces ignore rules for data and outputs
 ├── docs/
 │   ├── EVALUATION_DATA_BOUNDARY.md     # This policy document
-│   ├── evaluation/                     # Tracked source cards & governance specs
-│   │   ├── IRAN_ED_SOURCE_CARD.md
-│   │   ├── NHAMCS_2022_SOURCE_CARD.md
-│   │   └── MIMIC_IV_ED_SOURCE_CARD.md
-│   └── DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md
+│   ├── DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md
+│   └── evaluation/                     # Tracked source cards & governance specs
+│       ├── IRAN_ED_SOURCE_CARD.md
+│       ├── NHAMCS_2022_SOURCE_CARD.md
+│       ├── MIMIC_IV_ED_SOURCE_CARD.md
+│       ├── KTAS_2019_SOURCE_CARD.md
+│       └── SAFETY_REMEDIATION_DESIGN.md # Safety remediation specification
 ├── tools/training/
-│   ├── evaluate_on_real.py             # Evaluation & inspection CLI harness
+│   ├── evaluate_on_real.py             # Core evaluation & inspection CLI harness
+│   ├── audit_asha_input_contract.py    # 16-arm synthetic frozen-model contract audit
+│   ├── diagnose_partial_input.py       # Diagnostic ablation & missing-vital harness
 │   ├── evaluation_sources/             # Modular adapter package
 │   │   ├── __init__.py
 │   │   ├── base.py                     # Canonical contracts & abstract source interface
 │   │   ├── nhamcs_2022.py              # Gate 1B fixed-width adapter
 │   │   ├── iran_ed.py                  # Gate 1A inspection adapter (refuses scoring)
 │   │   ├── mimic_iv_ed.py              # Gate 2 credentialed benchmark adapter
-│   │   ├── mimic_symptom_parser.py     # Deterministic allow-list symptom parser
+│   │   ├── mimic_symptom_parser.py     # Deterministic allow-list symptom parser (MIMIC)
+│   │   ├── ktas_2019.py                # Gate 3A Korean KTAS 2019 adapter
+│   │   ├── ktas_symptom_parser.py      # Deterministic bilingual symptom parser (KTAS)
 │   │   ├── generic_csv.py              # Backward-compatible CSV adapter
 │   │   └── self_test_source.py         # Synthetic self-test source adapter
 │   ├── tests/
 │   │   ├── fixtures/                   # 100% SYNTHETIC fixtures ONLY (tracked in Git)
 │   │   ├── test_evaluation_sources.py  # Pytest suite using synthetic fixtures
+│   │   ├── test_ktas_2019_adapter.py   # Gate 3A KTAS adapter, parser & leakage suite
 │   │   ├── test_mimic_iv_ed_adapter.py # Gate 2 MIMIC adapter, parser & leakage suite
+│   │   ├── test_asha_input_contract.py # Synthetic ASHA input contract audit suite
+│   │   ├── test_partial_input_diagnostic.py # Synthetic ablation & diagnostic suite
 │   │   ├── test_adversarial_challenge.py # Adversarial parsing, conversion & leakage suite
 │   │   └── test_adversarial_cli_m4.py  # Adversarial CLI & refusal semantics suite
 │   ├── data/                           # LOCAL ONLY — GITIGNORED (real datasets placed manually)
@@ -120,7 +135,7 @@ Every evaluation report must include:
    - Feature availability flags (e.g., `chief_complaint_available: false`, `symptoms_available: false`).
    - Model version and Git commit hash under test.
 3. **Label Configuration**:
-   - Label scheme identifier (e.g., `nhamcs_immediacy_v1`, `esi_5level`, `published_binary`).
+   - Label scheme identifier (e.g., `nhamcs_immediacy_v1`, `ktas_v1`, `mimic_esi_v1`, `published_binary`).
    - Explicit mapping dictionary from source codes to VitalNet's 3 tiers (`EMERGENCY`, `URGENT`, `ROUTINE`).
 4. **Cohort Flow & Exclusion Breakdown**:
    - Total raw records read from disk.
@@ -136,7 +151,7 @@ Every evaluation report must include:
    - Diagnostic Expected Calibration Error (ECE) with explicit diagnostic disclaimer.
    - Subgroup safety slices across age bands, sex, and vital completeness.
 6. **Population Limitations & Explicit Non-Claims**:
-   - Formal declarations of cohort context (e.g., US tertiary ED vs rural Indian PHC).
+   - Formal declarations of cohort context (e.g., US tertiary ED vs South Korean ED vs rural Indian PHC).
    - Partial-input warnings and SaMD decision-support disclaimers.
 
 ### 4.2 Prohibited Content in Reports
@@ -169,7 +184,7 @@ VitalNet's evaluation boundary is designed to adhere to premier international an
 
 Before running any evaluation or committing code, verify:
 - [ ] `.gitignore` contains `tools/training/data/**` and `tools/training/outputs/**` rules.
-- [ ] `git status` shows zero untracked data files, `.csv`, `.dat`, `.txt`, or `.json` evaluation logs in `tools/training/`.
+- [ ] `git status` shows zero untracked data files, `.csv`, `.dat`, `.txt`, `.xlsx`, or `.json` evaluation logs in `tools/training/`.
 - [ ] Only synthetic fixtures exist in `tools/training/tests/fixtures/`.
 - [ ] No changes have been made to `backend/app/ml/models/*.pkl` or `apps/web/public/models/*.json`.
 - [ ] All reports generated under `tools/training/outputs/` contain strictly aggregate counts, matrices, and percentages.
