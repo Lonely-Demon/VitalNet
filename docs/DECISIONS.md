@@ -1982,3 +1982,15 @@ are green.
    - Test harness uses internal `_synthetic_test_mode=True`, strictly bounded to `tests/fixtures/` and rejected if pointed at any non-fixture path.
 10. **Strict zero patient data leakage assertion**:
     - All JSON reports and console outputs are recursively validated via `assert_zero_patient_leakage()`.
+
+### 43. Public-data evaluation closure and safety-remediation pivot
+**Context**: VitalNet completed its authorized public-data evaluation cycle on the frozen model using Iran ED inspection, NHAMCS 2022 partial-input scoring, a synthetic ASHA input-contract study, and Korean KTAS 2019 Gate 3A scoring. MIMIC-IV-ED credentialing was not completed and no full MIMIC score exists.
+**Decisions**:
+1. **Close the current public-data evaluation cycle** and consolidate the evidence in `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`.
+2. **Record the safety signal without averaging incompatible benchmarks**: NHAMCS emergency sensitivity was 14.4%; KTAS primary emergency sensitivity was 25.2%; KTAS vital-only emergency sensitivity was 17.9%. These are cohort-specific proxy results, not clinical validation.
+3. **Keep the production model frozen**. No retraining, tuning, threshold changes, classifier changes, deployment, or promotion are justified by these results.
+4. **Treat missing symptoms and clinical context as the next safety-remediation target**. The ASHA contract study and KTAS arm comparison show that structured symptom/context availability materially affects emergency sensitivity.
+5. **Defer MIMIC-IV-ED**. Credentialing remains incomplete; no unofficial copy may be used and no full MIMIC benchmark claim may be made.
+6. **Create a design-only safety-remediation gate** before any candidate implementation. The design must define missing-context behavior, required ASHA/PHC intake fields, human escalation, pre-registered safety metrics, subgroup analyses, and a qualified clinical reviewer for acceptance criteria.
+7. **Require synthetic-first comparison against the frozen baseline** for any future candidate. Any real-data rerun requires fresh dataset-specific explicit authorization, and no candidate may reach production or preproduction without clinical review, prospective/shadow evidence, and governance approval.
+**Evidence**: `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`, `docs/evaluation/KTAS_2019_SOURCE_CARD.md`, `docs/VALIDATION_PROTOCOL.md`, and `docs/CLINICAL_RISK_MANAGEMENT.md`.

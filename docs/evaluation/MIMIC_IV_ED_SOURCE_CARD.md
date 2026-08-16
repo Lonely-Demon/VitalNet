@@ -1,11 +1,11 @@
 # Evaluation Source Card: MIMIC-IV-ED v2.2 (Gate 2)
 
-> **Status**: Tracked Evaluation Specification
-> **Gate Role**: Gate 2 — Credentialed Triage-Time External Benchmark
+> **Status**: Tracked Evaluation Specification; credentialing deferred and no full MIMIC score completed
+> **Gate Role**: Gate 2 — Deferred Credentialed Triage-Time External Benchmark
 > **Input Mode**: Strict `mimic_triage_contract_v1` (available MIMIC triage context)
 > **Label Mapping**: `mimic_esi_v1` (ESI 1–2 -> EMERGENCY, 3 -> URGENT, 4–5 -> ROUTINE)
 > **Cohort Policies**: `all_stays` (Primary encounter-level) | `first_stay_only` (Pre-registered patient-level sensitivity)
-> **Related Documents**: `docs/EVALUATION_DATA_BOUNDARY.md`, `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`, `docs/VALIDATION_PROTOCOL.md`, `docs/DECISIONS.md`.
+> **Related Documents**: `docs/EVALUATION_DATA_BOUNDARY.md`, `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`, `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`, `docs/VALIDATION_PROTOCOL.md`, `docs/DECISIONS.md`.
 
 ---
 

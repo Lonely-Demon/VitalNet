@@ -168,7 +168,11 @@ CDC NHAMCS includes survey design variables (`PATWT`, `CPSU`, `CSTRATM`) designe
 
 ---
 
-## 7. Explicit Non-Claims & Scope Limitations
+## 7. Completed Gate 1B Result
+
+One authorized NHAMCS 2022 partial-input scoring run produced **14.4% EMERGENCY sensitivity**, meaning 85.6% of proxy-EMERGENCY cases were missed under the vital-only contract. The result is a serious safety signal and no further NHAMCS scoring is authorized within the completed evaluation cycle. The full aggregate findings are consolidated in `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`.
+
+## 8. Explicit Non-Claims & Scope Limitations
 
 1. **Retrospective Cohort Proxy**: CDC NHAMCS 2022 represents hospital-based emergency department visits in the United States. It serves as a proxy benchmark for vital-sign triage discrimination; it does NOT represent primary healthcare centers (PHCs) or community health worker (ASHA) workflows in rural India.
 2. **Partial-Input Limitation**: Performance measured in partial-input mode reflects vital-only discrimination and does not measure full multi-modal performance when detailed clinical text and symptom checklists are present.

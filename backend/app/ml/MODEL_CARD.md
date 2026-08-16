@@ -66,9 +66,9 @@ clearance (CDSCO/CE/FDA) and has not undergone clinical trial validation.
 
 ## Training data — synthetic, evidence-informed (important caveat)
 
-The project has **no access to real de-identified patient data**. Training data
-is **synthetic**: 36,000 physiologically-correlated patients (class-balanced),
-labelled by an evidence-informed scoring function decoupled from generation (so
+Training data remains **synthetic**: 36,000 physiologically-correlated patients (class-balanced). The project has completed separate, local-only external proxy evaluations on public de-identified datasets; those evaluations did not alter the training data or model artifacts and do not constitute clinical validation.
+
+It is labelled by an evidence-informed scoring function decoupled from generation (so
 the label reflects the actual synthesised physiology, not the generation
 bucket). The scorer is loosely modelled on **NEWS2** (aggregate + any-red-
 parameter escalation), **qSOFA** (deterioration), and **paediatric APLS/PALS**
@@ -83,8 +83,14 @@ thresholds: `app/ml/README.md` and `tools/training/train_classifier.py`.
 > evidence-based scoring heuristic*, **not** performance against real clinical
 > outcomes. Do not read "98.9% accuracy" as "98.9% correct on real patients." No
 > claim of parity with clinically-validated triage instruments is made or
-> implied. Real-world validation requires real outcome data — the outcome-
-> feedback loop in `FEATURES_ROADMAP.md` (§1.3) is the path to it.
+> implied. Real-world clinical validation requires clinician-adjudicated outcome data
+> and prospective evidence. The completed public proxy findings are consolidated in
+> `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`; the outcome-feedback loop in
+> `FEATURES_ROADMAP.md` (§1.3) remains the path to future clinical validation.
+
+## Public proxy evaluation status
+
+The frozen model was evaluated locally on NHAMCS 2022 and Korean KTAS 2019 under separate governance gates. NHAMCS produced 14.4% `EMERGENCY` sensitivity under the vital-only contract. KTAS produced 25.2% emergency sensitivity in the deterministic symptom arm and 17.9% in the vital-only arm. These are cohort-specific proxy results with serious under-triage signals; they must not be presented as clinical validation, regulatory evidence, or rural/ASHA equivalence. See `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`.
 
 ## Performance (held-out synthetic test set, v3.0.0)
 

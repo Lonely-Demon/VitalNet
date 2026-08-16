@@ -10,9 +10,10 @@
 > formalizes VitalNet's multi-gate external validation framework, data boundary
 > rules, and evaluation roadmap.
 >
-> **Updated for the Evaluation Foundation**: points to `tools/training/evaluate_on_real.py`
+> **Updated for the completed public-data evaluation cycle**: points to `tools/training/evaluate_on_real.py`
 > and `tools/training/evaluation_sources/`, governed by `docs/EVALUATION_DATA_BOUNDARY.md`.
-> Source cards for specific datasets are tracked under `docs/evaluation/`.
+> Source cards for specific datasets are tracked under `docs/evaluation/`. The consolidated outcome is recorded in
+> `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`; the next phase is safety-remediation design, not another dataset hunt.
 
 Companion to `docs/EVALUATION_DATA_BOUNDARY.md`, `docs/CLINICAL_RISK_MANAGEMENT.md`,
 `docs/VALIDATION_PROTOCOL.md`, and `backend/app/ml/MODEL_CARD.md`.
@@ -53,12 +54,18 @@ VitalNet structures external validation into a sequential, multi-gate hierarchy 
 │  - Documentation: docs/evaluation/NHAMCS_2022_SOURCE_CARD.md                           │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ GATE 2: MIMIC-IV-ED v2.2 (PhysioNet Credentialed DUA + CITI Certification)             │
-│  - Role: Credentialed triage-time external benchmark (vitals + deterministic NLP)      │
-│  - Status: Gate M1 adapter & synthetic fixture ready; scoring staged on Gate M4        │
+│  - Role: Credentialed triage-time external benchmark                                  │
+│  - Status: Deferred; credentialing was not completed; no full MIMIC score exists       │
 │  - Focus: Available triage context, allow-list symptom extraction, ESI 1-5 proxy       │
 │  - Documentation: docs/evaluation/MIMIC_IV_ED_SOURCE_CARD.md                           │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
-│ GATE 3: Prospective Rural Indian PHC Cohort (Silent / Shadow Deployment)               │
+│ GATE 3A: Korean KTAS 2019 Open ED Acuity Benchmark                                   │
+│  - Role: Open external emergency-acuity benchmark                                     │
+│  - Status: Aggregate inspection and one authorized scoring cycle completed             │
+│  - Focus: KTAS expert mapping, bilingual symptom contract, vital-only sensitivity     │
+│  - Documentation: docs/evaluation/KTAS_2019_SOURCE_CARD.md                             │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ GATE 4: Prospective Rural Indian PHC Cohort (Silent / Shadow Deployment)               │
 │  - Role: Authoritative clinical safety & regulatory validation (CDSCO SaMD)            │
 │  - Status: Blocked on institutional ethics approval & clinical partner onboarding      │
 │  - Focus: ASHA frontline workflow, local epidemiological conditions, true clinical POC │
@@ -72,9 +79,10 @@ VitalNet structures external validation into a sequential, multi-gate hierarchy 
 | Dataset & Gate | Scope & Setting | Volume | License / Access | Inputs Available | Target Role in VitalNet |
 |---|---|---|---|---|---|
 | **Gate 1A: Iran ED** | Single-center tertiary hospital ED, Iran | 143,582 triage rows | CC BY 4.0 Open Access | Official ED_triage.csv has 28 columns; VitalNet consumes 10 key fields for inspection; extreme sparsity (<0.07% complete vitals) | **Inspection-only audit**. Scoring strictly refused due to binary ground truth and severe missingness. |
-| **Gate 1B: CDC NHAMCS 2022** | Nationally representative sample of US hospital EDs | ~25,000 encounters / year | CDC Public Use Data | Fixed-width vitals, age, sex, arrival immediacy (1–5 scale) | **Partial-input proxy evaluation**. Unweighted discrimination on vital-only presentations. |
-| **Gate 2: MIMIC-IV-ED** (PhysioNet v2.2) | Urban academic medical center ED (Beth Israel Deaconess, Boston) | ~425,000 ED stays | Credentialed DUA (PhysioNet + CITI training required) | Complete vitals, anchor age, sex, chief complaint, ESI 1–5 | **Triage-time external benchmark**. Available triage context via `mimic_triage_contract_v1` and `mimic_esi_v1`. |
-| **Gate 3: Prospective Indian PHC** | Frontline Primary Health Centres & Sub-Centres, rural India | Prospective cohort | Institutional Ethics Committee (IEC) approved | Complete ASHA intake: vitals, localized symptoms, Hindi/Tamil notes, clinical outcomes | **True clinical validation**. Necessary prerequisite for regulatory clearance (CDSCO). |
+| **Gate 1B: CDC NHAMCS 2022** | Nationally representative sample of US hospital EDs | 16,025 encounters in the inspected file | CDC Public Use Data | Fixed-width vitals, age, sex, arrival immediacy (1–5 scale) | **Partial-input proxy evaluation**. One authorized run produced 14.4% emergency sensitivity; serious safety signal. |
+| **Gate 2: MIMIC-IV-ED** (PhysioNet v2.2) | Urban academic medical center ED (Beth Israel Deaconess, Boston) | ~425,000 ED stays | Credentialed DUA (PhysioNet + CITI training required) | Complete vitals, anchor age, sex, chief complaint, ESI 1–5 | **Deferred credentialed benchmark**. No full MIMIC scoring was completed. |
+| **Gate 3A: Korean KTAS 2019** | Two Korean emergency-department groups | 1,267 encounters | Publisher-hosted supplementary workbooks; local-only use | Age, sex, five vitals, KTAS expert label, Korean/English complaint text | **Completed open external benchmark**. Primary emergency sensitivity 25.2%; vital-only sensitivity 17.9%; not clinical validation. |
+| **Gate 4: Prospective Indian PHC** | Frontline Primary Health Centres & Sub-Centres, rural India | Prospective cohort | Institutional Ethics Committee (IEC) approved | Complete ASHA intake: vitals, localized symptoms, Hindi/Tamil notes, clinical outcomes | **Future clinical validation**. Necessary prerequisite for regulatory clearance (CDSCO). |
 
 ---
 
@@ -151,5 +159,5 @@ All external validation activities are governed by `docs/EVALUATION_DATA_BOUNDAR
 ## 7. Honest Bottom Line & Regulatory Disclaimers
 
 1. **Proxy Evaluations Are Not Indian Clinical Trials**: Validation against US (NHAMCS, MIMIC) or Iranian (Iran ED) emergency cohorts measures the fundamental physiological discrimination and safety properties of VitalNet's algorithms on real human presentations. However, foreign hospital ED cohorts do not match the disease prevalence, nutritional status, baseline vitals, or presentation delays of rural Indian primary care.
-2. **Partial-Input Testing Is a Resilience Benchmark**: Partial-input evaluation in Gate 1B verifies that VitalNet's classifier degrades gracefully and maintains high safety recall even when clinical text and structured symptom checklists are missing. It does not replace comprehensive multi-modal validation.
+2. **Partial-Input Testing Is a Stress Benchmark**: Partial-input evaluation in Gate 1B does not show graceful degradation or high safety recall. NHAMCS produced 14.4% emergency sensitivity, and the KTAS vital-only arm produced 17.9% emergency sensitivity. These results document a serious missing-context safety signal and do not replace comprehensive multi-modal validation.
 3. **Mandatory Human Clinical Oversight**: VitalNet is a clinical decision-support prototype. It does not provide autonomous clinical diagnosis, and all triage recommendations must be reviewed and confirmed by trained human healthcare professionals.
