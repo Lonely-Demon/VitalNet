@@ -2,7 +2,7 @@
 
 > **Status**: Authoritative Governance & Security Specification
 > **Applies to**: `tools/training/evaluate_on_real.py`, `tools/training/evaluation_sources/`, local evaluation datasets, CI pipelines, developer workstations, and external validation harnesses.
-> **Related Documents**: `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`, `docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/SECURITY.md`, `docs/CLINICAL_GOVERNANCE.md`, `AGENTS.md`.
+> **Related Documents**: `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`, `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`, `docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/SECURITY.md`, `docs/CLINICAL_GOVERNANCE.md`, `AGENTS.md`.
 
 ---
 
@@ -45,7 +45,9 @@ VitalNet/
 │   ├── evaluation/                     # Tracked source cards & governance specs
 │   │   ├── IRAN_ED_SOURCE_CARD.md
 │   │   ├── NHAMCS_2022_SOURCE_CARD.md
-│   │   └── MIMIC_IV_ED_SOURCE_CARD.md
+│   │   ├── MIMIC_IV_ED_SOURCE_CARD.md
+│   │   ├── KTAS_2019_SOURCE_CARD.md
+│   │   └── PUBLIC_DATA_EVALUATION_CLOSURE.md
 │   └── DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md
 ├── tools/training/
 │   ├── evaluate_on_real.py             # Evaluation & inspection CLI harness
@@ -56,6 +58,8 @@ VitalNet/
 │   │   ├── iran_ed.py                  # Gate 1A inspection adapter (refuses scoring)
 │   │   ├── mimic_iv_ed.py              # Gate 2 credentialed benchmark adapter
 │   │   ├── mimic_symptom_parser.py     # Deterministic allow-list symptom parser
+│   │   ├── ktas_2019.py                # Gate 3A open KTAS adapter
+│   │   ├── ktas_symptom_parser.py      # Deterministic bilingual KTAS parser
 │   │   ├── generic_csv.py              # Backward-compatible CSV adapter
 │   │   └── self_test_source.py         # Synthetic self-test source adapter
 │   ├── tests/
@@ -138,6 +142,8 @@ Every evaluation report must include:
 6. **Population Limitations & Explicit Non-Claims**:
    - Formal declarations of cohort context (e.g., US tertiary ED vs rural Indian PHC).
    - Partial-input warnings and SaMD decision-support disclaimers.
+   - For KTAS, the two-site Korean ED context and the Regional-ED-only complete-five-vital subgroup limitation.
+   - No public-data result may be described as clinical validation, regulatory clearance, or rural/ASHA equivalence.
 
 ### 4.2 Prohibited Content in Reports
 The JSON and text reports MUST NEVER contain:
@@ -168,6 +174,7 @@ VitalNet's evaluation boundary is designed to adhere to premier international an
 ## 6. Audit & Verification Checklist
 
 Before running any evaluation or committing code, verify:
+- [ ] Every real-data scoring or inspection operation has dataset-specific explicit human authorization recorded outside the codebase.
 - [ ] `.gitignore` contains `tools/training/data/**` and `tools/training/outputs/**` rules.
 - [ ] `git status` shows zero untracked data files, `.csv`, `.dat`, `.txt`, or `.json` evaluation logs in `tools/training/`.
 - [ ] Only synthetic fixtures exist in `tools/training/tests/fixtures/`.

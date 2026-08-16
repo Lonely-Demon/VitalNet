@@ -1,12 +1,6 @@
 # VitalNet — Validation Readiness & Protocol
 
-> **Status: pre-data plan.** VitalNet has never seen a real patient. This
-> document is the plan to change that responsibly. It separates work that is
-> executable **now** (synthetic-only, no clinician) from work that is
-> **hard-gated** on two unlocks VitalNet does not yet have — real de-identified
-> data and a clinical collaborator. Its second purpose is to make VitalNet
-> *validation-ready*: so that on the day either unlock arrives, evaluation is a
-> command, not a rebuild.
+> **Status: public-data evaluation cycle completed; clinical validation not achieved.** VitalNet has now been evaluated on authorized real public datasets under strict local-only controls. This document records what those evaluations establish and what remains hard-gated on a qualified clinical collaborator, prospective site, ethics approval, and appropriate reference standards. The consolidated findings are in `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`.
 >
 > **Updated for the Round 6 rebuild** (`docs/DECISIONS.md` §33): the triage
 > logic moved to `packages/clinical-core` (TypeScript), with a `rules_first`
@@ -83,11 +77,9 @@ These advance the safety case and the deployment goal without new resources.
   every `apps/web`/`apps/api` endpoint remains `'legacy'`
   (model-primary), gated on `docs/CLINICAL_REVIEW.md`'s clinician sign-off of
   the 51-case delta.
-- **A8 — External validation on real public data (no clinician needed).**
-  See `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md` and `docs/evaluation/MIMIC_IV_ED_SOURCE_CARD.md`:
-  MIMIC-IV-ED v2.2 adapter (`tools/training/evaluation_sources/mimic_iv_ed.py`), deterministic allow-list symptom parser (`mimic_symptom_parser.py`),
-  and pre-registered `mimic_esi_v1` mapping implemented in Gate M1 (code-only, synthetic fixtures). Scoring staged on explicit Gate M4 authorization.
-  This provides the foundation for credentialed external validation under strict local-only isolation. Unaffected by the language migration.
+- **A8 — External validation on real public data (completed cycle).** The authorized cycle covered Iran ED inspection, NHAMCS 2022 partial-input proxy scoring, the synthetic ASHA input-contract study, and Korean KTAS 2019 Gate 3A scoring. The consolidated report is `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`. The results show serious emergency under-triage signals: NHAMCS emergency sensitivity 14.4%, KTAS primary emergency sensitivity 25.2%, and KTAS vital-only emergency sensitivity 17.9%. MIMIC-IV-ED remains deferred because credentialing was not completed; no full MIMIC score exists. No result constitutes clinical validation or supports deployment.
+
+- **A9 — Safety-remediation design gate.** Before any candidate model or input-contract implementation, define the missing-context policy, required ASHA/PHC fields, insufficient-information behavior, human escalation path, pre-registered safety metrics, subgroup strata, and clinical acceptance-criteria owner. This gate is design-only until a qualified clinical/domain reviewer participates. Any candidate must first be compared with the frozen baseline on synthetic fixtures; any real-data rerun requires fresh dataset-specific authorization.
 
 ## Part B — Retrospective validation study (gated on real data)
 
