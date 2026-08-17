@@ -25,7 +25,7 @@ The under-triage failure mode was verified across two independent international 
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                              EMPIRICAL EVIDENCE SUMMARY                                │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
-│ 1. CDC NHAMCS 2022 (Gate 1B Proxy Evaluation — 16,025 Inspected / 12,347 Evaluated)    │
+│ 1. CDC NHAMCS 2022 (Gate 1B Proxy Evaluation — 16,025 Inspected / 10,207 Evaluated)    │
 │    • Emergency Sensitivity: 14.4% in vital-only partial-input mode.                    │
 │    • Emergency Miss Rate: 85.6% of proxy-emergency encounters under-triaged.          │
 │    • Finding: When chief complaints and structured symptoms are omitted, vital signs   │
@@ -219,7 +219,7 @@ Every evaluation must report performance stratified across:
 - **Symptom Availability**: Complete symptoms present vs. zero symptoms recorded.
 
 ### 8.3 Calibration & Guardrail Diagnostics
-- **Low Confidence Rate**: Proportion of predictions where $\max P(\text{tier}) < 0.60$.
+- **Confidence Distribution Diagnostic**: Evaluation of prediction entropy and class probability distributions across a pre-registered diagnostic grid (e.g., assessing the proportion of encounters falling below $\max P(\text{tier}) \in \{0.50, 0.60, 0.70, 0.80\}$). *Note: Any diagnostic grid threshold is strictly an exploratory engineering metric for distribution auditing, not a clinical acceptance threshold. Clinical pass/fail criteria remain exclusively owned and defined by qualified clinical governance.*
 - **NEWS2 Floor Trigger Rate**: Frequency of deterministic NEWS2 overrides.
 - **Safety Net Lift**: Difference in emergency sensitivity between raw ML predictions and the hybrid safety-net system.
 
