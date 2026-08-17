@@ -2,7 +2,7 @@
 
 > **Status**: Authoritative Governance & Security Specification
 > **Applies to**: `tools/training/evaluate_on_real.py`, `tools/training/evaluation_sources/`, local evaluation datasets, CI pipelines, developer workstations, and external validation harnesses.
-> **Related Documents**: `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`, `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`, `docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/SECURITY.md`, `docs/CLINICAL_GOVERNANCE.md`, `AGENTS.md`.
+> **Related Documents**: `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md`, `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`, `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`, `docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/SECURITY.md`, `docs/CLINICAL_GOVERNANCE.md`, `AGENTS.md`.
 
 ---
 
@@ -47,7 +47,8 @@ VitalNet/
 │   │   ├── NHAMCS_2022_SOURCE_CARD.md
 │   │   ├── MIMIC_IV_ED_SOURCE_CARD.md
 │   │   ├── KTAS_2019_SOURCE_CARD.md
-│   │   └── PUBLIC_DATA_EVALUATION_CLOSURE.md
+│   │   ├── PUBLIC_DATA_EVALUATION_CLOSURE.md
+│   │   └── SAFETY_REMEDIATION_DESIGN.md
 │   └── DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md
 ├── tools/training/
 │   ├── evaluate_on_real.py             # Evaluation & inspection CLI harness
