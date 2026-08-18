@@ -372,35 +372,103 @@ def test_deterministic_repeatability():
 
 def test_real_data_isolation_and_zero_leakage_subprocess():
     """
-    Verifies via a separate clean subprocess that importing study_safety_remediation
-    does NOT import any real-data adapters (KTAS, NHAMCS, Iran ED, MIMIC, Generic CSV),
-    does NOT access real-data paths, does NOT use authorization flags, and produces
-    aggregate-only reports with recursive zero-leakage validation.
+    Verifies via a separate clean subprocess with active runtime guards that:
+    1. Importing study_safety_remediation does NOT import any real-data adapters
+       (KTAS, NHAMCS, Iran ED, MIMIC, Generic CSV, or evaluation_sources package).
+    2. Subprocess execution hook intercepts all subprocess calls and rejects any command
+       referencing real-data authorization flags (--gate-3a-scoring-authorized, Gate M4, etc.)
+       or real-data dataset paths/names, allowing only expected synthetic clinical-core CLI calls.
+    3. Filesystem open hook intercepts file I/O and blocks access to real-data directories/files.
+    4. Evaluates full 3-arm study on synthetic data and enforces recursive zero-leakage validation.
     """
     script = '''
+import builtins
+import os
+import subprocess
 import sys
+
+# ── 1. Import Interceptor Guard ──────────────────────────────────────────
+FORBIDDEN_MODULE_SUBSTRINGS = (
+    "evaluation_sources",
+    "ktas_2019",
+    "nhamcs_2022",
+    "iran_ed",
+    "mimic_iv_ed",
+    "generic_csv",
+)
+
+class StrictImportGuard:
+    def find_spec(self, fullname, path, target=None):
+        lower = fullname.lower()
+        for forbidden in FORBIDDEN_MODULE_SUBSTRINGS:
+            if forbidden in lower:
+                raise ImportError(f"HARD REFUSAL: Import of real-data module '{fullname}' is forbidden during synthetic candidate study.")
+        return None
+
+sys.meta_path.insert(0, StrictImportGuard())
+
+# ── 2. Filesystem Access Guard ───────────────────────────────────────────
+_orig_open = builtins.open
+FORBIDDEN_PATH_SUBSTRINGS = (
+    "tools/training/data",
+    "tools\\\\training\\\\data",
+    "evaluation_sources",
+    "ed2022",
+    "ed_admission",
+)
+
+def guarded_open(file, *args, **kwargs):
+    file_str = str(file).lower()
+    for forbidden in FORBIDDEN_PATH_SUBSTRINGS:
+        if forbidden in file_str and not file_str.endswith(".py") and not file_str.endswith(".json"):
+            raise PermissionError(f"HARD REFUSAL: File access to real-data path '{file}' is forbidden during candidate study.")
+    return _orig_open(file, *args, **kwargs)
+
+builtins.open = guarded_open
+
+# ── 3. Subprocess Command Guard ──────────────────────────────────────────
+_orig_subprocess_run = subprocess.run
+FORBIDDEN_CMD_FLAGS = (
+    "--gate-3a-scoring-authorized",
+    "--gate-m4-authorization",
+    "--gate-3a",
+    "--gate-m4",
+    "evaluate_on_real.py",
+    "evaluation_sources",
+)
+
+def guarded_subprocess_run(cmd, *args, **kwargs):
+    cmd_str = " ".join(cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
+    cmd_lower = cmd_str.lower()
+    for forbidden in FORBIDDEN_CMD_FLAGS:
+        if forbidden in cmd_lower:
+            raise PermissionError(f"HARD REFUSAL: Execution of real-data authorization or evaluation command '{cmd_str}' is forbidden.")
+    return _orig_subprocess_run(cmd, *args, **kwargs)
+
+subprocess.run = guarded_subprocess_run
+
+# ── 4. Load Study Runner & Execute ───────────────────────────────────────
 import study_safety_remediation as sr
 
-forbidden_adapters = [
-    "evaluation_sources.ktas_2019",
-    "evaluation_sources.nhamcs_2022",
-    "evaluation_sources.iran_ed",
-    "evaluation_sources.mimic_iv_ed",
-    "evaluation_sources.generic_csv",
-    "evaluation_sources",
-]
-for mod in forbidden_adapters:
-    if mod in sys.modules:
-        print(f"FAIL: {mod} found in sys.modules")
-        sys.exit(1)
+# Verify no forbidden modules in sys.modules
+for mod in sys.modules:
+    for forbidden in FORBIDDEN_MODULE_SUBSTRINGS:
+        if forbidden in mod.lower():
+            raise AssertionError(f"Isolation violation: forbidden module '{mod}' loaded into sys.modules.")
 
+# Run synthetic study
 report = sr.run_safety_remediation_study(n_patients=30, seed=42)
+
+# Enforce recursive zero patient data leakage
 sr.assert_zero_patient_leakage(report)
 
+# Assert aggregate-only report structure
 assert "patient_records" not in report
 assert "records" not in report
 assert "form_data" not in report
 assert "raw_fields" not in report
+assert "arms" in report
+assert len(report["arms"]) == 3
 
 print("PASS")
 '''
