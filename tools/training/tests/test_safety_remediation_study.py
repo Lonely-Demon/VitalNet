@@ -378,8 +378,11 @@ def test_real_data_isolation_and_zero_leakage_subprocess():
     2. Subprocess execution hook intercepts all subprocess calls and rejects any command
        referencing real-data authorization flags (--gate-3a-scoring-authorized, Gate M4, etc.)
        or real-data dataset paths/names, allowing only expected synthetic clinical-core CLI calls.
-    3. Filesystem open hook intercepts file I/O and blocks access to real-data directories/files.
-    4. Evaluates full 3-arm study on synthetic data and enforces recursive zero-leakage validation.
+    3. Filesystem open hook intercepts file I/O and unconditionally blocks access to all
+       real-data directories/files across all extensions (.csv, .xlsx, .txt, .json, .py).
+    4. Child-process regression tests confirm that representative forbidden .csv, .xlsx,
+       .txt, .json, and .py paths raise PermissionError immediately.
+    5. Evaluates full 3-arm study on synthetic data and enforces recursive zero-leakage validation.
     """
     script = '''
 import builtins
@@ -407,26 +410,47 @@ class StrictImportGuard:
 
 sys.meta_path.insert(0, StrictImportGuard())
 
-# ── 2. Filesystem Access Guard ───────────────────────────────────────────
+# ── 2. Filesystem Access Guard (Strict Unconditional Block) ───────────────
 _orig_open = builtins.open
 FORBIDDEN_PATH_SUBSTRINGS = (
     "tools/training/data",
-    "tools\\\\training\\\\data",
     "evaluation_sources",
     "ed2022",
     "ed_admission",
+    "ktas",
+    "nhamcs",
+    "iran_ed",
+    "mimic_iv_ed",
 )
 
 def guarded_open(file, *args, **kwargs):
-    file_str = str(file).lower()
+    file_str = str(file).lower().replace("\\\\", "/")
     for forbidden in FORBIDDEN_PATH_SUBSTRINGS:
-        if forbidden in file_str and not file_str.endswith(".py") and not file_str.endswith(".json"):
-            raise PermissionError(f"HARD REFUSAL: File access to real-data path '{file}' is forbidden during candidate study.")
+        if forbidden in file_str:
+            raise PermissionError(f"HARD REFUSAL: File access to prohibited real-data path '{file}' is forbidden during candidate study.")
     return _orig_open(file, *args, **kwargs)
 
 builtins.open = guarded_open
 
-# ── 3. Subprocess Command Guard ──────────────────────────────────────────
+# ── 3. Child-Process Regression Tests for Guarded Open ────────────────────
+forbidden_regression_paths = [
+    "tools/training/data/sample_dataset.csv",
+    "tools/training/data/ktas_2019_raw.xlsx",
+    "tools/training/data/ed2022_records.txt",
+    "tools/training/data/mimic_iv_ed_sample.json",
+    "evaluation_sources/nhamcs_2022.py",
+    "tools/training/data/ed_admission_cohort.csv",
+    "data/nhamcs/survey_2022.csv",
+    "evaluation_sources/iran_ed.py",
+]
+for p in forbidden_regression_paths:
+    try:
+        open(p, "r")
+        raise AssertionError(f"GUARD BYPASS: open('{p}') did not raise PermissionError!")
+    except PermissionError:
+        pass  # Expected: successfully blocked
+
+# ── 4. Subprocess Command Guard ──────────────────────────────────────────
 _orig_subprocess_run = subprocess.run
 FORBIDDEN_CMD_FLAGS = (
     "--gate-3a-scoring-authorized",
@@ -447,7 +471,7 @@ def guarded_subprocess_run(cmd, *args, **kwargs):
 
 subprocess.run = guarded_subprocess_run
 
-# ── 4. Load Study Runner & Execute ───────────────────────────────────────
+# ── 5. Load Study Runner & Execute ───────────────────────────────────────
 import study_safety_remediation as sr
 
 # Verify no forbidden modules in sys.modules
