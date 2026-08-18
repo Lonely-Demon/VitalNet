@@ -245,7 +245,7 @@ def generate_synthetic_study_cohort(n: int = 1000, seed: int = 42) -> List[Dict[
             syms = []
             no_danger_declared = False
 
-        chief_complaint = "Fever and body pain" if syms else ("Well check / Routine" if scr_state == "explicit_negative_screen" else "")
+        chief_complaint = "Fever and body pain" if syms else ("General wellness evaluation" if scr_state == "explicit_negative_screen" else "")
 
         # Missingness on vitals (controlled for testing strata)
         # 75% complete 5 vitals, 15% 1 vital missing, 7% 2 vitals missing, 3% 3+ vitals missing
@@ -316,14 +316,16 @@ def evaluate_candidate_policy(patient: Dict[str, Any]) -> Dict[str, Any]:
     Precedence Hierarchy:
     1. Demographic Fail-Closed: Missing age or sex -> INSUFFICIENT_INFORMATION_FOR_CDS (severe_missingness).
     2. Severe Vital Sparsity: >=2 missing canonical vitals -> INSUFFICIENT_INFORMATION_FOR_CDS (severe_missingness).
-    3. Critical Single Vital Missingness: Unmeasured SpO2 or SBP -> INSUFFICIENT_INFORMATION_FOR_CDS (critical_vital_unmeasured).
-    4. Symptom Screening Context:
-       - unknown_or_not_asked / declined_or_unavailable (or empty symptoms without explicit negative declaration)
-         -> INSUFFICIENT_INFORMATION_FOR_CDS (missing_symptom_confirmation).
-       - explicit_negative_screen -> allows standard tier evaluation.
+    3. Critical Single Vital Missingness: Exactly one missing SpO2 or SBP -> INSUFFICIENT_INFORMATION_FOR_CDS (critical_vital_unmeasured).
+       (Note: Exactly one missing temperature, heart rate, or DBP is not critical vital missingness and proceeds to the symptom gate).
+    4. Symptom Screening Context & Extreme Vitals Preservation:
+       - unknown_or_not_asked / declined_or_unavailable (or empty symptoms without explicit negative declaration):
+         -> INSUFFICIENT_INFORMATION_FOR_CDS. If extreme vitals are present, records reason
+            missing_symptom_confirmation_with_extreme_vitals to preserve the severe vital signal.
+       - explicit_negative_screen -> allows standard tier evaluation if vitals are complete.
        - positive_symptom -> allows standard tier evaluation with safety rules.
     5. Deterministic Safety Rules & NEWS2 Floor:
-       - Extreme vital derangement -> EMERGENCY override.
+       - Extreme vital derangement or critical symptom -> EMERGENCY override.
        - NEWS2 single concerning vital -> minimum URGENT floor.
     6. Rule-Model Disagreement:
        - If deterministic rule floor > ML predicted tier -> flag rule_model_disagreement, apply floor.
@@ -331,12 +333,26 @@ def evaluate_candidate_policy(patient: Dict[str, Any]) -> Dict[str, Any]:
     age = patient.get("patient_age")
     sex = patient.get("patient_sex")
 
+    # Check observed vital signals for extreme derangement
+    spo2 = patient.get("spo2")
+    hr = patient.get("heart_rate")
+    sbp = patient.get("bp_systolic")
+    temp = patient.get("temperature")
+
+    has_extreme_vital = (
+        (spo2 is not None and spo2 <= 85) or
+        (hr is not None and (hr < 35 or hr > 170)) or
+        (sbp is not None and (sbp < 70 or sbp > 220)) or
+        (temp is not None and (temp < 33.0 or temp > 41.5))
+    )
+
     # 1. Demographic check
     if age is None or sex not in ("male", "female"):
         return {
             "tier": "INSUFFICIENT_INFORMATION_FOR_CDS",
             "is_indeterminate": True,
             "reason_code": "severe_missingness",
+            "extreme_vital_present": has_extreme_vital,
             "rule_disagreement": False,
             "probabilities": [0.3333, 0.3333, 0.3333],
         }
@@ -350,36 +366,40 @@ def evaluate_candidate_policy(patient: Dict[str, Any]) -> Dict[str, Any]:
             "tier": "INSUFFICIENT_INFORMATION_FOR_CDS",
             "is_indeterminate": True,
             "reason_code": "severe_missingness",
+            "extreme_vital_present": has_extreme_vital,
             "rule_disagreement": False,
             "probabilities": [0.3333, 0.3333, 0.3333],
         }
 
-    # 3. Critical single vital missingness (SpO2 or SBP)
+    # 3. Critical single vital missingness (exactly 1 missing SpO2 or SBP)
     if "spo2" in missing_vitals or "bp_systolic" in missing_vitals:
         return {
             "tier": "INSUFFICIENT_INFORMATION_FOR_CDS",
             "is_indeterminate": True,
             "reason_code": "critical_vital_unmeasured",
+            "extreme_vital_present": has_extreme_vital,
             "rule_disagreement": False,
             "probabilities": [0.3333, 0.3333, 0.3333],
         }
 
-    # 4. Symptom screening state
+    # 4. Symptom screening state & extreme vital preservation
     scr_status = patient.get("_research_symptom_screening_status")
     no_danger_declared = patient.get("_research_no_acute_danger_signs_declared", False)
     symptoms = patient.get("symptoms") or []
+    has_critical_symptom = bool(set(symptoms) & CRITICAL_DANGER_SYMPTOMS)
 
     if scr_status in ("unknown_or_not_asked", "declined_or_unavailable") or (len(symptoms) == 0 and not no_danger_declared):
+        reason = "missing_symptom_confirmation_with_extreme_vitals" if has_extreme_vital else "missing_symptom_confirmation"
         return {
             "tier": "INSUFFICIENT_INFORMATION_FOR_CDS",
             "is_indeterminate": True,
-            "reason_code": "missing_symptom_confirmation",
+            "reason_code": reason,
+            "extreme_vital_present": has_extreme_vital,
             "rule_disagreement": False,
             "probabilities": [0.3333, 0.3333, 0.3333],
         }
 
     # 5. Execute production model & rules on the complete/explicit encounter
-    # Strip research metadata before calling predict_triage
     clean_p = {k: v for k, v in patient.items() if not k.startswith("_research_")}
     res = clf_mod.predict_triage(clean_p)
     ml_tier = res["triage_level"]
@@ -392,19 +412,6 @@ def evaluate_candidate_policy(patient: Dict[str, Any]) -> Dict[str, Any]:
         probs[TIER_INDICES[ml_tier]] = 1.0
 
     # 6. Check deterministic rule floors
-    spo2 = patient.get("spo2")
-    hr = patient.get("heart_rate")
-    sbp = patient.get("bp_systolic")
-    temp = patient.get("temperature")
-
-    has_extreme_vital = (
-        (spo2 is not None and spo2 <= 85) or
-        (hr is not None and (hr < 35 or hr > 170)) or
-        (sbp is not None and (sbp < 70 or sbp > 220)) or
-        (temp is not None and (temp < 33.0 or temp > 41.5))
-    )
-    has_critical_symptom = bool(set(symptoms) & CRITICAL_DANGER_SYMPTOMS)
-
     deterministic_tier = "ROUTINE"
     if has_extreme_vital or has_critical_symptom:
         deterministic_tier = "EMERGENCY"
@@ -427,6 +434,7 @@ def evaluate_candidate_policy(patient: Dict[str, Any]) -> Dict[str, Any]:
         "tier": final_tier,
         "is_indeterminate": False,
         "reason_code": "rule_model_disagreement" if rule_disagreement else "standard_tiered",
+        "extreme_vital_present": has_extreme_vital,
         "rule_disagreement": rule_disagreement,
         "probabilities": probs,
     }
@@ -494,6 +502,7 @@ def evaluate_study_arm(
                 "tier": t_str,
                 "is_indeterminate": False,
                 "reason_code": "standard_tiered",
+                "extreme_vital_present": False,
                 "rule_disagreement": False,
                 "probabilities": probs,
             })
@@ -515,6 +524,7 @@ def evaluate_study_arm(
                 "tier": t_str,
                 "is_indeterminate": False,
                 "reason_code": "standard_tiered",
+                "extreme_vital_present": False,
                 "rule_disagreement": False,
                 "probabilities": probs,
             })
@@ -531,6 +541,7 @@ def evaluate_study_arm(
     # Escalation reason codes
     reason_counts: Dict[str, int] = {
         "missing_symptom_confirmation": 0,
+        "missing_symptom_confirmation_with_extreme_vitals": 0,
         "critical_vital_unmeasured": 0,
         "severe_missingness": 0,
         "rule_model_disagreement": 0,
@@ -539,6 +550,10 @@ def evaluate_study_arm(
         rc = pred.get("reason_code")
         if rc in reason_counts:
             reason_counts[rc] += 1
+
+    extreme_vitals_flagged = sum(
+        1 for p in predictions if p.get("is_indeterminate") and p.get("extreme_vital_present")
+    )
 
     # Reference distribution among escalated cases
     ref_among_escalated: Dict[str, int] = {"ROUTINE": 0, "URGENT": 0, "EMERGENCY": 0}
@@ -611,14 +626,18 @@ def evaluate_study_arm(
             "indeterminate_count": n_indeterminate,
             "indeterminate_rate": round(n_indeterminate / n, 4),
             "escalation_reason_counts": reason_counts,
+            "extreme_vitals_flagged_during_escalation": extreme_vitals_flagged,
             "reference_tier_distribution_among_escalated": ref_among_escalated,
-            "emergency_cases_total": total_emergencies,
+            "total_reference_emergencies": total_emergencies,
             "emergency_cases_escalated": emergencies_escalated,
             "emergency_cases_given_an_ordinary_tier": emergencies_tiered,
         },
         "ordinary_3_tier_safety_metrics": {
             "description": "Standard 3-tier metrics computed strictly among cases receiving an ordinary clinical tier.",
             "tiered_cohort_size": n_tiered,
+            "total_reference_emergencies": total_emergencies,
+            "tiered_reference_emergencies": total_tiered_emergencies,
+            "emergency_cases_escalated": emergencies_escalated,
             "emergency_sensitivity": sens_dict,
             "emergency_miss_count": emergency_miss_count,
             "emergency_miss_rate": emergency_miss_rate,
@@ -631,10 +650,10 @@ def evaluate_study_arm(
             "confusion_matrix_3x3": conf_matrix,
         },
         "operational_diagnostic": {
-            "description": "Operational diagnostic combining tiered emergency recall and emergency escalation rate. Not a clinical safety claim.",
+            "description": "Operational pipeline diagnostic combining tiered emergency recall and emergency escalation rate. Strictly an engineering diagnostic; not emergency sensitivity or a clinical safety claim.",
             "emergency_retention_or_escalation_count": emergencies_safe_or_escalated,
             "emergency_retention_or_escalation_rate": retention_or_escalation_rate,
-            "total_emergencies": total_emergencies,
+            "total_reference_emergencies": total_emergencies,
         },
         "calibration_engineering_diagnostics": {
             "grid": conf_grid,
@@ -777,9 +796,10 @@ def run_safety_remediation_study(n_patients: int = 1000, seed: int = 42) -> Dict
             "candidate_indeterminate_escalation_rate": candidate_indet_rate,
             "candidate_operational_retention_or_escalation_rate": candidate_op_diagnostic,
             "finding": (
-                "Candidate remediation policy eliminates silent emergency under-triage caused by missing "
-                "symptoms or partial vitals by escalating sparse encounters to human review rather than defaulting "
-                "to lower-acuity tiers. Explicit negative screening safely preserves ordinary triage."
+                "In this controlled synthetic cohort, the research candidate policy routed encounters with missing "
+                "symptoms or sparse vitals to a non-triage escalation state rather than assigning lower-acuity tiers. "
+                "This is a simulation finding measuring pipeline routing behavior and does not constitute clinical safety "
+                "evidence, proof of emergency recall recovery, or verification of human escalation efficacy."
             ),
         },
         "non_claims_and_limitations": STUDY_NON_CLAIMS,
@@ -838,6 +858,7 @@ def format_table_report(report: Dict[str, Any]) -> str:
     c_esc = c["non_triage_escalation_summary"]
     lines.append(f"  * Tiered Cases Given Ordinary Tier: {c_esc['tiered_case_count']} ({c_esc['tiered_case_rate']*100:.1f}%)")
     lines.append(f"  * Indeterminate / Escalated Cases:  {c_esc['indeterminate_count']} ({c_esc['indeterminate_rate']*100:.1f}%)")
+    lines.append(f"  * Extreme Vitals Flagged During Escalation: {c_esc.get('extreme_vitals_flagged_during_escalation', 0)}")
     lines.append(f"  * Escalation Reasons: {c_esc['escalation_reason_counts']}")
     lines.append(f"  * Ref Tiers Among Escalated: {c_esc['reference_tier_distribution_among_escalated']}")
     lines.append(f"  * Operational Diagnostic (Retained or Escalated): {c['operational_diagnostic']['emergency_retention_or_escalation_rate']*100:.1f}%")

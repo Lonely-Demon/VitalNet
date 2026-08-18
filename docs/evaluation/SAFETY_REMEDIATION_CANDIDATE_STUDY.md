@@ -92,7 +92,7 @@ The candidate study evaluates three explicitly named arms over identical synthet
 
 ## 5. Candidate Policy Precedence Hierarchy (`candidate_remediation_v1`)
 
-The candidate remediation policy evaluates encounters according to the following strict precedence hierarchy:
+The candidate remediation policy evaluates encounters according to the following strict precedence hierarchy outside the production runtime:
 
 ```
                           [Patient Intake Encounter]
@@ -111,15 +111,17 @@ The candidate remediation policy evaluates encounters according to the following
                                       │ No (0 or 1 missing)
                                       ▼
                      [3. Critical Single Vital Check]
-                     (SpO2 or SBP unmeasured/missing?)
+                     (Exactly 1 missing SpO2 or SBP?)
                                       │
                     Yes ──────► [INSUFFICIENT_INFO] (critical_vital_unmeasured)
-                                      │ No (all 5 vitals present)
+                                      │ No (0 missing, or exactly 1 missing temp/HR/DBP)
                                       ▼
                       [4. Symptom Screening Context]
               (positive_symptom OR explicit_negative_screen?)
                                       │
-                    No ───────► [INSUFFICIENT_INFO] (missing_symptom_confirmation)
+                    No ───────► [INSUFFICIENT_INFO]
+                                (missing_symptom_confirmation_with_extreme_vitals
+                                 if extreme vitals present; else missing_symptom_confirmation)
                                       │ Yes
                                       ▼
                     [5. Deterministic Safety Net & NEWS2]
@@ -137,6 +139,18 @@ The candidate remediation policy evaluates encounters according to the following
                         [Standard Assigned Tier (3-Tier)]
 ```
 
+### 5.1 Vital-Completeness Boundary Specification
+- **$\ge 2$ missing canonical vitals**: Triggers non-triage escalation with reason `severe_missingness`.
+- **Exactly 1 missing SpO2 or SBP**: Triggers non-triage escalation with reason `critical_vital_unmeasured` due to the critical diagnostic sensitivity of oxygenation and perfusion.
+- **Exactly 1 missing temperature, heart rate, or DBP**: Does not trigger immediate vital-sparsity escalation; proceeds to the symptom-state gate (and allows ordinary triage if symptoms are positively reported or explicitly screened negative).
+- *This vital-completeness boundary is an exploratory research candidate policy, not an established clinical rule.*
+
+### 5.2 Preservation of Severe Vital Signals During Escalation
+When an encounter exhibits missing/unknown symptom context alongside extreme observed vitals (e.g. $\text{SpO}_2 \le 85\%$, $\text{SBP} < 70$, $\text{HR} < 35$ or $> 170$, $\text{Temp} < 33.0^\circ\text{C}$ or $> 41.5^\circ\text{C}$):
+- The policy routes the encounter to non-triage escalation (`INSUFFICIENT_INFORMATION_FOR_CDS`) with reason code `missing_symptom_confirmation_with_extreme_vitals` and sets `extreme_vital_present: True`.
+- Severe physiological danger signals are **never silently discarded** or collapsed into unflagged missing-symptom states.
+- *This escalation behavior is a research simulation design choice and is not presented as a clinically accepted workflow.*
+
 ---
 
 ## 6. Non-Triage Scoring Separation & Safety Metrics
@@ -149,20 +163,22 @@ To maintain rigorous statistical and clinical separation:
 - Escalated/indeterminate cases are reported separately:
   - `tiered_case_count` & `tiered_case_rate`
   - `indeterminate_count` & `indeterminate_rate`
-  - `escalation_reason_counts`: Breakdown across `missing_symptom_confirmation`, `critical_vital_unmeasured`, `severe_missingness`, `rule_model_disagreement`.
+  - `extreme_vitals_flagged_during_escalation`: Number of escalated encounters exhibiting extreme vital derangement.
+  - `escalation_reason_counts`: Breakdown across `missing_symptom_confirmation`, `missing_symptom_confirmation_with_extreme_vitals`, `critical_vital_unmeasured`, `severe_missingness`, `rule_model_disagreement`.
   - `reference_tier_distribution_among_escalated`: Ground-truth distribution of escalated cases.
-  - `emergency_cases_escalated` vs. `emergency_cases_given_an_ordinary_tier`.
+  - `total_reference_emergencies`, `tiered_reference_emergencies`, and `emergency_cases_escalated`.
 
 ### 6.2 Primary Ordinary 3-Tier Metrics (Among Tiered Cases)
-1. **EMERGENCY Sensitivity (Tiered Cases)**: Exact Wilson 95% score confidence intervals.
-2. **EMERGENCY Miss Count & Miss Rate**: Proportion of tiered emergencies under-triaged.
-3. **Critical Two-Tier Drop Rate (`EMERGENCY` $\to$ `ROUTINE`)**: Catastrophic under-triage rate.
-4. **Overall Under-Triage & Over-Triage Rates**: Encounters where predicted tier diverges from reference tier.
+1. **EMERGENCY Sensitivity (Tiered Cases)**: Exact Wilson 95% score confidence intervals computed on tiered reference emergencies.
+2. **EMERGENCY Miss Count & Miss Rate**: Proportion of tiered reference emergencies under-triaged (excluding escalated emergencies).
+3. **Critical Two-Tier Drop Rate (`EMERGENCY` $\to$ `ROUTINE`)**: Catastrophic under-triage rate among tiered reference emergencies.
+4. **Overall Under-Triage & Over-Triage Rates**: Encounters where predicted tier diverges from reference tier among tiered cases.
+5. **Denominator Integrity**: `total_reference_emergencies = tiered_reference_emergencies + emergency_cases_escalated`.
 
 ### 6.3 Combined Operational Diagnostic
 - **Emergency Retention or Escalation Rate**:
   $$\text{Operational Coverage} = \frac{\text{Tiered EMERGENCY Predictions} + \text{Escalated True EMERGENCY Encounters}}{\text{Total Reference EMERGENCY Encounters}}$$
-  *Explicitly designated as an operational diagnostic for pipeline evaluation, not a clinical efficacy claim.*
+  *Strictly designated as an exploratory operational pipeline diagnostic; never to be interpreted as emergency sensitivity, clinical efficacy, or clinical safety.*
 
 ### 6.4 Calibration Engineering Diagnostics (Pre-Registered Grid)
 - Proportion of tiered predictions falling below confidence thresholds $\max P(\text{tier}) \in \{0.50, 0.60, 0.70, 0.80\}$.
