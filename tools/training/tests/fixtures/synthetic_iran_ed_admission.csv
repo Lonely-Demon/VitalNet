@@ -1,0 +1,9 @@
+triage_code,admission_status,ward_type
+IRAN_001,admitted,ICU
+IRAN_002,admitted,Cardiology
+IRAN_003,discharged,Observation
+IRAN_006,admitted,Internal_Medicine
+IRAN_008,admitted,ICU
+IRAN_011,admitted,Emergency_Ward
+IRAN_999,admitted,Surgery
+IRAN_888,discharged,Outpatient

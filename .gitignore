@@ -10,3 +10,9 @@ vitalnet.db
 test-results/
 playwright-report/
 blob-report/
+
+# Evaluation datasets and outputs (strict data boundary isolation)
+tools/training/data/**
+!tools/training/data/.gitkeep
+tools/training/outputs/**
+!tools/training/outputs/.gitkeep

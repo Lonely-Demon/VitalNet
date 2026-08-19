@@ -1,12 +1,12 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import NavBar from '../components/NavBar'
-import AdminUsers from '../components/admin/AdminUsers'
-import AdminFacilities from '../components/admin/AdminFacilities'
-import AdminStats from '../components/admin/AdminStats'
-import AdminAuditLog from '../components/admin/AdminAuditLog'
 import AnalyticsDashboard from '../components/AnalyticsDashboard'
-import OutbreakSignals from '../components/OutbreakSignals'
-import ProtocolAssistant from '../components/ProtocolAssistant'
+import TabLoadingFallback from '../components/TabLoadingFallback'
+
+const OutbreakSignals = lazy(() => import('../components/OutbreakSignals'))
+const ProtocolAssistant = lazy(() => import('../components/ProtocolAssistant'))
+const AdminUsers = lazy(() => import('../components/admin/AdminUsers'))
+const AdminFacilities = lazy(() => import('../components/admin/AdminFacilities'))
 
 const TABS = [
   { id: 'analytics',  label: 'Analytics' },
@@ -23,11 +23,13 @@ export default function AdminPanel() {
     <div className="min-h-screen bg-bg">
       <NavBar tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
       <main className="max-w-5xl mx-auto px-4 py-6">
-        {activeTab === 'analytics'  && <AnalyticsDashboard />}
-        {activeTab === 'outbreak'   && <OutbreakSignals />}
-        {activeTab === 'protocol'   && <ProtocolAssistant canCurate />}
-        {activeTab === 'users'      && <AdminUsers />}
-        {activeTab === 'facilities' && <AdminFacilities />}
+        <Suspense fallback={<TabLoadingFallback />}>
+          {activeTab === 'analytics'  && <AnalyticsDashboard />}
+          {activeTab === 'outbreak'   && <OutbreakSignals />}
+          {activeTab === 'protocol'   && <ProtocolAssistant canCurate />}
+          {activeTab === 'users'      && <AdminUsers />}
+          {activeTab === 'facilities' && <AdminFacilities />}
+        </Suspense>
       </main>
     </div>
   )

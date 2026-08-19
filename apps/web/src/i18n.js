@@ -9,6 +9,7 @@ import { initReactI18next } from 'react-i18next'
 import en from './locales/en.json'
 import hi from './locales/hi.json'
 import ta from './locales/ta.json'
+import localeReviewManifest from './locales/localeReviewManifest.json'
 
 const LANGUAGE_KEY = 'vn_language'
 
@@ -34,4 +35,5 @@ i18n.on('languageChanged', (lng) => {
   if (typeof document !== 'undefined') document.documentElement.lang = lng
 })
 
+export { localeReviewManifest }
 export default i18n
