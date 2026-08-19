@@ -1,13 +1,15 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { Check } from 'lucide-react'
 import NavBar from '../components/NavBar'
 import IntakeForm from '../pages/IntakeForm'
 import OfflineBanner from '../components/OfflineBanner'
-import ProtocolAssistant from '../components/ProtocolAssistant'
+import TabLoadingFallback from '../components/TabLoadingFallback'
 import { getMySubmissions, processQueue } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
 import { useAuth } from '../store/authStore'
 import { useRealtimeCases } from '../hooks/useRealtimeCases'
+
+const ProtocolAssistant = lazy(() => import('../components/ProtocolAssistant'))
 
 const TABS = [
   { id: 'new',      label: 'New Case' },
@@ -156,7 +158,11 @@ export default function ASHAPanel() {
           </div>
         )}
 
-        {activeTab === 'protocol' && <ProtocolAssistant canCurate={false} />}
+        {activeTab === 'protocol' && (
+          <Suspense fallback={<TabLoadingFallback />}>
+            <ProtocolAssistant canCurate={false} />
+          </Suspense>
+        )}
       </main>
     </div>
   )
