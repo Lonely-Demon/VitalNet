@@ -74,6 +74,35 @@ test.describe('IntakeForm payload serialization & clinical-core validation', () 
     }
   })
 
+  test('Scenario 4: paediatric fields serialize as numbers and pass the additive contract', () => {
+    const payload = serializeIntakePayload(
+      { ...BASE_FORM, patient_age: '1', age_months: '8', muac_mm: '115' },
+      '2345-6789',
+      '2026-08-14T10:00:00.000Z',
+    )
+
+    expect(payload.age_months).toBe(8)
+    expect(payload.muac_mm).toBe(115)
+    const validation = validateIntakeForm(payload)
+    expect(validation.success).toBe(true)
+  })
+
+  test('Scenario 5: paediatric fields reject age and eligibility mismatches', () => {
+    const ageMismatch = serializeIntakePayload(
+      { ...BASE_FORM, patient_age: '2', age_months: '1' },
+      '2345-6789',
+      '2026-08-14T10:00:00.000Z',
+    )
+    const muacMismatch = serializeIntakePayload(
+      { ...BASE_FORM, patient_age: '5', muac_mm: '110' },
+      '2345-6789',
+      '2026-08-14T10:00:00.000Z',
+    )
+
+    expect(validateIntakeForm(ageMismatch).success).toBe(false)
+    expect(validateIntakeForm(muacMismatch).success).toBe(false)
+  })
+
   test('Scenario 3: human_review_requested=true with blank reason fails validation with review-reason error', () => {
     const payload = serializeIntakePayload(
       { ...BASE_FORM, human_review_requested: true, human_review_reason: '' },

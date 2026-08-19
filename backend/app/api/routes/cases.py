@@ -21,6 +21,7 @@ from app.ml.classifier import predict_triage
 from app.services.llm import generate_briefing, generate_patient_summary
 from app.services.push import push_emergency_alert
 from app.utils.case_queue import build_cases_cursor_filter
+from app.utils.paediatric import build_paediatric_advisory
 
 logger = logging.getLogger("vitalnet")
 
@@ -203,6 +204,10 @@ async def submit_case(
             db, form.patient_key, triage_result["triage_level"]
         )
 
+        paediatric_advisory = build_paediatric_advisory(
+            {"patient_age": form.patient_age, "age_months": form.age_months, "muac_mm": form.muac_mm},
+            enabled=settings.paediatric_advisory_enabled,
+        )
         record = {
             "client_id": str(form.client_id or uuid_lib.uuid4()),
             "submitted_by": user["sub"],
@@ -218,6 +223,12 @@ async def submit_case(
             "temperature": float(form.temperature)
             if form.temperature is not None
             else None,
+            # Governance-gated paediatric capture. These fields are persisted
+            # for review/research only and are intentionally absent from the
+            # classifier and briefing inputs above.
+            "age_months": form.age_months,
+            "muac_mm": form.muac_mm,
+            "paediatric_advisory": paediatric_advisory,
             "is_pregnant": form.is_pregnant,
             "chief_complaint": form_data.get("chief_complaint", form.chief_complaint),
             "complaint_duration": form.complaint_duration,
@@ -283,7 +294,12 @@ async def submit_case(
             resource_id=response.get("id") if isinstance(response, dict) else None,
             facility_id=facility_id,
             ip_address=get_client_ip(request),
-            details={"created_offline": bool(form.created_offline), "needs_review": bool(record.get("needs_review"))},
+            details={
+                "created_offline": bool(form.created_offline),
+                "needs_review": bool(record.get("needs_review")),
+                "paediatric_capture": bool(form.age_months is not None or form.muac_mm is not None),
+                "paediatric_advisory_status": paediatric_advisory.get("status"),
+            },
         )
 
         # Genuinely new submission (not a retried duplicate) — record the

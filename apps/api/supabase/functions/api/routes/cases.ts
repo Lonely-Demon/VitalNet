@@ -29,6 +29,7 @@ import {
 import { generateBriefing, generatePatientSummary } from "../_shared/llm.ts";
 import { pushEmergencyAlert } from "../_shared/webpush.ts";
 import { FEATURE_NAMES, TRIAGE_TREES } from "../_shared/model.ts";
+import { buildPaediatricAdvisory } from "../_shared/paediatric.ts";
 import type { AppEnv } from "../_shared/types.ts";
 
 export const cases = new Hono<AppEnv>();
@@ -214,6 +215,10 @@ cases.post(
         result.tier,
       );
 
+      const paediatricAdvisory = buildPaediatricAdvisory(
+        { patient_age: form.patient_age, age_months: form.age_months, muac_mm: form.muac_mm },
+        Deno.env.get("PAEDIATRIC_ADVISORY_ENABLED") === "true",
+      );
       const record = {
         client_id: form.client_id ?? crypto.randomUUID(),
         submitted_by: user.sub,
@@ -227,6 +232,11 @@ cases.post(
         spo2: form.spo2 ?? null,
         heart_rate: form.heart_rate ?? null,
         temperature: form.temperature ?? null,
+        // Governance-gated paediatric capture; intentionally excluded from
+        // the rules-first triage and briefing payloads above.
+        age_months: form.age_months ?? null,
+        muac_mm: form.muac_mm ?? null,
+        paediatric_advisory: paediatricAdvisory,
         is_pregnant: form.is_pregnant ?? null,
         chief_complaint: chiefComplaint,
         complaint_duration: form.complaint_duration,
