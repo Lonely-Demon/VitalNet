@@ -1,6 +1,6 @@
 # VitalNet Triage Classifier — Model Card
 
-_Model version: 3.0.0. This card documents what the model is, how it was built,
+_Model version: 3.1.0. This card documents what the model is, how it was built,
 what its metrics do and do not mean, and its limitations. Read it before relying
 on, extending, or citing the model. For the architecture and training rationale,
 see `README.md` in this directory; for regeneration, see
