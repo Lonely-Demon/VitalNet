@@ -73,6 +73,14 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   - `bp_systolic` (30-300), `bp_diastolic` (10-200, must be < systolic if
     both given), `spo2` (50-100), `heart_rate` (10-250), `temperature`
     (25.0-45.0°C) — all optional.
+  - `age_months` (0-23) is optional and valid only when `patient_age` is under
+    2 years. `muac_mm` (50-300) is optional and valid only for children under
+    5 years. Both are additive governance-gated capture fields and are not
+    consumed by the frozen production triage path.
+  - `paediatric_advisory` is persisted as versioned metadata with a
+    default-off gate; when enabled for a research-only study it remains an
+    advisory requiring qualified clinical interpretation and never changes
+    `triage_level` or `needs_review`.
   - `is_pregnant` (bool, optional) — structured pregnancy flag; gates the
     preeclampsia-specific safety-net rule (docs/DECISIONS.md §30). Distinct
     from the free-text pregnancy keyword match `clinical_features.py`

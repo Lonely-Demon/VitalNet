@@ -80,6 +80,11 @@ export const intakeFormSchema = z
       "Temperature (°C) must be ≤ 45",
     ).nullish(),
 
+    // Governance-gated paediatric capture. These fields are persisted for
+    // research/review only and are intentionally excluded from triage inputs.
+    age_months: z.number().int().min(0, "Age in months must be ≥ 0").max(23, "Age in months must be ≤ 23").nullish(),
+    muac_mm: z.number().int().min(50, "MUAC must be ≥ 50 mm").max(300, "MUAC must be ≤ 300 mm").nullish(),
+
     // Structured pregnancy flag — feeds the preeclampsia rule (rules.ts).
     // Deliberately a real field rather than relying on free-text keyword
     // matching, which remains a soft ML feature signal only (features.ts).
@@ -124,6 +129,20 @@ export const intakeFormSchema = z
         code: z.ZodIssueCode.custom,
         message: "Diastolic BP must be lower than systolic BP",
         path: ["bp_diastolic"],
+      });
+    }
+    if (form.age_months != null && form.patient_age >= 2) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Age in months is only valid when patient age is under 2 years",
+        path: ["age_months"],
+      });
+    }
+    if (form.muac_mm != null && form.patient_age > 4) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "MUAC is only captured for children under 5 years",
+        path: ["muac_mm"],
       });
     }
     if (form.human_review_requested && !form.human_review_reason?.trim()) {
