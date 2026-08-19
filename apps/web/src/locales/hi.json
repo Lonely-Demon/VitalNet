@@ -24,6 +24,8 @@
       "location": "Location / Village *",
       "patientName": "Patient Name *",
       "patientAge": "Age (years) *",
+      "ageMonths": "Age (months, if under 2 years)",
+      "muacMm": "MUAC (mm, if under 5 years)",
       "patientSex": "Sex *",
       "chiefComplaint": "Primary Complaint *",
       "customComplaint": "Please specify the complaint *",
@@ -55,7 +57,9 @@
       "knownConditions": "e.g. diabetes, hypertension",
       "currentMedications": "e.g. metformin, amlodipine",
       "reviewReason": "Why does this case need manual review?",
-      "patientKey": "e.g. AB3C-9XYZ"
+      "patientKey": "e.g. AB3C-9XYZ",
+      "ageMonths": "e.g. 8",
+      "muacMm": "e.g. 115"
     },
     "sexOptions": {
       "male": "male",
@@ -166,7 +170,8 @@
       "failed": "Voice input failed — please type instead"
     },
     "hints": {
-      "patientKey": "Leave blank for a new patient — a code will be generated after submission so staff can recognize them next visit."
+      "patientKey": "Leave blank for a new patient — a code will be generated after submission so staff can recognize them next visit.",
+      "paediatricCapture": "Optional governance-gated capture for research and clinician review. It does not change the triage result."
     }
   }
 }
