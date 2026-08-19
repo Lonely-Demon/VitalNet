@@ -1,0 +1,32 @@
+{
+  "manifestVersion": "locale-review-manifest.v1",
+  "sourceLocale": "en",
+  "sourceVersion": "en-2026-08-19",
+  "wireIdentifiersStable": true,
+  "locales": {
+    "en": {
+      "status": "source",
+      "reviewStatus": "source-of-truth",
+      "translator": "VitalNet product team",
+      "reviewer": null,
+      "reviewedAt": null,
+      "pilotApproved": false
+    },
+    "hi": {
+      "status": "draft-placeholder",
+      "reviewStatus": "requires-qualified-medical-language-review",
+      "translator": null,
+      "reviewer": null,
+      "reviewedAt": null,
+      "pilotApproved": false
+    },
+    "ta": {
+      "status": "draft-placeholder",
+      "reviewStatus": "requires-qualified-medical-language-review",
+      "translator": null,
+      "reviewer": null,
+      "reviewedAt": null,
+      "pilotApproved": false
+    }
+  }
+}
