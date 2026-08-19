@@ -1,6 +1,6 @@
 # VitalNet Feature Refinement Execution Plan
 
-**Status:** Active engineering plan on `dev`  
+**Status:** Completed engineering plan on `dev`; implementation merged through PRs #123–#126
 **Scope:** Five roadmap workstreams selected from `FEATURES_ROADMAP.md`  
 **Production model:** Frozen; no retraining, threshold changes, or model-artifact changes permitted
 
@@ -22,7 +22,9 @@ Gestational age (§4.2) is intentionally not included in this five-workstream ex
 
 ## 2. Dependency order
 
-The work will be delivered in separate, reviewable stages rather than as one large untestable change. The first stage is doctor review routing because it consumes existing fields and does not require a schema migration. Cross-visit trends and SBAR then build on existing patient-key and referral contracts. Paediatric safety capture follows only after the data dictionary, safety semantics, and governance-gated behavior are isolated. Localization is implemented as a content and review workflow, not as an uncontrolled machine-translation replacement.
+The work was delivered in separate, reviewable stages rather than as one large untestable change. Doctor review routing was merged first because it consumes existing fields and does not require a schema migration. Cross-visit trends and SBAR then built on existing patient-key and referral contracts. Paediatric safety capture was isolated behind bounded additive fields and default-off advisory behavior. Localization was implemented as a content and review workflow, not as an uncontrolled machine-translation replacement.
+
+Implementation record: PR #123 merged flagged-first doctor queue routing; PR #124 merged bounded cross-visit trends and deterministic SBAR handoff; PR #125 merged governance-gated paediatric capture; and PR #126 merged the localization review manifest and key-parity enforcement. All remain confined to `dev`.
 
 ## 3. Hard boundaries
 
@@ -86,7 +88,7 @@ Each workstream requires focused tests plus cross-feature regression:
 | Paediatric capture | Schema bounds, age-month edge cases, MUAC eligibility boundaries, advisory-only separation, unchanged production predictions |
 | Localization | Stable wire payloads across locales, fallback behavior, string-key completeness, review metadata enforcement, accessibility of translated labels |
 
-The full repository synthetic suite, clinical-core parity suite, frontend build, accessibility checks, bundle checks, and existing security gates remain mandatory before any merge.
+The full repository synthetic suite and backend suite passed after merge (184 training/evaluation tests and 133 backend tests). The focused localization suite passed (2 tests), and the direct Vite production build passed. The browser suite passed 23/25 tests in the sandbox when supplied with local-only placeholder Supabase configuration; the two remaining offline tests require a live or fully mocked submission-flow contract and are recorded as environment/test-harness follow-up rather than attributed to the localization change. Clinical-core parity/build verification remains part of the final closeout record. Existing CI/security gates passed except the documented unrelated `Vercel – vital-net` baseline failure.
 
 ## 6. External gates that engineering cannot close autonomously
 
