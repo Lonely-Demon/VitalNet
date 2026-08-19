@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import NavBar from '../components/NavBar'
 import TeamMetrics from '../components/TeamMetrics'
-import OutbreakSignals from '../components/OutbreakSignals'
-import ProtocolAssistant from '../components/ProtocolAssistant'
-import SupervisorManagement from '../components/supervisor/SupervisorManagement'
+import TabLoadingFallback from '../components/TabLoadingFallback'
+
+const OutbreakSignals = lazy(() => import('../components/OutbreakSignals'))
+const ProtocolAssistant = lazy(() => import('../components/ProtocolAssistant'))
+const SupervisorManagement = lazy(() => import('../components/supervisor/SupervisorManagement'))
 
 const TABS = [
   { id: 'team',       label: 'Team Metrics' },
@@ -19,10 +21,12 @@ export default function SupervisorPanel() {
     <div className="min-h-screen bg-bg">
       <NavBar tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
       <main className="max-w-5xl mx-auto px-4 py-6">
-        {activeTab === 'team'       && <TeamMetrics />}
-        {activeTab === 'outbreak'   && <OutbreakSignals />}
-        {activeTab === 'protocol'   && <ProtocolAssistant canCurate />}
-        {activeTab === 'management' && <SupervisorManagement />}
+        <Suspense fallback={<TabLoadingFallback />}>
+          {activeTab === 'team'       && <TeamMetrics />}
+          {activeTab === 'outbreak'   && <OutbreakSignals />}
+          {activeTab === 'protocol'   && <ProtocolAssistant canCurate />}
+          {activeTab === 'management' && <SupervisorManagement />}
+        </Suspense>
       </main>
     </div>
   )
