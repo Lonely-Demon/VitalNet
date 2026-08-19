@@ -1,0 +1,56 @@
+Agy, VitalNet’s public-data evaluation cycle is now closed. Prepare a design-only safety-remediation PR against `dev`.
+
+Context to preserve:
+- Current dev baseline is the merged evaluation branch. Do not work from `main`, `test`, preproduction, or any deployment branch.
+- The production model and inference path are frozen. Do not retrain, tune, change thresholds, alter classifier weights, edit production rules, or modify API/frontend/deployment/database files.
+- Do not run real-data scoring or model inference. Do not use `--gate-3a-scoring-authorized` or any real dataset path.
+- Do not download, transform, upload, or commit real data. Do not modify or commit files under the gitignored evaluation data/output directories.
+- Open a PR against `dev` only and stop for review. Do not merge or promote.
+
+Create a design-only safety-remediation package that addresses the demonstrated failure mode: emergency under-triage when symptoms and clinical context are missing.
+
+Required deliverables:
+
+1. Add a tracked design document, preferably `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`, containing:
+   - The problem statement and evidence summary from NHAMCS, KTAS, and the synthetic ASHA input-contract study.
+   - A clear distinction between the frozen production baseline and any future candidate model/input contract.
+   - A missing-context policy for absent chief complaint, structured symptoms, observations, and medication fields.
+   - Required, optional, and unavailable ASHA/PHC intake fields.
+   - Explicit behavior for insufficient information; do not silently treat missing context as normal or low risk.
+   - A human-review/escalation pathway for uncertain or high-risk cases.
+   - Candidate remediation options, such as structured symptom capture, “insufficient information” state, conservative escalation, and rules/model disagreement review. These are proposals only; do not implement them.
+   - Pre-registered evaluation arms: frozen baseline, candidate input-contract arm, and vital-only sensitivity arm.
+   - Metrics: emergency sensitivity, emergency missed count/rate, under-triage, two-tier emergency-to-routine drops, subgroup slices, missingness strata, and confidence/guardrail behavior.
+   - A requirement that clinical acceptance thresholds be defined with a qualified clinician/domain reviewer. Do not invent a clinical pass threshold in this PR.
+   - Synthetic-first testing, then separately authorized reruns on already acquired public datasets.
+   - A shadow-deployment requirement before any influence on care.
+   - Explicit non-claims: no clinical validation, no regulatory clearance, no autonomous triage, and no rural/ASHA equivalence.
+
+2. Update `docs/DATA_ACQUISITION_AND_EXTERNAL_VALIDATION.md` so it reflects the completed evaluation cycle:
+   - Keep Iran as Gate 1A inspection-only.
+   - Record NHAMCS Gate 1B’s 14.4% emergency sensitivity and 85.6% proxy-emergency miss rate as a serious safety signal.
+   - Add Korean KTAS 2019 as Gate 3A and link its source card.
+   - Record KTAS primary emergency sensitivity of 25.2% and vital-only sensitivity of 17.9%, with the cohort/site limitation that complete five-vital records are confined to Regional ED.
+   - State that MIMIC-IV-ED Gate 2 is deferred because credentialing was not completed; do not describe it as a completed benchmark.
+   - Remove or correct any language implying NHAMCS maintained high safety recall or that any public-data result constitutes clinical validation.
+   - State that the public-data evaluation cycle is closed and remediation design is now the next phase.
+
+3. Update `docs/EVALUATION_DATA_BOUNDARY.md`:
+   - Add KTAS source-card and adapter paths to the tracked tree.
+   - Add the consolidated closure document to related documents.
+   - Preserve the local-only and no-record-level-output rules.
+   - Make clear that future scoring requires dataset-specific explicit authorization.
+
+4. Add or update a tracked KTAS source card at `docs/evaluation/KTAS_2019_SOURCE_CARD.md` if it is absent. It must document publisher provenance, supplementary S1/S2 links, the 24-header schema, `Patients number per hour` as ignored metadata, `ktas_v1`, both input arms, parser version, 1,267-record cohort, 563 complete-five-vital records, and all non-claims.
+
+5. Do not alter existing historical reports or commit real scoring JSON files. It is acceptable to document their aggregate findings in tracked markdown, but raw/local JSON remains gitignored.
+
+6. Tests and verification:
+   - Run only synthetic/documentation checks; do not run real-data commands.
+   - Run `git diff --check`.
+   - Run the relevant synthetic evaluation tests.
+   - Verify no changes under production model/runtime paths.
+   - Verify no real data, reports, credentials, identifiers, raw complaints, or record-level predictions are in the diff.
+   - Report exact changed files, test commands/results, current dev base, and the explicit statement that no real-data operation or model inference was run.
+
+Stop after opening the PR. Do not merge, deploy, promote, or perform any additional scoring.

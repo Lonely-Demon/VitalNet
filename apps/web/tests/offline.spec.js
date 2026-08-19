@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { mockAuthAndData } from './helpers/mockBackend.js';
 
 test.describe('VitalNet PWA Offline Flow', () => {
   test.beforeEach(async ({ page }) => {
+    await mockAuthAndData(page, { role: 'asha_worker' });
     // Go to the local dev server
     await page.goto('http://localhost:5173/');
     
@@ -14,7 +16,7 @@ test.describe('VitalNet PWA Offline Flow', () => {
     try {
       await emailInput.waitFor({ state: 'visible', timeout: 3000 });
       await emailInput.fill('asha@test.vitalnet');
-      await page.fill('input[type="password"]', 'TestASHA2026!');
+      await page.fill('input[type="password"]', 'whatever-mocked');
       await page.click('button[type="submit"]');
     } catch (e) {
       // Already logged in
@@ -56,6 +58,7 @@ test.describe('VitalNet PWA Offline Flow', () => {
     await page.fill('input[name="location"]', 'Test Village');
     await page.selectOption('select[name="chief_complaint"]', 'Chest pain / tightness');
     await page.selectOption('select[name="complaint_duration"]', '1–6 hours');
+    await page.check('input[name="consent_captured"]');
     
     // Submit the form
     await page.click('text=Submit Case');
@@ -79,6 +82,7 @@ test.describe('VitalNet PWA Offline Flow', () => {
     await page.fill('input[name="location"]', 'Test Village');
     await page.selectOption('select[name="chief_complaint"]', 'Fever');
     await page.selectOption('select[name="complaint_duration"]', '1–6 hours');
+    await page.check('input[name="consent_captured"]');
 
     // Enter clinically impossible vitals
     await page.fill('input[name="spo2"]', '150');

@@ -364,30 +364,13 @@ meeting our EMERGENCY response target?" without exporting raw data.
 
 ## Tier 2 — High value, larger effort
 
-### 2.1 Multi-language intake form (i18n) — ✅ INFRASTRUCTURE DONE (translations pending clinician review)
+### 2.1 Multi-language intake form (i18n) — ✅ REVIEW INFRASTRUCTURE DONE (PR #126; translations pending qualified review)
 
-**Status**: The infrastructure is real and working: `react-i18next` +
-`i18next` (added to `package.json`), `frontend/src/i18n.js` (init, persists
-the chosen language to `localStorage` under `vn_language`, updates
-`document.documentElement.lang`), and a language switcher in `NavBar.jsx`
-(English/Hindi/Tamil). `IntakeForm.jsx` — the single component the spec
-itself names as highest-value — is fully wired: every displayed string
-(section titles, field labels, placeholders, complaint/duration/symptom
-options, consent text, error messages) goes through `t()`.
+**Status**: The intake localization infrastructure is implemented and verified. `react-i18next` + `i18next`, `apps/web/src/i18n.js`, the persisted English/Hindi/Tamil language switcher, and the fully wired `IntakeForm.jsx` remain in place. PR #126 adds `localeReviewManifest.json`, exact locale key-parity tests, synchronized paediatric placeholder keys, documentation of approval semantics, and a visible locale-review status indicator in `NavBar.jsx`.
 
-**Deliberately NOT done this pass**: `hi.json` and `ta.json` are byte-for-
-byte English copies of `en.json` (see `frontend/src/locales/README.md`), not
-real translations. The spec itself warns that machine-translating clinical
-terminology without a clinician review pass is a patient-safety issue, not a
-cosmetic one — a mistranslated symptom option could change what a worker
-believes they're recording. Populating real translations is tracked as
-follow-on work requiring that review; it is not a coding task and was
-explicitly excluded from this pass by user decision. The mechanical string
-extraction for the *other* panels/components (`Dashboard.jsx`,
-`AdminPanel.jsx`, etc.) also hasn't been done — `IntakeForm.jsx` is the
-reference implementation demonstrating the pattern works end-to-end;
-extending it to the rest of the app is the same mechanical pattern, not a
-design question.
+Hindi and Tamil remain English placeholder content, not clinical translations. The manifest marks both locales `draft-placeholder` with `pilotApproved: false`; qualified medical-language review is required before pilot use. No machine-translated symptom or complaint labels were introduced. Stable English wire identifiers for complaints, durations, and symptoms remain unchanged regardless of the displayed language.
+
+The mechanical string extraction for other panels/components remains outside this refinement workstream. The current implementation is therefore a safe intake-form localization foundation and review-control mechanism, not a claim of multilingual clinical readiness.
 
 **Wire-format guarantee preserved**: `chief_complaint`'s submitted value and
 every `symptoms[]` id are unchanged regardless of the selected language —
@@ -914,10 +897,14 @@ for `doctor`/`supervisor`/`admin`).
 These emerged from the round-5 ML-and-hardening pass. Several are direct
 follow-ons to the age-aware classifier work (§ ML retrain, DECISIONS §31):
 the model now reasons about paediatric physiology, but the intake form still
-can't *capture* the inputs that make that reasoning precise (age in months,
-gestational age, weight). The rest are high-value, mostly-deterministic,
-offline-first tools that fit the weak-hardware / poor-connectivity target
-without adding ML risk. Each is written implementation-ready; none is built.
+needs governance-controlled capture for inputs that make that reasoning
+precise. The rest are high-value, mostly-deterministic, offline-first tools
+that fit the weak-hardware / poor-connectivity target without adding ML risk.
+The five refinement workstreams covered by the current execution cycle are
+now implemented on `dev` in PRs #123–#126, with paediatric advisory activation
+and translation approval deliberately left as external gates. The original
+specification remains below to distinguish shipped scope from deferred or
+out-of-scope extensions.
 
 Prioritisation note: 4.1, 4.2, and 4.4 are the highest value-to-effort —
 each is small, each sharpens a clinical-safety guarantee the app already
@@ -926,7 +913,9 @@ dependency, no ML retrain, trivially offline). 4.3 and 4.6 are the biggest
 day-to-day utility wins for the health worker. 4.5 and 4.7 build on data
 the app already collects.
 
-### 4.1 Age-in-months entry for infants (< 2 years)
+### 4.1 Age-in-months entry for infants (< 2 years) — ✅ GOVERNANCE-GATED CAPTURE IMPLEMENTED (PR #125)
+
+**Status**: Additive nullable `age_months` capture, bounds validation, cross-field eligibility validation, browser serialization, and database constraints are implemented behind `VITE_ENABLE_PAEDIATRIC_CAPTURE`. The backend paediatric advisory remains default-off (`PAEDIATRIC_ADVISORY_ENABLED=false`), and this workstream does not alter the frozen production classifier or claim that age-months capture is clinically validated. Effective-age model wiring and advisory activation require a separate qualified clinical-governance decision.
 
 **Why**: `patient_age` is an integer year, so every child under 1 is entered
 as `0` and every child under 2 collapses to `0` or `1`. That erases exactly
@@ -1034,7 +1023,9 @@ worked reference values as its test.
 5. **Explicitly out of scope**: adult dosing, IV compatibility, anything
    requiring a real drug database. State this in the module docstring.
 
-### 4.4 Paediatric malnutrition screen (MUAC + weight-for-age z-score)
+### 4.4 Paediatric malnutrition screen (MUAC + weight-for-age z-score) — ✅ GOVERNANCE-GATED CAPTURE IMPLEMENTED (PR #125; advisory activation pending)
+
+**Status**: Additive nullable `muac_mm` capture, bounds validation, paediatric eligibility checks, database constraints, and a default-off WHO-scoped advisory helper are implemented in PR #125. The advisory does not change the triage tier and is disabled by default pending qualified clinical governance. Weight-for-age z-score lookup, clinical activation, and any tier-floor behavior from the original specification remain deferred; the production model is frozen.
 
 **Why**: Severe acute malnutrition is one of the highest-impact,
 most-missed rural paediatric red flags, and it is invisible to a
@@ -1067,7 +1058,9 @@ clinical-safety win for a tiny amount of code, and it is exactly the kind of
    present — pure lookup, offline; specify the table source (WHO Child
    Growth Standards) but leave the ~2 KB LMS asset for a follow-up.
 
-### 4.5 Cross-visit vitals trend sparkline for returning patients
+### 4.5 Cross-visit vitals trend sparkline for returning patients — ✅ IMPLEMENTED (PR #124)
+
+**Status**: A bounded, facility-scoped patient-history response exposes only the five required vital fields and timestamps. `VitalTrendSparkline.jsx` renders dependency-free accessible SVG trends with text alternatives, and `BriefingCard.jsx` lazy-loads history so the initial dashboard path remains light. Deterministic trend utilities and focused Node tests are included. No new clinical inference is performed.
 
 **Why**: The patient continuity code (DECISIONS §21) and the cross-visit
 deterioration flag (§22) already collect a patient's visit history, but the
@@ -1094,7 +1087,9 @@ new data collection**, just visualisation of rows already in `case_records`.
 4. **Tests**: a small component test asserting the SVG path is generated from
    a known series; no clinical-logic test needed (pure visualisation).
 
-### 4.6 Structured SBAR handoff note for referrals
+### 4.6 Structured SBAR handoff note for referrals — ✅ DETERMINISTIC HANDOFF IMPLEMENTED (PR #124)
+
+**Status**: PR #124 adds a deterministic Python SBAR builder, the referral persistence migration, Edge/API parity, a locally editable draft in `ReferralsPanel`, and clipboard copy. The draft is built only from recorded case/referral fields and is designed to avoid invention. Optional LLM polishing from the original specification is not implemented; deterministic text remains the authoritative offline fallback.
 
 **Why**: The referral workflow (§2.3) records *that* a patient was referred,
 but the receiving facility gets no structured clinical handoff — the single
@@ -1128,7 +1123,9 @@ just a status change.
    triage tier in the SBAR always equals the case's tier (the hard-lock
    invariant).
 
-### 4.7 Confidence-and-acuity review routing for the doctor queue
+### 4.7 Confidence-and-acuity review routing for the doctor queue — ✅ IMPLEMENTED (PR #123)
+
+**Status**: PR #123 implements flagged-first ordering across the Python backend and Edge/API queue, with a pure `build_cases_cursor_filter()` utility and focused tests. The cursor carries `needs_review` so keyset pagination remains stable across priority boundaries. This is routing and visibility only; it does not modify model weights, thresholds, or triage decisions.
 
 **Why**: The backend already computes two signals the doctor queue ignores:
 `low_confidence` (model abstention) and `deterioration_alert`. A case that is

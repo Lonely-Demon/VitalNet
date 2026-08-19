@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # limit is enforced globally. See CODEBASE_MAP.md.
     rate_limit_storage_uri: str = ""
 
+    # Paediatric advisory calculations remain disabled until qualified clinical
+    # governance authorizes them. Capture fields are additive and independent.
+    paediatric_advisory_enabled: bool = False
+
     # ── API docs ───────────────────────────────────────────────────────────────
     # Swagger/ReDoc/OpenAPI JSON expose the full request/response schema and
     # every route. Off by default; enable only in dev/staging.

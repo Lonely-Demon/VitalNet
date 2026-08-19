@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { ChevronUp, ChevronDown, ArrowRight, Check, Flag, TriangleAlert } from 'lucide-react'
-import { reviewCase, overrideTriage, recordCaseOutcome, listActiveFacilities, createReferral, getPatientSummary } from '../lib/api'
+import { reviewCase, overrideTriage, recordCaseOutcome, listActiveFacilities, createReferral, getPatientSummary, getCaseHistoryByPatientKey } from '../lib/api'
 import TriageBadge from './TriageBadge'
+import VitalTrendSparkline from './VitalTrendSparkline'
+import { VITAL_TREND_DEFINITIONS } from '../utils/vitalTrend'
 
 const TIERS = ['ROUTINE', 'URGENT', 'EMERGENCY']
 const SUMMARY_LANGUAGES = [
@@ -51,6 +53,9 @@ export default function BriefingCard({ caseData, onReviewed }) {
   const [referralUrgency, setReferralUrgency] = useState(overrideState.triage || caseData.triage_level)
   const [referring, setReferring] = useState(false)
   const [referred, setReferred] = useState(null)   // { facilityName } once created
+  const [history, setHistory] = useState(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState(null)
 
   // briefing is already a JSONB object from Supabase — no JSON.parse needed
   const b = caseData.briefing
@@ -112,6 +117,20 @@ export default function BriefingCard({ caseData, onReviewed }) {
     }
   }
 
+  const handleLoadHistory = async () => {
+    if (!caseData.patient_key || history || historyLoading) return
+    setHistoryLoading(true)
+    setHistoryError(null)
+    try {
+      const result = await getCaseHistoryByPatientKey(caseData.patient_key)
+      setHistory(result.cases || [])
+    } catch (e) {
+      setHistoryError(e.message || 'Could not load vital history.')
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
   const handleOpenReferral = async () => {
     setShowReferral(true)
     if (facilities === null) {
@@ -129,13 +148,17 @@ export default function BriefingCard({ caseData, onReviewed }) {
     if (!referralFacilityId || !referralReason.trim()) return
     setReferring(true)
     try {
-      await createReferral(caseData.id, {
+      const created = await createReferral(caseData.id, {
         receiving_facility_id: referralFacilityId,
         reason: referralReason.trim(),
         urgency: referralUrgency,
       })
       const target = facilities?.find((f) => f.id === referralFacilityId)
-      setReferred({ facilityName: target?.name || 'the receiving facility' })
+      setReferred({
+        facilityName: target?.name || 'the receiving facility',
+        sbarDraft: created.sbar_draft || null,
+        sbarVersion: created.sbar_version || null,
+      })
       setShowReferral(false)
     } catch (e) {
       console.error("Referral failed", e)
@@ -232,6 +255,37 @@ export default function BriefingCard({ caseData, onReviewed }) {
                 within the last 7 days, including this one — consider whether this presentation
                 needs closer follow-up than a single visit would suggest.
               </p>
+            </BriefingSection>
+          )}
+
+          {caseData.patient_key && (
+            <BriefingSection title="Vital trend history">
+              {history === null ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleLoadHistory}
+                    disabled={historyLoading}
+                    className="text-sm text-forest underline cursor-pointer disabled:opacity-60"
+                  >
+                    {historyLoading ? 'Loading history…' : 'Load recent vital trends'}
+                  </button>
+                  {historyError && <p className="text-xs text-emergency mt-2">{historyError}</p>}
+                </div>
+              ) : history.length < 2 ? (
+                <p className="text-sm text-text3">Not enough prior visits with this patient key to show a trend.</p>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-text3">Display-only context from authorized prior visits; it does not change this case’s triage.</p>
+                  {VITAL_TREND_DEFINITIONS.map((definition) => (
+                    <VitalTrendSparkline
+                      key={definition.key}
+                      {...definition}
+                      values={history.map((visit) => visit[definition.key])}
+                    />
+                  ))}
+                </div>
+              )}
             </BriefingSection>
           )}
 
@@ -450,9 +504,20 @@ export default function BriefingCard({ caseData, onReviewed }) {
 
           {/* Inter-facility referral (FEATURES_ROADMAP §2.3) */}
           {referred ? (
-            <p className="text-xs text-forest font-medium inline-flex items-center gap-1">
-              <Check size={13} aria-hidden="true" />Referred to {referred.facilityName}
-            </p>
+            <div className="space-y-2">
+              <p className="text-xs text-forest font-medium inline-flex items-center gap-1">
+                <Check size={13} aria-hidden="true" />Referred to {referred.facilityName}
+              </p>
+              {referred.sbarDraft && (
+                <details className="rounded-lg border border-leaf/40 bg-surface2">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-mono font-bold uppercase tracking-wide text-forest">
+                    SBAR handoff draft {referred.sbarVersion ? `(${referred.sbarVersion})` : ''}
+                  </summary>
+                  <pre className="whitespace-pre-wrap border-t border-leaf/30 p-3 text-xs leading-relaxed text-text2">{referred.sbarDraft}</pre>
+                  <p className="px-3 pb-3 text-[11px] text-text3">Review the draft before communicating it to the receiving team.</p>
+                </details>
+              )}
+            </div>
           ) : (
             showReferral ? (
               <fieldset className="p-3 rounded-lg border border-leaf/40 bg-surface2 space-y-2">

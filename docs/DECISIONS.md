@@ -1947,3 +1947,61 @@ are green.
 - Added middleware-level regression tests in `backend/tests/test_cors_preflight.py` asserting 200 OK, `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, case-insensitive inclusion of `x-event-id`, `authorization`, `content-type`, and denial of untrusted origins.
 - Updated `apps/web/src/lib/connectivity.js` to probe `${apiBase('health')}/api/health`, preserving the 5-second timeout and `cache: 'no-store'` behavior while targeting the configured backend URL.
 
+### 42. MIMIC-IV-ED Gate 2 benchmark architecture and credentialed data governance
+
+**Context**: To conduct VitalNet's first credentialed external benchmark on a large clinical emergency dataset (MIMIC-IV-ED v2.2, ~425k stays from Beth Israel Deaconess Medical Center, Boston, MA) while keeping the production classifier frozen and strictly enforcing local-only data boundaries.
+
+**Decisions**:
+1. **Primary arm strictly triage-time (`mimic_triage_contract_v1`)**:
+   - Ingests triage vitals (`triage.csv`), anchor age (`patients.anchor_age`), and stay-level sex (`edstays.gender`).
+   - Does not claim full unrestricted or full frontline ASHA-contract validation (unmeasured fields like pregnancy, location, endemic exposures, illness duration remain uninvented empty/None placeholders).
+2. **Hard-disabled medication reconciliation arm (`mimic_full_available_context_v1`)**:
+   - `medrecon.charttime` records medication reconciliation entry time, not proven availability at triage time.
+   - Refused by default (`EvaluationRefusedError`), requiring independent temporal-eligibility review and separate authorization (`gate_medrecon_temporal_authorized=True`). Gate M4 authorization alone cannot unlock this arm.
+3. **Prohibited tables and fields constants**:
+   - `PROHIBITED_TABLE_NAMES = ["diagnosis", "pyxis", "vitalsign", "disposition", "admission", "outcomes"]` rejected at adapter instantiation.
+   - `PROHIBITED_FIELD_NAMES = ["hadm_id", "outtime", "disposition", "length_of_stay", "los", "dod", "anchor_year", "anchor_year_group"]` stripped *before* canonical patient record construction and never included in `form_data`, `raw_fields`, or output reports.
+4. **Exact source precedence and version-specific age handling**:
+   - Sex precedence: `edstays.gender` (primary) -> `patients.gender` (fallback if missing) with aggregate `gender_conflict` tracking.
+   - Age precedence: `patients.anchor_age` directly. Preserves MIMIC-IV v2.x integer `91` top-coding for patients $\ge 89$ years without attempting de-identified date reconstruction. Missing age linkages are excluded and tracked (`missing_age_linkage`).
+5. **Vital plausibility filtering & BP inversion handling**:
+   - Temperature converted from °F to °C via `(temp_f - 32.0) * 5/9` with plausible range bounds ($80.0^\circ\text{F} \le \text{temp} \le 110.0^\circ\text{F}$). Readings outside bounds are sanitized to `None` (not silently clipped or imputed) and counted under `temp_out_of_plausible_range`.
+   - Doppler sentinel code `998` sanitized to `None`.
+   - Blood pressure inversion (`sbp <= dbp`) sanitized to `None` and tracked under `invalid_bp_inversion`.
+6. **Isolation of respiratory rate and pain**:
+   - `resprate` and `pain` are isolated from model input (`form_data`) and included solely in aggregate inspection metadata.
+7. **Deterministic allow-list symptom parser (`mimic_symptom_parser_v1`)**:
+   - Regex/keyword parser mapping unstructured chief complaints into the 12 canonical `ALLOWED_SYMPTOMS`.
+   - 100% deterministic, zero external API/LLM calls, strictly sorted outputs.
+   - Local and aggregate-only: raw complaint strings are never logged, emitted in exceptions, or stored in report JSONs.
+8. **Pre-registered cohort policies**:
+   - `all_stays` (primary): evaluates all eligible `stay_id` encounters, auditing repeated `subject_id` visits in metadata.
+   - `first_stay_only` (pre-registered sensitivity): evaluates only the first chronological encounter per `subject_id`, tracking exclusions under `duplicate_subject_excluded`.
+9. **Staged scoring refusal & internal synthetic testing**:
+   - `load_for_evaluation()` refuses evaluation by default (`EvaluationRefusedError`, exit code 2) unless `--gate-m4-authorized` is explicitly provided.
+   - Test harness uses internal `_synthetic_test_mode=True`, strictly bounded to `tests/fixtures/` and rejected if pointed at any non-fixture path.
+10. **Strict zero patient data leakage assertion**:
+    - All JSON reports and console outputs are recursively validated via `assert_zero_patient_leakage()`.
+
+### 43. Public-data evaluation closure and safety-remediation pivot
+**Context**: VitalNet completed its authorized public-data evaluation cycle on the frozen model using Iran ED inspection, NHAMCS 2022 partial-input scoring, a synthetic ASHA input-contract study, and Korean KTAS 2019 Gate 3A scoring. MIMIC-IV-ED credentialing was not completed and no full MIMIC score exists.
+**Decisions**:
+1. **Close the current public-data evaluation cycle** and consolidate the evidence in `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`.
+2. **Record the safety signal without averaging incompatible benchmarks**: NHAMCS emergency sensitivity was 14.4%; KTAS primary emergency sensitivity was 25.2%; KTAS vital-only emergency sensitivity was 17.9%. These are cohort-specific proxy results, not clinical validation.
+3. **Keep the production model frozen**. No retraining, tuning, threshold changes, classifier changes, deployment, or promotion are justified by these results.
+4. **Treat missing symptoms and clinical context as the next safety-remediation target**. The ASHA contract study and KTAS arm comparison show that structured symptom/context availability materially affects emergency sensitivity.
+5. **Defer MIMIC-IV-ED**. Credentialing remains incomplete; no unofficial copy may be used and no full MIMIC benchmark claim may be made.
+6. **Create a design-only safety-remediation gate** before any candidate implementation. The design must define missing-context behavior, required ASHA/PHC intake fields, human escalation, pre-registered safety metrics, subgroup analyses, and a qualified clinical reviewer for acceptance criteria.
+7. **Require synthetic-first comparison against the frozen baseline** for any future candidate. Any real-data rerun requires fresh dataset-specific explicit authorization, and no candidate may reach production or preproduction without clinical review, prospective/shadow evidence, and governance approval.
+**Evidence**: `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`, `docs/evaluation/KTAS_2019_SOURCE_CARD.md`, `docs/VALIDATION_PROTOCOL.md`, and `docs/CLINICAL_RISK_MANAGEMENT.md`.
+
+
+### 44. Roadmap refinement workstreams remain additive, deterministic, and governance-gated
+
+**Context**: The roadmap refinement cycle addressed five high-value gaps without changing the frozen model v3.1.0: doctor review routing, cross-visit vital trends, deterministic referral handoff, paediatric capture, and localization review infrastructure. These features touch clinical workflow and data capture, so a superficially successful implementation must not be mistaken for clinical validation or authorization to activate new advisories.
+
+**Decision**: Merge the five workstreams into `dev` only, through reviewed pull requests, while keeping production inference, model weights, thresholds, rules, APIs outside the approved additive scope, and deployment branches untouched. PR #123 implements flagged-first doctor queue routing with stable `needs_review` keyset pagination. PR #124 implements bounded five-vital history, accessible trend visualization, and deterministic SBAR drafting with a persisted/editable handoff. PR #125 implements nullable, bounded `age_months` and `muac_mm` capture with cross-field validation and a default-off paediatric advisory. PR #126 implements a machine-checkable locale review manifest, exact key-parity enforcement, and visible review-status signaling; Hindi and Tamil remain English placeholders until qualified medical-language review.
+
+The paediatric advisory may not be activated from engineering evidence alone. Any activation, tier-floor behavior, or effective-age model wiring requires a qualified clinical-governance decision. Likewise, localization may not be described as pilot-ready until a qualified reviewer has checked the medical terminology and approved the locale. The deterministic SBAR is authoritative; optional LLM polishing is not part of this cycle. The bounded history and routing features are workflow aids, not clinical validation.
+
+**Consequences**: The roadmap can distinguish implemented engineering foundations from external clinical gates. Future work must preserve the model freeze and must not promote these changes to `test`, `main`, pre-production, Render, Vercel, or Supabase without the separately documented release process. The existing public-data evaluation closure and shadow-evaluation protocol remain evaluation/governance artifacts; they do not establish clinical validity.

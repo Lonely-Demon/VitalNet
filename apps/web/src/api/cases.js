@@ -5,18 +5,21 @@ import { authHeaders } from '@/api/auth'
 import { getWithRetry } from '@/api/retry'
 import { apiBase } from '@/api/base'
 
-export async function getCases({ before_time, before_priority, before_id } = {}) {
+export async function getCases({ before_time, before_priority, before_needs_review, before_id } = {}) {
   const headers = await authHeaders()
   const url = new URL(`${apiBase('cases.list')}/api/cases`)
   if (before_time) url.searchParams.set('before_time', before_time)
   if (before_priority !== undefined && before_priority !== null) {
     url.searchParams.set('before_priority', String(before_priority))
   }
+  if (before_needs_review !== undefined && before_needs_review !== null) {
+    url.searchParams.set('before_needs_review', String(Boolean(before_needs_review)))
+  }
   if (before_id) url.searchParams.set('before_id', before_id)
   url.searchParams.set('limit', '25')
   const res = await getWithRetry(url.toString(), headers)
   if (!res.ok) throw new Error(await res.text())
-  return res.json()   // Returns { cases, hasMore, nextCursor, nextTriagePriority, nextId }
+  return res.json()   // Returns { cases, hasMore, nextCursor, nextTriagePriority, nextNeedsReview, nextId }
 }
 
 export async function reviewCase(caseId) {

@@ -1,15 +1,16 @@
 # VitalNet — Clinical Risk Management File (ISO 14971-aligned)
 
-> **Status: working draft, synthetic-data stage.** This is a structured
+> **Status: working draft, public-proxy evaluation stage.** This is a structured
 > hazard analysis for VitalNet's ML triage layer, written in the shape ISO
 > 14971 (application of risk management to medical devices) expects. It is
-> **not** a certified risk management file: several residual-risk cells are
-> honestly marked *UNQUANTIFIED* because they cannot be quantified without
-> real-world outcome data (see `backend/app/ml/MODEL_CARD.md`,
-> `docs/CLINICAL_GOVERNANCE.md`). Its purpose is to make VitalNet's safety
-> case legible and auditable — the artifact a clinical reviewer or a CDSCO
-> classification exercise would start from — and to be *ready to be filled in*
-> the moment real data exists.
+> **not** a certified risk management file: public datasets now quantify serious
+> proxy under-triage signals, while clinician-adjudicated outcomes, prospective
+> evidence, and rural/ASHA equivalence remain unavailable. Several residual-risk
+> cells therefore remain *UNQUANTIFIED* (see
+> `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`,
+> `backend/app/ml/MODEL_CARD.md`, and `docs/CLINICAL_GOVERNANCE.md`). Its
+> purpose is to make VitalNet's safety case legible and auditable — the artifact
+> a clinical reviewer or a CDSCO classification exercise would start from.
 >
 > **Updated for the Round 6 rebuild** (`docs/DECISIONS.md` §33): VitalNet's
 > triage logic moved to a TypeScript monorepo (`packages/clinical-core`),
@@ -148,6 +149,12 @@ validated justification. That is the argument for `rules_first` +
 `needs_review` folding (§H1 below), now implemented and pending clinician
 sign-off.
 
+### 3d. Public-data evaluation evidence
+
+The completed public-data cycle provides real-encounter proxy evidence but does not close the clinical outcome-validation gap. NHAMCS 2022 produced 14.4% `EMERGENCY` sensitivity under the vital-only partial-input contract. Korean KTAS 2019 produced 25.2% `EMERGENCY` sensitivity in the deterministic symptom arm and 17.9% in the vital-only arm. The KTAS primary arm missed 74.8% of proxy-emergency encounters; the vital-only arm missed 82.1%.
+
+These results strengthen, rather than weaken, the case for treating missing symptoms/context as a safety-critical input-contract problem. They do not establish deployment likelihood, clinical harm rates, or an acceptable clinical threshold. The full evidence package and limitations are recorded in `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`.
+
 ## 4. Hazard analysis table
 
 Mitigations are cited to source so the safety case is traceable. Residual
@@ -156,7 +163,7 @@ risk assumes the mitigations are in place and working.
 | # | Hazard | Cause(s) | Harm (Sev) | Pre-mit. likelihood | Mitigations (traced) | Residual |
 |---|---|---|---|---|---|---|
 | H1 | **Under-triage of a true emergency** (EMERGENCY→URGENT/ROUTINE) | Model error; the *rule itself* is wrong for a real presentation; out-of-distribution case | S4 | Occasional | Deterministic safety net + NEWS2 floor (`backend/app/ml/classifier.py`, still live); EMERGENCY-weighted class weights; mandatory doctor review; `low_confidence` abstention. **New, implemented, not yet live:** `rules_first` mode makes the rules engine unconditionally authoritative and folds any model/rules disagreement into `needs_review` (`apps/api/.../_shared/cases.ts::computeNeedsReview`, tested) — this eliminates under-triage-below-rule by construction once shipped | **S4 / UNQUANTIFIED** today (guardrails catch the unambiguous subset only); **improves to a stronger, tested mitigation once `rules_first` ships** — still gated on real-world validation and clinician sign-off, so still blocks unsupervised deployment |
-| H2 | **Synthetic-data validity gap** — real performance ≠ synthetic metrics | Model and rules engine both learned/encode a self-authored heuristic; no real patients seen either way | S4 | Probable (that real ≠ synthetic) | Honest model card; metrics never claimed as real-world; outcome-feedback loop scaffolding | **S4 / UNQUANTIFIED** — the dominant open risk, **unaffected by the language/architecture migration**; only real data closes it |
+| H2 | **Clinical-outcome validity gap** — proxy performance ≠ clinical safety | Public benchmark labels are proxies (NHAMCS immediacy and KTAS acuity), not clinician-adjudicated outcomes or rural PHC outcomes | S4 | Probable (proxy target differs from intended use) | Public-data closure report; explicit non-claims; outcome-feedback loop scaffolding; clinical collaborator and prospective validation gates | **S4 / PARTIALLY QUANTIFIED** — serious proxy under-triage is now measured, but clinical outcome risk, rural equivalence, and acceptable thresholds remain unquantified; **unaffected by the language/architecture migration** |
 | H3 | **Automation bias** — reviewer rubber-stamps a confident ROUTINE + fluent LLM briefing | Persuasive SHAP/rules-citation prose + LLM briefing; time pressure; over-trust | S4 | Occasional | Fixed non-removable disclaimer; `needs_review` surfacing; triage tier shown with provenance (now with citable rule IDs, e.g. `aggregate_score_7plus`, once `rules_first` ships — arguably easier to trust uncritically than SHAP prose, which cuts both ways) | **S3–S4 / UNQUANTIFIED** — human-factors validation not yet done |
 | H4 | **Fragile free-text features** — negation-blind keyword matching | `clinical_features.py::_map_complaint_to_risk` / comorbidity substring matching. **Confirmed carried over unchanged** into `packages/clinical-core/src/features.ts` (`.includes(term)`, no negation handling) — the migration was a faithful port, not a rewrite, so this pre-existing issue moved codebases without being fixed | S3 | Probable | Model/rules are primarily vitals/structured-symptom driven; free-text is a minor feature | **S2–S3 / Occasional** — still open, still fixable, now in TS instead of Python |
 | H5 | **Inequity / bias** — geography baked into individual triage | `_geographic_disease_risk` / `_healthcare_access_score` apply a risk multiplier from a location *string*. **Confirmed carried over unchanged** into `features.ts` (`ruralTerms`/`geographicRisk`/`healthcareAccessibility`, same logic) | S3 | Occasional | Small feature weight; documented | **S2–S3 / UNQUANTIFIED** — still open, still carried forward verbatim by the port |
@@ -172,9 +179,10 @@ risk assumes the mitigations are in place and working.
 
 At the current stage the **benefit** (prioritisation support for an
 over-stretched ASHA/PHC workflow, with deterministic emergency guardrails) is
-real, but the **residual S4 hazards H1–H3 and H6 are UNQUANTIFIED**. Under the
-acceptability rule in §2, that means: **acceptable as a supervised
-decision-support prototype with a human reviewing every case; NOT acceptable
+provisional, and the **residual S4 hazards H1, H3, and H6 remain UNQUANTIFIED
+while H2 is only partially quantified by proxy data**. Under the acceptability
+rule in §2, that means: **acceptable as a supervised decision-support prototype
+with a human reviewing every case; NOT acceptable
 as an autonomous or unsupervised real-patient device.** The gate to change
 that verdict is real-world evidence, per `docs/VALIDATION_PROTOCOL.md` — and,
 separately, `docs/CLINICAL_REVIEW.md`'s clinician sign-off before `rules_first`

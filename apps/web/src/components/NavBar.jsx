@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LogOut, Menu, X } from 'lucide-react'
 import { useAuth } from '../store/authStore'
+import { localeReviewManifest } from '../i18n'
 
 const ROLE_LABELS = {
   asha_worker: 'ASHA Worker',
@@ -26,6 +27,8 @@ export default function NavBar({ tabs = [], activeTab, onTabChange }) {
   const menuButtonRef = useRef(null)
 
   const activeTabObj = tabs.find(t => t.id === activeTab) || tabs[0]
+  const localeMeta = localeReviewManifest.locales[i18n.language] || localeReviewManifest.locales.en
+  const localeReviewLabel = localeMeta.pilotApproved ? 'Reviewed' : localeMeta.status === 'source' ? 'Source' : 'Draft — review needed'
 
   useEffect(() => {
     function handleKeyDown(e) {
@@ -81,6 +84,13 @@ export default function NavBar({ tabs = [], activeTab, onTabChange }) {
               <option key={lng} value={lng}>{t(`common.languages.${lng}`)}</option>
             ))}
           </select>
+          <span
+            className="text-[10px] font-mono text-text3 border border-leaf/40 rounded-pill px-2 py-1"
+            title={localeMeta.reviewStatus}
+            aria-label={`Language review status: ${localeReviewLabel}`}
+          >
+            {localeReviewLabel}
+          </span>
           <span className="text-sm text-text2 font-body">
             {profile?.full_name || profile?.id?.slice(0, 8)}
           </span>
@@ -174,6 +184,9 @@ export default function NavBar({ tabs = [], activeTab, onTabChange }) {
                   <option key={lng} value={lng}>{t(`common.languages.${lng}`)}</option>
                 ))}
               </select>
+              <span className="text-[10px] font-mono text-text3" title={localeMeta.reviewStatus}>
+                {localeReviewLabel}
+              </span>
             </div>
 
             <button

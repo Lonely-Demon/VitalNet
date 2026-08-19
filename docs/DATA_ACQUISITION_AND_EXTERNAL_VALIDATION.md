@@ -1,140 +1,167 @@
-# VitalNet — Data Acquisition & External Validation Strategy
+# VitalNet — Data Acquisition & External Validation Framework
 
 > **The honest answer to "can we scrape data to get closer to clinically
 > safe?"** Short version: **indiscriminate web scraping — no** (it is illegal
-> for patient data, and unvalidated data makes a clinical model *more*
-> dangerous, not safer). **Principled acquisition of specific, real,
-> already-labelled public datasets for _external validation_ — yes, and it is
-> the single highest-probability way to move VitalNet toward clinical safety
-> given that no clinician is available right now.** This document says exactly
-> which datasets, how to use them legally, and how they plug into the
-> evaluation harness.
+> for patient data under DPDP Act 2023 / HIPAA, and unvalidated data makes a
+> clinical model *more* dangerous, not safer). **Principled acquisition of
+> specific, real, already-labelled public datasets for _external validation_ —
+> yes, and it is the single highest-probability way to move VitalNet toward
+> clinical safety given that no clinician is available right now.** This document
+> formalizes VitalNet's multi-gate external validation framework, data boundary
+> rules, and evaluation roadmap.
 >
-> **Updated for the Round 6 rebuild** (`docs/DECISIONS.md` §33): the harness
-> this document points to moved from `backend/scripts/` to
-> `tools/training/`, and now sits alongside `packages/clinical-core` (the
-> new TypeScript home of the rules engine). Everything else in this document
-> — the dataset shortlist, the licensing/legal guardrails, the reframe away
-> from scraping — is architecture-agnostic and unaffected by that migration.
+> **Updated for the completed public-data evaluation cycle**: points to `tools/training/evaluate_on_real.py`
+> and `tools/training/evaluation_sources/`, governed by `docs/EVALUATION_DATA_BOUNDARY.md`.
+> Source cards for specific datasets are tracked under `docs/evaluation/`. The consolidated outcome is recorded in
+> `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`; the safety-remediation design specification is established in
+> `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`; the synthetic candidate study specification is in
+> `docs/evaluation/SAFETY_REMEDIATION_CANDIDATE_STUDY.md`. The 2026 public-dataset portfolio rescreen is recorded in
+> `docs/evaluation/PUBLIC_DATASET_PORTFOLIO_RESCREEN_2026.md`.
 
-Companion to `MODEL_CARD.md`, `CLINICAL_RISK_MANAGEMENT.md`, and
-`VALIDATION_PROTOCOL.md`.
+Companion to `docs/EVALUATION_DATA_BOUNDARY.md`, `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`,
+`docs/evaluation/SAFETY_REMEDIATION_CANDIDATE_STUDY.md`,
+`docs/CLINICAL_RISK_MANAGEMENT.md`, `docs/VALIDATION_PROTOCOL.md`, and `backend/app/ml/MODEL_CARD.md`.
 
-## 1. The reframe: you don't need more data, you need real ground truth
+---
 
-VitalNet already has 36,000 training rows. More synthetic rows change nothing.
-The thing it has *never* had is **a real patient with a real acuity label and a
-real outcome.** That gap is hazard **H2** in the risk file, currently
-`UNQUANTIFIED` — and it is the dominant open risk, unchanged by which language
-the backend is written in.
+## 1. The Core Reframe: Real Ground Truth Over Synthetic Volume
 
-So the goal of acquiring public data is **not** to retrain on more data. It is
-to **externally validate**: run VitalNet's existing engine on real patients and
-measure, for the first time, how its triage compares to real clinician acuity
-and real outcomes. That single act converts H2 from "unknown" to "measured on a
-proxy population" — real, defensible progress you can do *tonight's-plan* style,
-without a clinician.
+VitalNet possesses 36,000 synthetic training rows. Generating more synthetic data changes nothing. The fundamental risk in clinical deployment is hazard **H2** in `docs/CLINICAL_RISK_MANAGEMENT.md` (unquantified external real-patient validation).
 
-Ranked uses of public data, most to least valuable for safety:
+The goal of acquiring public real-world datasets is **not** to retrain the classifier on arbitrary web data. It is to **externally validate**: run VitalNet's deployed triage classifier and deterministic safety guardrails on real patient presentations, measuring empirical discrimination, under-triage rates, and safety net performance against real clinician decisions and outcomes.
 
-1. **External validation set** (highest value) → `tools/training/evaluate_on_real.py`.
-2. **Realistic input distribution** for robustness/drift reference (real vitals
-   distributions, missingness patterns).
-3. **Real training data** (lowest priority, highest risk): only after (1) shows
-   it's warranted, and only with explicit domain-adaptation handling — a US/Korean
-   ED distribution is *not* a rural Indian PHC.
+Ranked hierarchy of public data utility for clinical safety:
+1. **External Validation Benchmark** (Highest Value) → Evaluated offline via `tools/training/evaluate_on_real.py`.
+2. **Realistic Feature & Missingness Distribution Reference** (High Value) → Auditing clinical missingness patterns (e.g., Gate 1A Iran ED inspection).
+3. **Model Retraining** (Lowest Priority, High Risk) → Prohibited until extensive external validation demonstrates clinical necessity, and only with rigorous domain adaptation to avoid overfitting foreign hospital practices.
 
-## 2. What "scraping / reverse-engineering" can and cannot do
+---
 
-| Idea | Verdict | Why |
-|---|---|---|
-| Scrape websites/forums for patient data | **No** | Illegal (privacy law/DPDP), unethical, and unlabelled/unvalidated → injects uncontrolled bias. A clinical model's safety comes from *validated ground truth*, not volume. |
-| Download curated public **research** datasets (PhysioNet/Kaggle/HF) under their licence | **Yes** | These are de-identified, ethically-released, and *labelled by clinicians* — exactly the ground truth you lack. |
-| "Reverse-engineer" open clinical **models** | **Partial** | You can't extract safety from weights. But you *can* run an open triage model as an **external comparator** on the same inputs and measure agreement. Treat it as a second opinion, never as ground truth. |
-| Use published **validated scoring rules** (ESI, KTAS, NEWS2, SATS, WHO ETAT/IMCI) | **Yes — do this** | This is "reverse-engineering clinical knowledge" done right: peer-reviewed, validated distilled rules. Grounds your labels and gives reference thresholds — and, post-Round-6, there is exactly one place to encode that grounding (`packages/clinical-core/src/rules/`), not two. |
+## 2. Multi-Gate Validation Architecture
 
-## 3. The dataset shortlist (concrete, with the catches)
+VitalNet structures external validation into a sequential, multi-gate hierarchy spanning public uncredentialed inspection, public proxy evaluation, credentialed full-input validation, and prospective clinical trials:
 
-| Dataset | What it gives | Access / licence | Population caveat | Schema fit to VitalNet |
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                               VITALNET VALIDATION GATES                                │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ GATE 1A: Iran ED Dataset (BaniHassan et al. 2024, CC BY 4.0 Open Access)              │
+│  - Role: Inspection-only & sparse-input data quality audit                             │
+│  - Status: Implemented in adapter; model scoring strictly refused                      │
+│  - Focus: Auditing severe clinical missingness (91 complete rows / 143k total)         │
+│  - Documentation: docs/evaluation/IRAN_ED_SOURCE_CARD.md                              │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ GATE 1B: CDC NHAMCS 2022 ED Component (CDC Public Use Data)                           │
+│  - Role: Fixed-width partial-input proxy evaluation                                    │
+│  - Status: Implemented (unweighted vital-only proxy triage via nhamcs_immediacy_v1)    │
+│  - Focus: Vital-only triage resilience, unweighted under-triage, guardrail lift        │
+│  - Documentation: docs/evaluation/NHAMCS_2022_SOURCE_CARD.md                           │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ GATE 2: MIMIC-IV-ED v2.2 (PhysioNet Credentialed DUA + CITI Certification)             │
+│  - Role: Credentialed triage-time external benchmark                                  │
+│  - Status: Deferred; credentialing was not completed; no full MIMIC score exists       │
+│  - Focus: Available triage context, allow-list symptom extraction, ESI 1-5 proxy       │
+│  - Documentation: docs/evaluation/MIMIC_IV_ED_SOURCE_CARD.md                           │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ GATE 3A: Korean KTAS 2019 Open ED Acuity Benchmark                                   │
+│  - Role: Open external emergency-acuity benchmark                                     │
+│  - Status: Aggregate inspection and one authorized scoring cycle completed             │
+│  - Focus: KTAS expert mapping, bilingual symptom contract, vital-only sensitivity     │
+│  - Documentation: docs/evaluation/KTAS_2019_SOURCE_CARD.md                             │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ GATE 4: Prospective Rural Indian PHC Cohort (Silent / Shadow Deployment)               │
+│  - Role: Authoritative clinical safety & regulatory validation (CDSCO SaMD)            │
+│  - Status: Blocked on institutional ethics approval & clinical partner onboarding      │
+│  - Focus: ASHA frontline workflow, local epidemiological conditions, true clinical POC │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Dataset Portfolio & Gate Characterization
+
+| Dataset & Gate | Scope & Setting | Volume | License / Access | Inputs Available | Target Role in VitalNet |
+|---|---|---|---|---|---|
+| **Gate 1A: Iran ED** | Single-center tertiary hospital ED, Iran | 143,582 triage rows | CC BY 4.0 Open Access | Official ED_triage.csv has 28 columns; VitalNet consumes 10 key fields for inspection; extreme sparsity (<0.07% complete vitals) | **Inspection-only audit**. Scoring strictly refused due to binary ground truth and severe missingness. |
+| **Gate 1B: CDC NHAMCS 2022** | Nationally representative sample of US hospital EDs | 16,025 encounters in the inspected file | CDC Public Use Data | Fixed-width vitals, age, sex, arrival immediacy (1–5 scale) | **Partial-input proxy evaluation**. One authorized run produced 14.4% emergency sensitivity; serious safety signal. |
+| **Gate 2: MIMIC-IV-ED** (PhysioNet v2.2) | Urban academic medical center ED (Beth Israel Deaconess, Boston) | ~425,000 ED stays | Credentialed DUA (PhysioNet + CITI training required) | Complete vitals, anchor age, sex, chief complaint, ESI 1–5 | **Deferred credentialed benchmark**. No full MIMIC scoring was completed. |
+| **Gate 3A: Korean KTAS 2019** | Two Korean emergency-department groups | 1,267 encounters | Publisher-hosted supplementary workbooks; local-only use | Age, sex, five vitals, KTAS expert label, Korean/English complaint text | **Completed open external benchmark**. Primary emergency sensitivity 25.2%; vital-only sensitivity 17.9%; not clinical validation. |
+| **Gate 4: Prospective Indian PHC** | Frontline Primary Health Centres & Sub-Centres, rural India | Prospective cohort | Institutional Ethics Committee (IEC) approved | Complete ASHA intake: vitals, localized symptoms, Hindi/Tamil notes, clinical outcomes | **Future clinical validation**. Necessary prerequisite for regulatory clearance (CDSCO). |
+
+---
+
+## 4. Hard Data Boundary & Runtime Isolation Guardrails
+
+All external validation activities are governed by `docs/EVALUATION_DATA_BOUNDARY.md`. The core security and compliance mandates include:
+
+1. **Zero Patient Data in Version Control**:
+   - `tools/training/data/**` and `tools/training/outputs/**` are strictly gitignored while tracking `.gitkeep`.
+   - Never commit, push, or log raw source records, transformed rows, patient IDs, free-text complaints, credentials, or sample rows.
+2. **Prohibition of Automated Remote Fetching**:
+   - Code must never include automated download scripts, web scrapers, or credential-fetching API calls.
+   - All real datasets must be acquired out-of-band under applicable DUAs and manually placed locally on disk.
+3. **Production Model Immutability**:
+   - Zero modifications to `backend/app/ml/models/triage_classifier.pkl`, `apps/web/public/models/triage_trees.json`, feature configs, rules engines, API routes, or database schemas during evaluation work.
+4. **Aggregate-Only Reporting Standard**:
+   - Reports (JSON and console) must output aggregate statistics (confusion matrices, sensitivity/specificity with Wilson 95% CIs, under-triage rates, ECE diagnostics, SHA-256 source checksums) and zero patient-level rows.
+5. **Prohibition of Survey Weighting on Model Metrics**:
+   - Survey design weights (e.g., `PATWT` in NHAMCS) are preserved for high-level demographic metadata only. They are strictly prohibited from weighting model diagnostic metrics.
+
+---
+
+## 5. Evaluation Workflow & Execution Pipeline
+
+```
+[Local Dataset Placed Manually in tools/training/data/<source>/]
+                           │
+                           ▼
+          [Modular Evaluation Source Adapter]
+          (tools/training/evaluation_sources/)
+          ├── Validates headers, offsets, and checksums
+          ├── Filters sentinels & impossible readings
+          ├── Enforces input mode (partial vs full)
+          └── Applies canonical label proxy mapping
+                           │
+                           ▼
+          [Core Evaluation CLI Runner]
+          (tools/training/evaluate_on_real.py)
+          ├── Executes production predict_triage()
+          ├── Reconstructs raw ML model (bypassing guardrails)
+          ├── Computes Wilson 95% CIs & safety metrics
+          ├── Evaluates deterministic guardrail lift
+          └── Generates diagnostic ECE calibration table
+                           │
+                           ▼
+          [Aggregate-Only Reporting]
+          (tools/training/outputs/*.json + Console)
+          ├── SHA-256 source manifest & provenance
+          ├── Cohort flow & exclusion counters
+          ├── Aggregate performance & safety metrics
+          └── Explicit population limitations & non-claims
+```
+
+---
+
+## 6. Schema Mapping & Feature Alignment Reference
+
+| VitalNet Intake Field | Gate 1A: Iran ED | Gate 1B: CDC NHAMCS 2022 | Gate 2: MIMIC-IV-ED | Target Handling & Conversions |
 |---|---|---|---|---|
-| **MIMIC-IV-ED** (PhysioNet v2.2) | ~425k real ED stays; `triage` table = temperature, heartrate, resprate, o2sat, sbp, dbp, pain, **acuity (ESI 1–5)**, chiefcomplaint; linkable to MIMIC-IV for outcomes (admission, mortality) | **Credentialed**: free, but requires PhysioNet account + **CITI "Data or Specimens Only Research" training** + signed DUA (~a few days). **Redistribution prohibited.** | US, urban academic ED (Beth Israel, 2011–2019) — **not** rural India | **Near 1:1.** Almost every VitalNet field maps directly; only respiratory rate is extra and altitude/pregnancy differ. Best external-validation target by far. |
-| **eICU-CRD** (PhysioNet) | Multi-center US ICU vitals/outcomes | Credentialed (as above) | US ICU, sicker population | Partial (ICU, not triage) |
-| **Kaggle KTAS** ("ER triage", ~1,267 patients, Korea 2016–17) | age, sex, vitals, complaint, **KTAS 1–5** clinician label | Kaggle account; **check the dataset's licence page before use** | Korean urban ED, small n | Good; quick sanity check while MIMIC credentialing is pending |
-| **Hugging Face** clinical sets | Mostly clinical **NLP** (MIMIC-derived text, MedQA, i2b2) | Per-dataset licence; MIMIC mirrors **still require PhysioNet credentialing** | varies | Useful for the **LLM/chief-complaint** side, not the tabular triage classifier |
-| **Validated instruments** (ESI handbook, KTAS, NEWS2, MEWS, **SATS**, **WHO ETAT/IMCI**) | Reference thresholds + mappings | Public literature | — | Grounds labels (`VALIDATION_PROTOCOL.md` A5) and gives comparator rules |
+| `patient_age` | Not published in primary triage | `AGE` (cols 16–18, slice `[15:18]`) | `patients.anchor_age` | Direct integer (0–94; 94 represents 94+ top-coding) |
+| `patient_sex` | Not published in primary triage | `SEX` (col 25, slice `[24:25]`) | `patients.gender` | `1`->`female`, `2`->`male` (`M`->`male`, `F`->`female`) |
+| `bp_systolic` | `BlooddpressurSystol` | `BPSYS` (cols 58–60, slice `[57:60]`) | `triage.sbp` | Integer mmHg (43–289; 0=pulseless) |
+| `bp_diastolic` | `BlooddpressurDiastol` | `BPDIAS` (cols 61–63, slice `[60:63]`) | `triage.dbp` | Integer mmHg (22–190; Doppler 998 rejected) |
+| `heart_rate` | `PulseRate` | `PULSE` (cols 52–54, slice `[51:54]`) | `triage.heartrate` | Integer bpm (0–240; Doppler 998 rejected) |
+| `temperature` | `Temperature` | `TEMPF` (cols 48–51, slice `[47:51]`) | `triage.temperature` | Converted to Celsius (°F tenths -> °C) |
+| `spo2` | `O2Saturation` | `POPCT` (cols 64–66, slice `[63:66]`) | `triage.o2sat` | Integer percentage (0–100%) |
+| `chief_complaint` | `ChiefComplaint` | Strict Empty String `""` | `triage.chiefcomplaint` | Free text NLP evaluation (Gate 2 only) |
+| `symptoms` | Empty List `[]` | Strict Empty List `[]` | Parsed from text | Allow-listed symptoms list |
+| `reference_acuity` | `TriageGrade` (1–5) | `IMMEDR` (1–5) | `triage.acuity` (ESI 1–5) | Canonical proxy mapping (e.g., `nhamcs_immediacy_v1`) |
+| (Metadata only) | `CriticalStatus`, `NeedFastExecute` | `RESPR`, `PATWT`, `CPSU` | `triage.resprate`, `pain` | Recorded in cohort inspection metadata only |
 
-## 4. Hard guardrails (non-negotiable)
+---
 
-- **Never commit patient data to this repo** — even "de-identified". Add a
-  gitignored `tools/training/data/` dir; provide a **downloader script + a
-  datasheet**, never the rows. PhysioNet's DUA explicitly prohibits
-  redistribution and any re-identification attempt.
-- **Licence-check every dataset** individually and record it in the datasheet.
-- **Treat all acquired data under the same DPDP posture** as production PHI.
-- **State the population mismatch on every result.** "Sensitivity 0.94 on
-  MIMIC-IV-ED (US ED)" is *not* "safe for rural India" — it is one external
-  validation on a proxy population. Over-claiming here would repeat the exact
-  synthetic-data honesty failure the model card warns against.
+## 7. Honest Bottom Line & Regulatory Disclaimers
 
-## 5. The workflow (how a dataset becomes a safety result)
-
-```
-acquire (credentialed/licensed)
-  └─ map to VitalNet schema  ────────────►  datasheet + schema-map table (§6)
-       └─ run tools/training/evaluate_on_real.py  ─►  sens/spec/PPV/NPV+CIs, calibration,
-            │                                          subgroup, UNDER-TRIAGE safety analysis
-            └─ report to TRIPOD+AI  ────────────────►  update CLINICAL_RISK_MANAGEMENT.md H2
-                                                         (UNQUANTIFIED → measured-on-proxy)
-```
-
-The harness (`tools/training/evaluate_on_real.py`) maps the 5-level ESI/KTAS
-acuity scales to VitalNet's 3 tiers with documented, overridable rules, runs
-the real production `predict_triage()` per row (still `backend/app/ml/`,
-model-primary — unaffected by the Round 6 migration, since that migration
-only rewired training-time labeling/features, not the live inference path),
-and computes the safety-critical **EMERGENCY under-triage rate with a
-confidence interval** — the number that actually matters. It runs today in
-`--self-test` mode (synthetic, proves the machinery) and against a real CSV
-the moment you have one.
-
-**Follow-up identified, not yet built** (`VALIDATION_PROTOCOL.md` A3): once
-`rules_first` ships (`docs/RULES_PRIMARY_DESIGN.md`), this harness should gain
-a second evaluation mode that calls `assignTier()` directly (via the same
-`packages/clinical-core/cli.mjs` bridge `train_classifier.py` uses), so real
-data can validate the rules engine standalone — not just the model wrapped
-around it.
-
-## 6. Schema map (VitalNet ← dataset) and datasheet template
-
-**Schema map to fill per dataset** (example: MIMIC-IV-ED):
-
-| VitalNet field | MIMIC-IV-ED `triage` field | Notes |
-|---|---|---|
-| patient_age | (from `patients.anchor_age`) | join on subject_id |
-| patient_sex | `patients.gender` | map M/F |
-| bp_systolic / bp_diastolic | sbp / dbp | |
-| spo2 | o2sat | |
-| heart_rate | heartrate | |
-| temperature | temperature | **°F → °C convert** |
-| chief_complaint | chiefcomplaint | free text |
-| (n/a) | resprate | VitalNet has no RR field |
-| **reference_acuity** | acuity (ESI 1–5) | maps 1–2→EMERGENCY, 3→URGENT, 4–5→ROUTINE (overridable) |
-| outcome (optional) | linked admission/mortality | strongest ground truth |
-
-**Datasheet** (per *Datasheets for Datasets*, Gebru et al.): record source,
-licence, collection period, population, de-identification method, class
-prevalence, known biases, and the exact schema mapping used. Keep it in
-`tools/training/data/<dataset>/DATASHEET.md` (the data itself stays
-gitignored).
-
-## 7. Honest bottom line
-
-External validation on MIMIC-IV-ED is the **highest-probability, do-it-without-a-
-clinician** step available, and it directly attacks the dominant hazard (H2). It
-gives you the first real-patient signal VitalNet has ever had. But be clear-eyed:
-it validates on a **US ED proxy population**, not rural Indian primary care.
-It **raises** the floor of your safety case; it does **not** clear the deployment
-gate, which still requires a rural-population prospective study and clinical
-sign-off (`VALIDATION_PROTOCOL.md` "Definition of done"). Do it — and report it
-with the same honesty as everything else here. None of this changes because the
-backend moved to TypeScript; the data problem was never a code problem.
+1. **Proxy Evaluations Are Not Indian Clinical Trials**: Validation against US (NHAMCS, MIMIC) or Iranian (Iran ED) emergency cohorts measures the fundamental physiological discrimination and safety properties of VitalNet's algorithms on real human presentations. However, foreign hospital ED cohorts do not match the disease prevalence, nutritional status, baseline vitals, or presentation delays of rural Indian primary care.
+2. **Partial-Input Testing Is a Stress Benchmark**: Partial-input evaluation in Gate 1B does not show graceful degradation or high safety recall. NHAMCS produced 14.4% emergency sensitivity, and the KTAS vital-only arm produced 17.9% emergency sensitivity. These results document a serious missing-context safety signal and do not replace comprehensive multi-modal validation.
+3. **Mandatory Human Clinical Oversight**: VitalNet is a clinical decision-support prototype. It does not provide autonomous clinical diagnosis, and all triage recommendations must be reviewed and confirmed by trained human healthcare professionals.
