@@ -15,7 +15,8 @@
 > Source cards for specific datasets are tracked under `docs/evaluation/`. The consolidated outcome is recorded in
 > `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`; the safety-remediation design specification is established in
 > `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`; the synthetic candidate study specification is in
-> `docs/evaluation/SAFETY_REMEDIATION_CANDIDATE_STUDY.md`.
+> `docs/evaluation/SAFETY_REMEDIATION_CANDIDATE_STUDY.md`. The 2026 public-dataset portfolio rescreen is recorded in
+> `docs/evaluation/PUBLIC_DATASET_PORTFOLIO_RESCREEN_2026.md`.
 
 Companion to `docs/EVALUATION_DATA_BOUNDARY.md`, `docs/evaluation/SAFETY_REMEDIATION_DESIGN.md`,
 `docs/evaluation/SAFETY_REMEDIATION_CANDIDATE_STUDY.md`,
