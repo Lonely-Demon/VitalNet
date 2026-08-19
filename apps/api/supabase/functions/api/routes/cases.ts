@@ -336,6 +336,7 @@ cases.get("/api/cases", rateLimit(60, 60), requireRole("doctor", "admin"), async
 
   const beforeTimeRaw = c.req.query("before_time");
   const beforePriorityRaw = c.req.query("before_priority");
+  const beforeNeedsReviewRaw = c.req.query("before_needs_review");
   const beforeIdRaw = c.req.query("before_id");
 
   let beforePriority: number | null = null;
@@ -344,6 +345,14 @@ cases.get("/api/cases", rateLimit(60, 60), requireRole("doctor", "admin"), async
     if (![0, 1, 2].includes(beforePriority)) {
       throw new HttpError(400, "Invalid before_priority");
     }
+  }
+
+  let beforeNeedsReview: boolean | null = null;
+  if (beforeNeedsReviewRaw !== undefined) {
+    if (beforeNeedsReviewRaw !== "true" && beforeNeedsReviewRaw !== "false") {
+      throw new HttpError(400, "Invalid before_needs_review");
+    }
+    beforeNeedsReview = beforeNeedsReviewRaw === "true";
   }
 
   const normalizedBeforeTime = beforeTimeRaw ? normalizedIsoTs(beforeTimeRaw, "before_time") : null;
@@ -357,10 +366,11 @@ cases.get("/api/cases", rateLimit(60, 60), requireRole("doctor", "admin"), async
         "low_confidence, needs_review, human_review_requested, human_review_reason, " +
         "contraindication_flags, deterioration_alert, deterioration_visit_count, " +
         "triage_model_version, overridden_triage, override_reason, overridden_by, overridden_at, " +
-        "created_at, reviewed_at, reviewed_by, facility_id, created_offline",
+        "patient_key, created_at, reviewed_at, reviewed_by, facility_id, created_offline",
     )
     .is("deleted_at", null)
     .order("triage_priority", { ascending: true })
+    .order("needs_review", { ascending: false })
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(limit + 1);
@@ -370,16 +380,33 @@ cases.get("/api/cases", rateLimit(60, 60), requireRole("doctor", "admin"), async
   }
 
   if (normalizedBeforeTime !== null && beforePriority !== null) {
-    query = parsedBeforeId !== null
-      ? query.or(
-        `triage_priority.gt.${beforePriority},` +
-          `and(triage_priority.eq.${beforePriority},created_at.lt.${normalizedBeforeTime}),` +
-          `and(triage_priority.eq.${beforePriority},created_at.eq.${normalizedBeforeTime},id.lt.${parsedBeforeId})`,
-      )
-      : query.or(
-        `triage_priority.gt.${beforePriority},` +
-          `and(triage_priority.eq.${beforePriority},created_at.lt.${normalizedBeforeTime})`,
+    if (beforeNeedsReview === null) {
+      query = parsedBeforeId !== null
+        ? query.or(
+          `triage_priority.gt.${beforePriority},` +
+            `and(triage_priority.eq.${beforePriority},created_at.lt.${normalizedBeforeTime}),` +
+            `and(triage_priority.eq.${beforePriority},created_at.eq.${normalizedBeforeTime},id.lt.${parsedBeforeId})`,
+        )
+        : query.or(
+          `triage_priority.gt.${beforePriority},` +
+            `and(triage_priority.eq.${beforePriority},created_at.lt.${normalizedBeforeTime})`,
+        );
+    } else {
+      const reviewLiteral = beforeNeedsReview ? "true" : "false";
+      const clauses = [`triage_priority.gt.${beforePriority}`];
+      if (beforeNeedsReview) {
+        clauses.push(`and(triage_priority.eq.${beforePriority},needs_review.lt.true)`);
+      }
+      clauses.push(
+        `and(triage_priority.eq.${beforePriority},needs_review.eq.${reviewLiteral},created_at.lt.${normalizedBeforeTime})`,
       );
+      if (parsedBeforeId !== null) {
+        clauses.push(
+          `and(triage_priority.eq.${beforePriority},needs_review.eq.${reviewLiteral},created_at.eq.${normalizedBeforeTime},id.lt.${parsedBeforeId})`,
+        );
+      }
+      query = query.or(clauses.join(","));
+    }
   }
 
   const { data, error } = await query;
@@ -398,6 +425,7 @@ cases.get("/api/cases", rateLimit(60, 60), requireRole("doctor", "admin"), async
     hasMore,
     nextCursor: hasMore && last ? last.created_at : null,
     nextTriagePriority: hasMore && last ? last.triage_priority : null,
+    nextNeedsReview: hasMore && last ? Boolean(last.needs_review) : null,
     nextId: hasMore && last ? last.id : null,
   });
 });
@@ -482,7 +510,7 @@ cases.get(
 
     let query = db
       .from("case_records")
-      .select("id, chief_complaint, triage_level, created_at, reviewed_at, patient_age, patient_sex, facility_id")
+      .select("id, chief_complaint, triage_level, created_at, reviewed_at, patient_age, patient_sex, facility_id, bp_systolic, bp_diastolic, spo2, heart_rate, temperature")
       .eq("patient_key", key)
       .is("deleted_at", null)
       .order("created_at", { ascending: false })
@@ -507,7 +535,7 @@ cases.get(
       resourceId: null,
       facilityId,
       ipAddress: getClientIp(c),
-      details: { view: "patient_key_history", match_count: rows.length },
+      details: { view: "patient_key_history", match_count: rows.length, include: "bounded_vitals" },
     });
 
     return c.json({ cases: rows });
