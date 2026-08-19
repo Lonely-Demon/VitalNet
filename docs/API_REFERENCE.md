@@ -159,7 +159,10 @@ a worker recognize a returning patient (`docs/DECISIONS.md` §21).
 - **Path param**: `patient_key` — must match `XXXX-XXXX`; `400` if not.
 - **Response `200`**: `{ cases: [...] }` — up to 50 rows, reduced column set
   (`id`, `chief_complaint`, `triage_level`, `created_at`, `reviewed_at`,
-  `patient_age`, `patient_sex`, `facility_id`; no `briefing` JSONB).
+  `patient_age`, `patient_sex`, `facility_id`, `bp_systolic`,
+  `bp_diastolic`, `spo2`, `heart_rate`, `temperature`; no `briefing` JSONB,
+  observations, medications, or unrelated free text). The five vital fields
+  are included only to support display-only returning-patient trends.
 
 ### `GET /api/cases/{case_id}`
 Full case detail (including the `briefing` JSONB) after row-level
@@ -414,13 +417,18 @@ admin may update any. `403` otherwise.
 ### `POST /api/cases/{case_id}/refer` — 20/min — `doctor` (own facility), `admin`
 **Body** (`CreateReferralRequest`): `receiving_facility_id`, `reason`
 (1-1000 chars), `urgency` (`ROUTINE`/`URGENT`/`EMERGENCY`). `400` if
-referring a case to its own facility.
+referring a case to its own facility. The response includes a deterministic,
+versioned `sbar_draft` and `sbar_version` generated from recorded case and
+referral fields. The draft is a communication aid, not a diagnosis or
+autonomous recommendation; the clinician must review it before sending.
 
 ### `GET /api/referrals` — 60/min — `doctor`, `admin`
 **Query param**: `direction` (`outgoing`/`incoming`/`all`, default `all`) —
 ignored for `admin` (sees everything). **Response**: `{ referrals: [...] }`,
-each row embedding `case_records` (chief complaint/age/sex/triage) and
-`referring_facility`/`receiving_facility` names.
+each row embedding `case_records` (chief complaint/age/sex/triage),
+`referring_facility`/`receiving_facility` names, and the persisted
+`sbar_draft`/`sbar_version` when present. Referral RLS remains the sole
+visibility boundary.
 
 ### `PATCH /api/referrals/{referral_id}/status` — 30/min — `doctor` (receiving facility only), `admin`
 **Body**: `{ status }` — one of `acknowledged`/`patient_arrived`/

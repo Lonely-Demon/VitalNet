@@ -11,7 +11,7 @@ import type { AppEnv } from "../_shared/types.ts";
 export const referral = new Hono<AppEnv>();
 
 const REFERRAL_SELECT_COLUMNS = "id, case_id, referred_by, referring_facility_id, receiving_facility_id, " +
-  "reason, urgency, status, created_at, updated_at, " +
+  "reason, urgency, sbar_version, sbar_draft, status, created_at, updated_at, " +
   "case_records(chief_complaint, patient_age, patient_sex, triage_level), " +
   "referring_facility:facilities!referring_facility_id(name), " +
   "receiving_facility:facilities!receiving_facility_id(name)";

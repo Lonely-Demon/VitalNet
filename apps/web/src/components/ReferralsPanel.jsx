@@ -40,6 +40,8 @@ export default function ReferralsPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [actioningId, setActioningId] = useState(null)
+  const [copiedSbarId, setCopiedSbarId] = useState(null)
+  const [editedSbar, setEditedSbar] = useState({})
 
   const [capacityStatus, setCapacityStatus] = useState(profile?.facilities?.capacity_status || 'available')
   const [savingCapacity, setSavingCapacity] = useState(false)
@@ -95,6 +97,17 @@ export default function ReferralsPanel() {
   async function handleCancel(referralId) {
     if (!confirm('Cancel this referral?')) return
     handleAdvance(referralId, 'cancelled')
+  }
+
+  async function handleCopySbar(referralId, draft) {
+    if (!draft || !navigator.clipboard) return
+    try {
+      await navigator.clipboard.writeText(draft)
+      setCopiedSbarId(referralId)
+      window.setTimeout(() => setCopiedSbarId((current) => current === referralId ? null : current), 1800)
+    } catch (e) {
+      console.error('Could not copy SBAR draft', e)
+    }
   }
 
   if (loading) return <div className="text-center py-16 text-text3 text-sm">Loading referrals…</div>
@@ -166,6 +179,33 @@ export default function ReferralsPanel() {
                       {r.referring_facility?.name || 'Unknown facility'} → {r.receiving_facility?.name || 'Unknown facility'}
                     </p>
                     <p className="text-sm text-text2 mt-1">{r.reason}</p>
+                    {r.sbar_draft && (
+                      <details className="mt-3 rounded-lg border border-leaf/40 bg-surface2">
+                        <summary className="cursor-pointer px-3 py-2 text-xs font-mono font-bold uppercase tracking-wide text-forest">
+                          Structured SBAR handoff {r.sbar_version ? `(${r.sbar_version})` : ''}
+                        </summary>
+                        <div className="border-t border-leaf/30 p-3">
+                          <textarea
+                            value={editedSbar[r.id] ?? r.sbar_draft}
+                            onChange={(e) => setEditedSbar((current) => ({ ...current, [r.id]: e.target.value }))}
+                            aria-label={`SBAR handoff for referral ${r.id}`}
+                            rows={12}
+                            maxLength={5000}
+                            className="w-full resize-y rounded-md border border-surface3 bg-surface px-3 py-2 text-xs leading-relaxed text-text2"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleCopySbar(r.id, editedSbar[r.id] ?? r.sbar_draft)}
+                            className="mt-3 rounded-pill bg-forest px-3 py-1.5 text-xs font-medium text-white"
+                          >
+                            {copiedSbarId === r.id ? 'Copied' : 'Copy handoff'}
+                          </button>
+                          <p className="mt-2 text-[11px] text-text3">
+                            Deterministic draft from recorded case fields. Review and edit it before sending; edits stay local and do not replace clinical assessment.
+                          </p>
+                        </div>
+                      </details>
+                    )}
                     <p className="text-xs text-text3 mt-1 font-mono">
                       {new Date(r.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
                     </p>

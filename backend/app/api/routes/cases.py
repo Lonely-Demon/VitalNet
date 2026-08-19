@@ -369,7 +369,7 @@ async def get_cases(
             "low_confidence, needs_review, human_review_requested, human_review_reason, "
             "contraindication_flags, deterioration_alert, deterioration_visit_count, "
             "triage_model_version, overridden_triage, override_reason, overridden_by, overridden_at, "
-            "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
+            "patient_key, created_at, reviewed_at, reviewed_by, facility_id, created_offline"
         )
         .is_("deleted_at", "null")
         .order("triage_priority", desc=False)   # EMERGENCY (0) first
@@ -669,7 +669,8 @@ async def get_cases_by_patient_key(
         db.table("case_records")
         .select(
             "id, chief_complaint, triage_level, created_at, reviewed_at, "
-            "patient_age, patient_sex, facility_id"
+            "patient_age, patient_sex, facility_id, bp_systolic, bp_diastolic, "
+            "spo2, heart_rate, temperature"
         )
         .eq("patient_key", key)
         .is_("deleted_at", "null")
@@ -691,7 +692,7 @@ async def get_cases_by_patient_key(
         resource_id=None,
         facility_id=facility_id,
         ip_address=get_client_ip(request),
-        details={"view": "patient_key_history", "match_count": len(rows)},
+        details={"view": "patient_key_history", "match_count": len(rows), "include": "bounded_vitals"},
     )
 
     return {"cases": rows}
