@@ -20,6 +20,7 @@ from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput, PAT
 from app.ml.classifier import predict_triage
 from app.services.llm import generate_briefing, generate_patient_summary
 from app.services.push import push_emergency_alert
+from app.utils.case_queue import build_cases_cursor_filter
 
 logger = logging.getLogger("vitalnet")
 
@@ -328,6 +329,7 @@ async def get_cases(
     user: dict = Depends(require_role("doctor", "admin")),
     before_time: str | None = None,       # ISO timestamp of the last seen case
     before_priority: int | None = None,   # triage_priority of the last seen case (0/1/2)
+    before_needs_review: bool | None = None,  # needs_review of the last seen case
     before_id: str | None = None,         # id of the last seen case (unique tie-breaker)
     limit: int = 25,
 ):
@@ -335,11 +337,11 @@ async def get_cases(
     Cursor-based pagination with composite keyset for the Doctor Dashboard.
 
     Sort order: EMERGENCY (0) → URGENT (1) → ROUTINE (2) first,
-    then by created_at DESC within each tier, then by id DESC as a unique
-    tie-breaker (handles multiple cases with an identical created_at).
+    flagged cases requiring review before unflagged cases within each tier,
+    then by created_at DESC, then by id DESC as a unique tie-breaker.
 
-    Use before_time + before_priority + before_id from the previous page's
-    nextCursor / nextTriagePriority / nextId to fetch the next page.
+    Use before_time + before_priority + before_needs_review + before_id from
+    the previous page's cursor fields to fetch the next page.
 
     Scoping: 'admin' sees all facilities (global). 'doctor' accounts with a
     facility_id are scoped to that facility only. Doctors without a
@@ -371,7 +373,8 @@ async def get_cases(
         )
         .is_("deleted_at", "null")
         .order("triage_priority", desc=False)   # EMERGENCY (0) first
-        .order("created_at", desc=True)          # Newest within each tier
+        .order("needs_review", desc=True)        # Flagged cases first within tier
+        .order("created_at", desc=True)          # Newest within each routing group
         .order("id", desc=True)                  # Unique tie-breaker for stable pagination
         .limit(limit + 1)                        # Fetch one extra to determine hasMore
     )
@@ -380,18 +383,14 @@ async def get_cases(
         query = query.eq("facility_id", facility_id)
 
     if normalized_before_time is not None and before_priority is not None:
-        # Composite keyset cursor with unique tie-breaker.
-        if parsed_before_id is not None:
-            query = query.or_(
-                f"triage_priority.gt.{before_priority},"
-                f"and(triage_priority.eq.{before_priority},created_at.lt.{normalized_before_time}),"
-                f"and(triage_priority.eq.{before_priority},created_at.eq.{normalized_before_time},id.lt.{parsed_before_id})"
+        query = query.or_(
+            build_cases_cursor_filter(
+                before_time=normalized_before_time,
+                before_priority=before_priority,
+                before_needs_review=before_needs_review,
+                before_id=parsed_before_id,
             )
-        else:
-            query = query.or_(
-                f"triage_priority.gt.{before_priority},"
-                f"and(triage_priority.eq.{before_priority},created_at.lt.{normalized_before_time})"
-            )
+        )
 
     result = query.execute()
     rows = result.data
@@ -404,6 +403,7 @@ async def get_cases(
         "hasMore": has_more,
         "nextCursor": cases[-1]["created_at"] if has_more and cases else None,
         "nextTriagePriority": cases[-1]["triage_priority"] if has_more and cases else None,
+        "nextNeedsReview": cases[-1]["needs_review"] if has_more and cases else None,
         "nextId": cases[-1]["id"] if has_more and cases else None,
     }
 

@@ -108,14 +108,17 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   latency to this response).
 
 ### `GET /api/cases`
-Doctor dashboard feed — cursor-paginated, sorted EMERGENCY→URGENT→ROUTINE
-then newest-first within a tier.
+Doctor dashboard feed — cursor-paginated, sorted EMERGENCY→URGENT→ROUTINE,
+then cases with `needs_review=true` before unflagged cases within each tier,
+then newest-first and ID-descending as stable tie-breakers.
 - **Auth**: `doctor` (facility-scoped if `facility_id` set), `admin`
   (global). **Rate limit**: 60/min.
 - **Query params**: `before_time`, `before_priority` (0/1/2),
-  `before_id` (composite keyset cursor from the previous page), `limit`
-  (default 25, capped 100).
-- **Response `200`**: `{ cases: [...], hasMore, nextCursor, nextTriagePriority, nextId }`.
+  `before_needs_review` (`true`/`false`), `before_id` (composite keyset cursor
+  from the previous page), `limit` (default 25, capped 100). The review
+  component is optional for one-release compatibility with older clients.
+- **Response `200`**: `{ cases: [...], hasMore, nextCursor,
+  nextTriagePriority, nextNeedsReview, nextId }`.
 
 ### `PATCH /api/cases/{case_id}/review`
 Mark a case reviewed.
