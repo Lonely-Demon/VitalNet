@@ -510,7 +510,10 @@ cases.get(
 
     let query = db
       .from("case_records")
-      .select("id, chief_complaint, triage_level, created_at, reviewed_at, patient_age, patient_sex, facility_id, bp_systolic, bp_diastolic, spo2, heart_rate, temperature")
+      .select(
+        "id, chief_complaint, triage_level, created_at, reviewed_at, patient_age, patient_sex, facility_id, " +
+          "bp_systolic, bp_diastolic, spo2, heart_rate, temperature",
+      )
       .eq("patient_key", key)
       .is("deleted_at", null)
       .order("created_at", { ascending: false })
