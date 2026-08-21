@@ -38,6 +38,7 @@ docs — start with whichever matches what you're trying to do:
 | **[CONTRIBUTING.md](./CONTRIBUTING.md)** | Branch strategy, PR process, commit conventions |
 | **[docs/TESTING_STRATEGY.md](./docs/TESTING_STRATEGY.md)** | What's tested, how, and how to add a test |
 | **[docs/SECURITY.md](./docs/SECURITY.md)** | Security model, threat summary, how to report a vulnerability |
+| **[docs/ENTERPRISE_ENGINEERING_CONTROLS.md](./docs/ENTERPRISE_ENGINEERING_CONTROLS.md)** | Product-wide engineering controls, CI/release gates, artifact integrity, and safety invariants |
 | **[docs/ONBOARDING.md](./docs/ONBOARDING.md)** | New-developer first-day checklist |
 | **[docs/GLOSSARY.md](./docs/GLOSSARY.md)** | Domain terms (ASHA, PHC, NEWS2, triage tiers, etc.) |
 | **[docs/DISASTER_RECOVERY.md](./docs/DISASTER_RECOVERY.md)** | RTO/RPO targets, restore procedures |

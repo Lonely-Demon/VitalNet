@@ -28,6 +28,7 @@ values from the profiles table (same short-TTL cache as is_active, one
 combined query) into resolved_role / resolved_facility_id. require_role()
 and every route's authorization checks must read those, not user_metadata.
 """
+import logging
 import time
 from typing import Dict, Optional, Tuple
 
@@ -39,6 +40,7 @@ from app.core.database import supabase_anon, get_supabase_for_user, extract_bear
 
 ALGORITHM = "HS256"
 AUDIENCE = "authenticated"
+logger = logging.getLogger(__name__)
 
 # In-process cache: user_id -> (checked_at_epoch_seconds, is_active, role, facility_id).
 # Per-worker; each uvicorn worker maintains its own and re-checks within the TTL.
@@ -158,10 +160,13 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
 
     try:
         payload = _verify_token(token)
-    except Exception as e:
+    except Exception:
+        # Never echo verifier, upstream, URL, or transport exception text to an
+        # unauthenticated client. Keep details server-side for diagnostics.
+        logger.warning("JWT verification failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired token: {str(e)}",
+            detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

@@ -24,6 +24,9 @@ import { getOfflineDB } from './offlineDB'
 
 const STORE_NAME = 'outbox'
 const MAX_PENDING = 50
+const RECOVERY_STATUS = 'recovery_required'
+export const OUTBOX_STALE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+
 
 function notifyOutboxChange() {
   window.dispatchEvent(new CustomEvent('offline-queue-changed'))
@@ -86,6 +89,68 @@ export async function getPendingEvents(ownerId) {
 export async function getPendingCount() {
   const db = await getOfflineDB()
   return db.countFromIndex(STORE_NAME, 'status', 'pending')
+}
+
+/**
+ * Count legacy rows that cannot be safely attributed to a worker. This is an
+ * aggregate-only signal: callers must not receive the payload or identifiers.
+ */
+export async function getRecoveryRequiredCount() {
+  const db = await getOfflineDB()
+  return db.countFromIndex(STORE_NAME, 'status', RECOVERY_STATUS)
+}
+
+/**
+ * Aggregate count of this worker's pending rows older than the documented
+ * review window. The payload is never returned to the caller.
+ */
+export async function getStalePendingCount(ownerId, now = Date.now()) {
+  if (!ownerId) return 0
+  const db = await getOfflineDB()
+  const all = await db.getAllFromIndex(STORE_NAME, 'status', 'pending')
+  return all.filter((row) => (
+    row.owner_id === ownerId
+    && Number.isFinite(Date.parse(row.created_at))
+    && now - Date.parse(row.created_at) >= OUTBOX_STALE_RETENTION_MS
+  )).length
+}
+
+/**
+ * Explicitly purge only this worker's stale pending rows after user review.
+ * This is never called automatically and cannot affect another worker's rows.
+ */
+export async function purgeStalePending(ownerId, now = Date.now()) {
+  if (!ownerId) return 0
+  const db = await getOfflineDB()
+  const all = await db.getAllFromIndex(STORE_NAME, 'status', 'pending')
+  let removed = 0
+  for (const row of all) {
+    if (
+      row.owner_id === ownerId
+      && Number.isFinite(Date.parse(row.created_at))
+      && now - Date.parse(row.created_at) >= OUTBOX_STALE_RETENTION_MS
+    ) {
+      await db.delete(STORE_NAME, row.event_id)
+      removed += 1
+    }
+  }
+  if (removed > 0) notifyOutboxChange()
+  return removed
+}
+
+/**
+ * Permanently purge ownerless legacy recovery records after an explicit
+ * device-level confirmation. This never touches pending, dead-lettered, or
+ * currently owned rows.
+ */
+export async function purgeRecoveryRequired() {
+  const db = await getOfflineDB()
+  const rows = await db.getAllFromIndex(STORE_NAME, 'status', RECOVERY_STATUS)
+  for (const row of rows) {
+    await db.delete(STORE_NAME, row.event_id)
+  }
+  if (rows.length > 0) notifyOutboxChange()
+  return rows.length
 }
 
 /**
