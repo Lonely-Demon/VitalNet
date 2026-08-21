@@ -84,39 +84,45 @@ Zero-tolerance — CI fails on any finding.
 
 ## Frontend
 
-### Online/offline parity (the other half of the non-negotiable guarantee)
+### Online/offline parity (the non-negotiable guarantee)
+Parity ownership now lives in `packages/clinical-core`, which is imported by
+both `apps/web` and `apps/api`. The old hand-mirrored frontend parity scripts
+were removed during the TypeScript migration; do not recreate them under
+`apps/web`.
+
 ```bash
-cd frontend && npm run test:parity            # tree-evaluator vs. server model
-cd frontend && npm run test:feature-parity     # feature engineering vs. server
+pnpm --filter @vitalnet/clinical-core test
 ```
-Both are plain Node scripts (no test framework — deliberately zero-dependency
-for something this CI-critical), reading the same golden-vector fixtures
-the backend generates, replaying them through the JS implementations
-(`treeEvaluator.js`, `triageClassifier.js::buildFeatureMap`), and asserting
-an exact match. Both freeze `Date`/`datetime` to the same reference instant
-as the backend (`docs/DECISIONS.md` §12) — **if you add a new
-time-dependent engineered feature, extend the freeze in all three places
-(`scripts/export_golden_vectors.py`, `tests/test_feature_parity.py`,
-`frontend/tests/featureParity.test.mjs`) or these will intermittently fail**.
+The package tests replay the committed golden vectors through shared feature
+engineering and tree evaluation, exercise the deterministic rules engine and
+safety invariants, and run the CLI contract used by the Python training
+pipeline. If clinical feature engineering, schema, rules, or tree evaluation
+changes, this is the required first parity gate. Time-dependent behavior must
+continue to use the repository’s documented reference instant (`docs/DECISIONS.md`
+§12).
 
 ### Build
 ```bash
-cd apps/web && pnpm build
+pnpm --filter @vitalnet/web run build
 ```
+The Vercel monorepo build must build `@vitalnet/clinical-core` first when the
+project Root Directory is `apps/web`; see `README.md` and
+`docs/REPOSITORY_STATUS.md` for the workspace-aware deployment command.
 Not "just a build" — it's the primary regression check for import errors,
 bundle-size blowups (watch for a sudden jump in `dist/assets/*.js` sizes —
 see CODEBASE_MAP.md §4's build-size notes), and PWA manifest/service-worker
 generation issues.
 
-### Playwright E2E (`tests/offline.spec.js`)
+### Playwright browser suite (`apps/web/tests/*.spec.js`)
 ```bash
-cd apps/web && pnpm exec playwright test tests/offline.spec.js
+cd apps/web && pnpm exec playwright test
 ```
-Drives a real browser through: login → go offline → fill and submit an
-intake form → verify it queues → reconnect → verify it syncs. Needs a
-running dev server (`pnpm dev`) and seeded test users against a real
-Supabase project. Not part of CI for the same reason `test_e2e.py` isn't —
-it needs a live environment.
+The offline-flow tests drive login, consent capture, offline queueing,
+reconnection, and sync. The suite can use the repository’s synthetic mock
+backend for deterministic local/CI execution; any live Supabase or seeded-user
+run must be explicitly authorized as preproduction testing. Never use real
+patient data. Build `@vitalnet/clinical-core` first because its ignored `dist/`
+output is imported by the web app.
 
 ### Accessibility scan (`tests/a11y.spec.js`)
 ```bash
@@ -183,7 +189,7 @@ cd packages/clinical-core && pnpm run build   # apps/api's deno.json import map
 cd apps/api/supabase/functions/api
 deno test --allow-net --allow-env
 ```
-121 tests across every `_shared/*.ts` module and route helper — auth (hybrid
+The Deno suite covers every `_shared/*.ts` module and route helper — auth (hybrid
 JWT + JWKS), rate limiting, CSRF/device guard, scoping, the analytics
 percentile math (had to match Python's round-half-to-even `round()` exactly),
 team metrics, EARS outbreak signals, voice transcription fallback ordering,
@@ -257,9 +263,10 @@ and §36 did.
 ## What CI actually runs automatically
 
 On every PR: `ruff check` (backend), the pytest suite minus `test_e2e.py`
-(backend), `npm run build` (frontend), the `tests/a11y.spec.js` axe-core
-scan (`a11y-frontend-pr`), CodeQL analysis (Python + JS/TypeScript +
-GitHub Actions workflows) — all in `.github/workflows/ci.yml`. On any PR
+(backend), the clinical-core tests and `pnpm --filter @vitalnet/web run build`,
+the `tests/a11y.spec.js` axe-core scan (`a11y-frontend-pr`), and CodeQL
+analysis (Python + JS/TypeScript + GitHub Actions workflows) — all in
+`.github/workflows/ci.yml`. On any PR
 touching `backend/supabase/migrations/**`, `schema_snapshot.sql`, or
 `ci_stubs.sql`: `migration-replay` in `.github/workflows/db-schema-drift.yml`
 (above). Separately, on any PR/push touching

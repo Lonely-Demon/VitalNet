@@ -8,16 +8,14 @@ this document in the same commit**. Stale maps are worse than no map —
 see the "Keeping this document current" section at the bottom for the
 specific rule.
 
-Last verified against the codebase: 2026-07-11 (post Round 6 rebuild
-Phases 0-6 — the pnpm-workspace TypeScript migration: `packages/
-clinical-core` as the single source of clinical truth, a new Supabase Edge
-Function backend (`apps/api`, not yet live), a unified offline outbox, and
-DB-discipline `SECURITY DEFINER` functions; see `docs/DECISIONS.md` §33 and
-git log for the full change list). Earlier verification note (2026-07-04,
-post round-3 reconciliation of an independently-developed `dev` branch's
-security/reliability work on top of round-2's hybrid auth, pure-JS offline
-engine, and ML safety layers) still applies to everything in `backend/`,
-which this migration has not touched.
+Last verified against the codebase: 2026-08-22 (after the roadmap-refinement
+closeout, browser-harness correction, and dev-to-test promotion). The current
+map includes the `packages/clinical-core` shared source of truth, the
+`apps/web` React/Vite PWA, the not-yet-live `apps/api` Edge Function backend,
+the legacy FastAPI runtime, the evaluation/governance tooling, and the active
+branch/deployment boundaries. See `docs/REPOSITORY_STATUS.md` for the short
+operational status and maintenance rules, and `docs/DECISIONS.md` for the
+chronological rationale.
 
 ---
 
@@ -103,8 +101,11 @@ graph TB
 
 **Mid-migration** (Round 6 rebuild, `docs/DECISIONS.md` §33 — a pnpm
 workspace monorepo replacing the old flat `backend/`+`frontend/` layout).
-`backend/` is unchanged in place and still serves 100% of production
-traffic; everything else below it is new and not yet live.
+`backend/` remains the live FastAPI runtime authority, while `apps/web`,
+`packages/clinical-core`, and `apps/api` are the current workspace surfaces.
+The `test` branch carries the verified refinement package for controlled
+preproduction testing; the Edge Function is still not cut over to production
+traffic.
 
 ```
 VitalNet/
@@ -133,6 +134,8 @@ VitalNet/
 ├── docs/
 │   ├── evaluation/            Tracked evaluation source cards (IRAN_ED, NHAMCS_2022, MIMIC_IV_ED)
 │   ├── EVALUATION_DATA_BOUNDARY.md Strict data isolation, prohibited tables, and zero-leakage policy
+│   ├── REPOSITORY_STATUS.md     Current branch/deployment map, verification baseline, and maintenance rules
+│   ├── DEPLOYMENT_RUNBOOK.md    Dev-to-test promotion, preproduction smoke checks, and rollback boundaries
 │   ├── LESSONS_LEARNED.md     Living notes for future agents (human or AI) — NOT
 │   │                     an architecture doc (see CODEBASE_MAP/DECISIONS for
 │   │                     that). Empirical-verification norms, dead ends actually

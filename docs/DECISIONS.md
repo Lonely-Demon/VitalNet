@@ -2005,3 +2005,14 @@ are green.
 The paediatric advisory may not be activated from engineering evidence alone. Any activation, tier-floor behavior, or effective-age model wiring requires a qualified clinical-governance decision. Likewise, localization may not be described as pilot-ready until a qualified reviewer has checked the medical terminology and approved the locale. The deterministic SBAR is authoritative; optional LLM polishing is not part of this cycle. The bounded history and routing features are workflow aids, not clinical validation.
 
 **Consequences**: The roadmap can distinguish implemented engineering foundations from external clinical gates. Future work must preserve the model freeze and must not promote these changes to `test`, `main`, pre-production, Render, Vercel, or Supabase without the separately documented release process. The existing public-data evaluation closure and shadow-evaluation protocol remain evaluation/governance artifacts; they do not establish clinical validity.
+
+
+### 45. Repository hygiene and current-state documentation closeout
+**Context**: After the refinement cycle and controlled `dev` → `test` promotion, the repository contained current monorepo behavior alongside older documentation that still used the retired `frontend/` layout or described pre-migration parity scripts. Local verification also created ignored build, cache, browser-report, and evaluation artifacts.
+**Decisions**:
+1. Treat `CODEBASE_MAP.md` and `docs/REPOSITORY_STATUS.md` as the current orientation and operational-status sources of truth. Treat `docs/DEPLOYMENT_RUNBOOK.md` as the current dev-to-test and preproduction deployment procedure.
+2. Align current setup, testing, onboarding, package, R&D, API-reference, changelog, and roadmap documents with `apps/web`, `packages/clinical-core`, the live legacy FastAPI backend, and the not-yet-live Edge Function backend.
+3. Keep historical rebuild, improvement, and security-audit records intact when their old paths explain the historical state; label them as historical rather than rewriting their evidence.
+4. Keep generated build output, caches, local environment files, Playwright reports, and evaluation outputs out of Git. Real evaluation data may remain local-only when needed, but must never be tracked or emitted into logs, reports, CI, deployments, or chat.
+5. Do not alter the frozen production model, clinical thresholds, production endpoint routing, production branches, or production deployments as part of repository cleanup. Documentation claims of readiness remain separate from clinical validation and qualified governance approval.
+**Consequences**: Future structural or workflow changes must update the relevant current-state documentation in the same change. Cleanup PRs must show a clean diff, preserve synthetic-test evidence, and distinguish repository hygiene from clinical or production authorization.

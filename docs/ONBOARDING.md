@@ -51,21 +51,25 @@ Visit http://localhost:8000/api/health — you should see
 terminal output: either the database connection or the ML classifier
 failed to load, and the log will say which.
 
-### 1.3 Frontend
+### 1.3 Web application
+From the repository root, install the workspace dependencies and create the
+frontend environment file:
 ```bash
-cd frontend
-npm install
+pnpm install --filter @vitalnet/web...
+cp apps/web/.env.example apps/web/.env.local
 ```
-Copy `frontend/.env.example` to `frontend/.env.local`, fill in the same
-Supabase URL/anon key and `VITE_API_BASE_URL=http://localhost:8000`.
+Fill in the Supabase URL/anon key and
+`VITE_API_BASE_URL=http://localhost:8000` in `apps/web/.env.local`.
+Then run:
 ```bash
-npm run dev
+pnpm --filter @vitalnet/web dev
 ```
 Visit http://localhost:5173.
 
 ### 1.4 Seed test accounts
-See `Context/test_credentials.md` for the standard test logins. If they
-don't exist yet in your fresh Supabase project, you'll need to create them
+See `Context/test_credentials.md` for the standard test logins. These accounts
+are for authorized local or preproduction testing only; do not use real patient
+data. If they don't exist yet in your fresh Supabase project, you'll need to create them
 via Supabase's dashboard (Auth → Users) with matching `profiles` rows
 (role, `facility_id`), or use `backend/seed_user.py` for the doctor account
 specifically (read its warning banner first).
@@ -80,7 +84,7 @@ already assigned.
 Don't try to read everything. Instead:
 
 1. Open `CODEBASE_MAP.md` and find the section for whatever you're about
-   to touch (§3 backend, §4 frontend, §5 database).
+   to touch (§3 backend, §4 web application, §5 database).
 2. If you're touching an API endpoint, check `docs/API_REFERENCE.md` for
    its exact contract first — don't infer it from the frontend call site,
    confirm against the actual Pydantic model.
@@ -107,18 +111,18 @@ Make your change. Then, before committing:
 # Backend, if you touched it:
 cd backend && ruff check . && pytest tests/ --ignore=tests/test_e2e.py -v
 
-# Frontend, if you touched it:
-cd frontend && npm run build
+# Web application, if you touched it:
+pnpm --filter @vitalnet/web run build
 ```
 
-⚠️ If you touched anything in `app/ml/clinical_features.py` or
-`frontend/src/utils/triageClassifier.js`, you must also run:
+⚠️ If you touched clinical feature engineering, the shared schema, rules, or
+tree evaluation, you must also run:
 ```bash
-cd frontend && npm run test:parity && npm run test:feature-parity
+pnpm --filter @vitalnet/clinical-core test
 ```
-These are the online/offline consistency guarantee — see
-`docs/TESTING_STRATEGY.md`. A failure here is not a flaky test to retry
-past; it means the browser and the server would now disagree about a
+These tests enforce the online/offline consistency and safety contracts — see
+`docs/TESTING_STRATEGY.md`. A failure here is not a flaky test to retry past;
+it means the browser and server-side clinical paths may disagree about a
 patient's triage.
 
 ## 4. Commit and open a PR
