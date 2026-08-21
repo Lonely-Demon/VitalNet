@@ -65,20 +65,30 @@ import the same `triage()` function from the same npm package.
   `buildFeatureMap()` / `evaluateTrees()`.
 - `test/cli.test.ts` — exercises `cli.mjs` as a real subprocess.
 - `test/conformance/hybrid.conformance.test.ts` — the migration conformance
-  gate: replays 10,000 synthetic patients (each already labeled by
-  Python's production `predict_triage`) through `triage()` in `hybrid`
-  mode and asserts exact tier agreement; also generates an informational
-  `rules_first` vs. current-production delta report. Regenerate the
-  patient set with `cd backend && python scripts/export_conformance_patients.py`;
-  see `test/conformance/report.md` for the latest run's results.
+  gate: replays 10,000 synthetic patients through `triage()` in `hybrid`
+  mode and asserts agreement with the current model-primary contract; it also
+  generates an informational `rules_first` versus current-production delta
+  report. Regenerate the patient set with
+  `python tools/training/export_conformance_patients.py`; see
+  `test/conformance/report.md` for the latest run's results.
 
 ## Regenerating training artifacts
 
-`cli.mjs` exposes `label` and `engineer-features` JSONL subcommands so the
-Python training pipeline (`backend/scripts/train_classifier.py`) can call
-into this package instead of maintaining its own copy of the rules/feature
-code. Wiring that pipeline to actually call the CLI (removing its
-duplicated `assign_triage_label`/band-scorer functions) is Phase 6 of the
-migration plan — until then, `train_classifier.py`'s own copy and this
-package's `rules/` are two implementations that the conformance test above
-keeps honest, not one.
+`cli.mjs` exposes `label` and `engineer-features` JSONL subcommands. The
+Python training pipeline in `tools/training/` already calls this CLI for labels
+and engineered features; it does not maintain a second production labeler.
+Build this package before running the pipeline so its compiled CLI and package
+artifacts are available:
+
+```bash
+pnpm --filter @vitalnet/clinical-core build
+cd tools/training
+python train_classifier.py
+```
+
+The command regenerates the frozen backend model artifacts, web tree/config
+artifacts, and golden-vector fixtures together. Never hand-edit one generated
+artifact or retrain the production model as part of routine cleanup. The web
+runtime deliberately uses `hybrid` mode to match the live FastAPI backend,
+while the not-yet-live Edge Function exercises `rules_first` mode; both modes
+use this same package and are covered by the relevant tests.

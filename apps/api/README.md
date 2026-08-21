@@ -140,15 +140,25 @@ matching Python's round-half-to-even `round()` exactly — `Math.round()` disagr
 The legacy FastAPI backend stays deployable and authoritative until each endpoint is
 individually cut over via the base-URL resolver map.
 
-### Phase 5 — unified offline outbox + frontend cutover to clinical-core
+### Phase 5 — unified offline outbox + shared clinical-core integration
 
-`apps/web` now imports `@vitalnet/clinical-core` directly (workspace dependency) instead
-of maintaining four hand-mirrored clinical-logic files — `useLocalTriage` calls the SAME
-`triage()` function, in `rules_first` mode, that `POST /api/submit` calls server-side.
-`utils/triageClassifier.js` survives only as a thin model-loader (fetching
-`/models/*.json`, browser-specific and not clinical logic). The four apps/web parity test
-suites that existed to catch drift between the JS mirror and the Python original are
-deleted — there is nothing left in `apps/web` that could drift from the server.
+`apps/web` now imports `@vitalnet/clinical-core` directly (workspace dependency)
+instead of maintaining four hand-mirrored clinical-logic files. The web app’s
+`useLocalTriage` calls the shared `triage()` function in `hybrid` mode, matching
+the currently live FastAPI backend’s model-primary contract. This keeps offline
+previews compatible with the authoritative result produced when the queued case
+syncs.
+
+This Edge Function calls the same `triage()` implementation in `rules_first`
+mode, where the deterministic rules engine owns the tier and the trained tree is
+advisory. The Edge Function is implemented and tested but is **not receiving
+production traffic**; the frontend endpoint map remains `'legacy'` until the
+separate clinical review and release gates are satisfied.
+
+`utils/triageClassifier.js` survives only as a thin browser-specific model loader
+(fetching `/models/*.json`). The former apps/web parity suites were removed
+because shared clinical-core tests now own the schema, feature, tree-evaluator,
+and rules-engine contracts.
 
 `apps/web`'s offline submission queue is now a generic outbox (IndexedDB v3,
 `lib/outbox.js`): `{ event_id, type, payload, created_at, attempts, status, last_error }`.

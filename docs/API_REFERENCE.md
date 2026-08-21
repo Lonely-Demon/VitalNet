@@ -99,8 +99,7 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   - `consent_captured` (bool, **must be true or the request is rejected**),
     `consent_captured_at`.
   - `patient_key` (optional, format `XXXX-XXXX`, unambiguous alphabet
-    excluding 0/O/1/I/L) — opaque patient continuity key, generated
-    client-side (`frontend/src/utils/patientKey.js`); see `GET
+    excluding 0/O/1/I/L) — opaque patient continuity key, generated client-side (`apps/web/src/utils/patientKey.js`); see `GET
     /api/cases/by-patient-key/{key}` below.
 - **Response `200`**: the created/existing `case_records` row (includes
   `triage_level`, `triage_confidence`, `risk_driver`, `id`, `created_at`,
