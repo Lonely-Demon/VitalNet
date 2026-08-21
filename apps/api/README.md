@@ -160,8 +160,14 @@ separate clinical review and release gates are satisfied.
 because shared clinical-core tests now own the schema, feature, tree-evaluator,
 and rules-engine contracts.
 
-`apps/web`'s offline submission queue is now a generic outbox (IndexedDB v3,
-`lib/outbox.js`): `{ event_id, type, payload, created_at, attempts, status, last_error }`.
+`apps/web`'s offline submission queue is now a generic outbox (IndexedDB v4,
+`lib/outbox.js`): `{ event_id, owner_id, type, payload, created_at, attempts, status, last_error }`.
+Legacy v2 rows without an owner are migrated to aggregate-only `recovery_required`
+records and can never be submitted under a later worker's session. The authenticated
+worker can explicitly clear those records after review; the UI never renders their
+payloads. Pending rows owned by the current worker that remain older than seven days
+are surfaced for explicit review and purge, while newer rows and other workers' rows
+are preserved.
 `event_id` is the SAME uuid as `case_records.client_id` and the new `X-Event-Id` request
 header — `_shared/idempotency.ts` (wired into `POST /api/submit` after `requireRole`)
 reads `client_events` (via the caller's own RLS-scoped client — `client_events`' existing
@@ -181,6 +187,13 @@ confirmed empirically, not just by inspection).
 A permanently-failing (4xx) outbox event is dead-lettered (`status: 'dead'`) rather than
 silently dropped — `OfflineBanner.jsx` surfaces dead letters with retry/discard actions,
 satisfying the plan's "4xx→dead surfaced in the UI... not silently dropped" requirement.
+
+The Edge rate limiter fails closed with HTTP 503 when its Postgres-backed store is
+unavailable; continuing without the limiter would silently remove abuse protection.
+Both rate limiting and PHI audit IP attribution ignore forwarding headers by default.
+Set `TRUST_PROXY_HEADERS=true` only when the ingress is documented to overwrite those
+headers before Hono receives them. The Edge Function remains non-production and must
+pass its security and clinical release gates before cutover.
 
 ## Running locally
 

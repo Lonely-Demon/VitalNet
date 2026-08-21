@@ -8,3 +8,5 @@
 # tooling that the running app never imports.
 skl2onnx>=1.20.0
 onnxruntime>=1.27.0
+# Hardened XML parsing for externally sourced XLSX evaluation workbooks.
+defusedxml>=0.7.1,<1
