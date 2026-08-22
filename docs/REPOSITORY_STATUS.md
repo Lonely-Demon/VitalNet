@@ -45,6 +45,8 @@ The Vercel project setting and the tracked root `vercel.json` are related but no
 
 The last recorded read-only preproduction checks returned HTTP 200 for the frontend, HTTP 200 with `status: ok` from `/api/health`, and HTTP 200 for the synthetic ASHA CORS preflight. These are historical verification results, not a guarantee of continuous availability.
 
+The selected keep-alive scope is documented in `docs/KEEPALIVE_OPERATIONS.md`: read-only database activity for both production and preproduction Supabase projects, plus a best-effort `/api/health` check for the preproduction Render backend. Production Render is intentionally excluded because both services use the shared Free instance-hour budget and continuous warming would exceed it.
+
 ## Verified engineering baseline
 
 | Verification area | Last recorded result |

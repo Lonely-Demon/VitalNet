@@ -807,38 +807,15 @@ work:
   the impractical latency. A curated answer becomes part of a shared,
   growing facility FAQ inside the assistant UI.
 
-### 28. Two free-tier keep-alive jobs — one solid, one honestly best-effort
+### 28. Selected free-tier keep-alive scope — both Supabase projects, preproduction Render only
 
-**Context**: the project runs on free tiers end to end — Supabase (pauses a
-project after 7 days with no database activity) and, for the backend, a
-host like Render (spins the instance down after ~10-15 minutes idle,
-causing a slow cold-start on the next real request). Both needed a
-keep-alive mechanism; researched rather than assumed.
+**Context**: the user selected database keep-alive activity for both VitalNet Supabase projects and backend keep-alive activity for the preproduction Render service only. Production Render is intentionally excluded. The platform limits were verified against official documentation rather than assumed.
 
-**Supabase**: `.github/workflows/supabase-keepalive.yml`, cron `17 4 */3 * *`
-(roughly every 3 days — 2x safety margin under the 7-day pause threshold,
-including month-boundary drift in the day-of-month step). Confirmed via
-research that Supabase's inactivity timer tracks **database** activity
-specifically, not dashboard visits or auth-only requests — so the job
-issues a real anon-key `SELECT` against `facilities` via PostgREST (a
-200/401/403 all prove the query reached the database; only a network-level
-failure fails the job). This is a solid, durable fix: GitHub's documented
-worst-case scheduling delay (tens of minutes) is negligible against a
-multi-day threshold.
+**Supabase**: `.github/workflows/supabase-keepalive.yml`, cron `17 4 */2 * *` (roughly every 2 days). The workflow runs a read-only anonymous-key `SELECT` against the public `facilities` table for both projects: production uses `SUPABASE_URL` and `SUPABASE_ANON_KEY`; preproduction uses `TEST_SUPABASE_URL` and `TEST_SUPABASE_ANON_KEY`. Response bodies are discarded. No patient table, write operation, auth route, service-role key, or clinical endpoint is used. The two-day cadence provides a substantial margin under Supabase's roughly seven-day low-activity pause window.
 
-**Backend**: `.github/workflows/backend-keepalive.yml`, cron `*/10 * * * *`
-hitting `GET /api/health`, per the user's explicit request. **Honestly
-flagged as best-effort, not a real fix**: GitHub's own schedule trigger is
-non-guaranteed — documented delays of 5-30+ minutes (sometimes worse) under
-platform load are common, which can exceed a 10-15 minute host idle
-timeout outright. The correct fix for this specific problem is a dedicated
-uptime monitor (UptimeRobot, cron-job.org, Better Uptime, etc.) with a real
-5-minute-interval SLA — noted in the workflow's own comments and here so a
-future reader doesn't mistake "the job exists" for "the cold-start problem
-is solved." Both workflows read their target from repo secrets/variables
-(`SUPABASE_URL`/`SUPABASE_ANON_KEY` secrets, `BACKEND_HEALTH_URL` variable)
-and no-op cleanly (exit 0, not a failed run) if unset — the backend one is
-inert until a host is actually chosen and the variable is set.
+**Backend**: `.github/workflows/backend-keepalive.yml`, cron `*/10 * * * *`, targeting only `https://vitalnet-preprod-api.onrender.com/api/health`. This is explicitly **best-effort**, not a guarantee: GitHub schedule triggers can be delayed beyond Render's 15-minute Free-service idle window. Production Render `https://vitalnet.onrender.com` is intentionally not targeted. Render's shared Free instance-hour allowance also makes keeping both services continuously warm unsuitable; a 30-day month would require approximately 1,440 service-hours for two services against a 750-hour workspace allowance.
+
+Both workflows are version-controlled on `dev` and `main`, but GitHub scheduled workflows execute from the repository default branch. Repository secrets must be configured before the Supabase job can perform its checks. The preproduction Render workflow requires no secret because its public health URL is fixed in the dev-only correction. See `docs/KEEPALIVE_OPERATIONS.md` for the operational procedure and limitations.
 
 ### 29. Live E2E verification against the real project — method, two real bugs, and an ES256 finding
 
