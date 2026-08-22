@@ -92,6 +92,16 @@ session and return a Vercel login page to unauthenticated `curl` requests. The
 provider deployment status and authenticated preview view are the authoritative
 checks for that protected preview.
 
+## Keep-alive operations
+
+The selected keep-alive scope is Supabase production and preproduction plus Render preproduction. Production Render is intentionally excluded. The version-controlled workflows are `.github/workflows/supabase-keepalive.yml` and `.github/workflows/backend-keepalive.yml`; scheduled execution uses the repository default branch.
+
+The Supabase workflow runs every two days and performs one read-only request against `facilities` for each project. It uses `SUPABASE_URL`/`SUPABASE_ANON_KEY` for production and `TEST_SUPABASE_URL`/`TEST_SUPABASE_ANON_KEY` for preproduction. The response body is discarded. The Render workflow runs every ten minutes against `https://vitalnet-preprod-api.onrender.com/api/health` and sends no patient payload.
+
+Required repository secret names must exist before scheduled Supabase runs perform activity. Use anonymous/publishable keys only; never substitute `SUPABASE_SERVICE_ROLE_KEY`. A missing secret causes the corresponding Supabase matrix entry to skip rather than exposing a credential or making an unsafe request.
+
+The Render workflow is a best-effort cold-start mitigation, not a guaranteed uptime monitor. GitHub schedule delivery may be delayed beyond Render’s 15-minute Free-service idle window. Render’s Free workspace budget is shared across services, so the workflow deliberately does not target production Render. If preproduction cold-start latency becomes an acceptance requirement, use a paid Render instance or an independently managed uptime monitor after reviewing cost and access implications.
+
 ## What is not allowed in this runbook
 
 Do not use real patient data, raw external clinical records, production
