@@ -140,18 +140,34 @@ matching Python's round-half-to-even `round()` exactly — `Math.round()` disagr
 The legacy FastAPI backend stays deployable and authoritative until each endpoint is
 individually cut over via the base-URL resolver map.
 
-### Phase 5 — unified offline outbox + frontend cutover to clinical-core
+### Phase 5 — unified offline outbox + shared clinical-core integration
 
-`apps/web` now imports `@vitalnet/clinical-core` directly (workspace dependency) instead
-of maintaining four hand-mirrored clinical-logic files — `useLocalTriage` calls the SAME
-`triage()` function, in `rules_first` mode, that `POST /api/submit` calls server-side.
-`utils/triageClassifier.js` survives only as a thin model-loader (fetching
-`/models/*.json`, browser-specific and not clinical logic). The four apps/web parity test
-suites that existed to catch drift between the JS mirror and the Python original are
-deleted — there is nothing left in `apps/web` that could drift from the server.
+`apps/web` now imports `@vitalnet/clinical-core` directly (workspace dependency)
+instead of maintaining four hand-mirrored clinical-logic files. The web app’s
+`useLocalTriage` calls the shared `triage()` function in `hybrid` mode, matching
+the currently live FastAPI backend’s model-primary contract. This keeps offline
+previews compatible with the authoritative result produced when the queued case
+syncs.
 
-`apps/web`'s offline submission queue is now a generic outbox (IndexedDB v3,
-`lib/outbox.js`): `{ event_id, type, payload, created_at, attempts, status, last_error }`.
+This Edge Function calls the same `triage()` implementation in `rules_first`
+mode, where the deterministic rules engine owns the tier and the trained tree is
+advisory. The Edge Function is implemented and tested but is **not receiving
+production traffic**; the frontend endpoint map remains `'legacy'` until the
+separate clinical review and release gates are satisfied.
+
+`utils/triageClassifier.js` survives only as a thin browser-specific model loader
+(fetching `/models/*.json`). The former apps/web parity suites were removed
+because shared clinical-core tests now own the schema, feature, tree-evaluator,
+and rules-engine contracts.
+
+`apps/web`'s offline submission queue is now a generic outbox (IndexedDB v4,
+`lib/outbox.js`): `{ event_id, owner_id, type, payload, created_at, attempts, status, last_error }`.
+Legacy v2 rows without an owner are migrated to aggregate-only `recovery_required`
+records and can never be submitted under a later worker's session. The authenticated
+worker can explicitly clear those records after review; the UI never renders their
+payloads. Pending rows owned by the current worker that remain older than seven days
+are surfaced for explicit review and purge, while newer rows and other workers' rows
+are preserved.
 `event_id` is the SAME uuid as `case_records.client_id` and the new `X-Event-Id` request
 header — `_shared/idempotency.ts` (wired into `POST /api/submit` after `requireRole`)
 reads `client_events` (via the caller's own RLS-scoped client — `client_events`' existing
@@ -171,6 +187,13 @@ confirmed empirically, not just by inspection).
 A permanently-failing (4xx) outbox event is dead-lettered (`status: 'dead'`) rather than
 silently dropped — `OfflineBanner.jsx` surfaces dead letters with retry/discard actions,
 satisfying the plan's "4xx→dead surfaced in the UI... not silently dropped" requirement.
+
+The Edge rate limiter fails closed with HTTP 503 when its Postgres-backed store is
+unavailable; continuing without the limiter would silently remove abuse protection.
+Both rate limiting and PHI audit IP attribution ignore forwarding headers by default.
+Set `TRUST_PROXY_HEADERS=true` only when the ingress is documented to overwrite those
+headers before Hono receives them. The Edge Function remains non-production and must
+pass its security and clinical release gates before cutover.
 
 ## Running locally
 

@@ -90,6 +90,7 @@ const SYMPTOM_IDS = [
 const SEX_OPTIONS = ["male", "female", "other"]
 
 const SPEECH_LANG_MAP = { en: "en-US", hi: "hi-IN", ta: "ta-IN" }
+const PAEDIATRIC_CAPTURE_ENABLED = import.meta.env.VITE_ENABLE_PAEDIATRIC_CAPTURE === 'true'
 
 const BADGE_COLORS = {
   EMERGENCY: "bg-emergency text-white",
@@ -114,6 +115,8 @@ const PRELIM_RESULT_STYLES = {
 const emptyForm = {
   patient_name: "",
   patient_age: "",
+  age_months: "",
+  muac_mm: "",
   patient_sex: "",
   chief_complaint: "",
   custom_complaint: "",
@@ -420,10 +423,27 @@ export default function IntakeForm() {
             placeholder={t('intakeForm.placeholders.patientName')} className={`${inputClass} ${fieldErrors.patient_name ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} maxLength={100} />
         </Field>
         <Field label={t('intakeForm.fields.patientAge')} error={fieldErrors.patient_age} id="patient_age">
-          <input id="patient_age" name="patient_age" type="number" value={form.patient_age}
+          <input id="patient_age" name="patient_age" type="number" min="0" max="120" value={form.patient_age}
             onChange={handleChange} aria-describedby={fieldErrors.patient_age ? "patient_age-error" : undefined}
             placeholder={t('intakeForm.placeholders.patientAge')} className={`${inputClass} ${fieldErrors.patient_age ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
         </Field>
+        {PAEDIATRIC_CAPTURE_ENABLED && Number.isFinite(Number(form.patient_age)) && Number(form.patient_age) <= 4 && (
+          <div className="col-span-full rounded-lg border border-urgent/30 bg-urgent/5 p-3 space-y-3">
+            <p className="text-xs text-text3">{t('intakeForm.hints.paediatricCapture')}</p>
+            {Number(form.patient_age) < 2 && (
+              <Field label={t('intakeForm.fields.ageMonths')} error={fieldErrors.age_months} id="age_months">
+                <input id="age_months" name="age_months" type="number" min="0" max="23" value={form.age_months}
+                  onChange={handleChange} aria-describedby={fieldErrors.age_months ? "age_months-error" : undefined}
+                  placeholder={t('intakeForm.placeholders.ageMonths')} className={`${inputClass} ${fieldErrors.age_months ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+              </Field>
+            )}
+            <Field label={t('intakeForm.fields.muacMm')} error={fieldErrors.muac_mm} id="muac_mm">
+              <input id="muac_mm" name="muac_mm" type="number" min="50" max="300" value={form.muac_mm}
+                onChange={handleChange} aria-describedby={fieldErrors.muac_mm ? "muac_mm-error" : undefined}
+                placeholder={t('intakeForm.placeholders.muacMm')} className={`${inputClass} ${fieldErrors.muac_mm ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
+            </Field>
+          </div>
+        )}
         <Field label={t('intakeForm.fields.patientSex')} error={fieldErrors.patient_sex} id="patient_sex">
           <fieldset className="mt-1">
             <legend className="sr-only">{t('intakeForm.fields.patientSex')}</legend>

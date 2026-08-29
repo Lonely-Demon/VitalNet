@@ -73,6 +73,14 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   - `bp_systolic` (30-300), `bp_diastolic` (10-200, must be < systolic if
     both given), `spo2` (50-100), `heart_rate` (10-250), `temperature`
     (25.0-45.0°C) — all optional.
+  - `age_months` (0-23) is optional and valid only when `patient_age` is under
+    2 years. `muac_mm` (50-300) is optional and valid only for children under
+    5 years. Both are additive governance-gated capture fields and are not
+    consumed by the frozen production triage path.
+  - `paediatric_advisory` is persisted as versioned metadata with a
+    default-off gate; when enabled for a research-only study it remains an
+    advisory requiring qualified clinical interpretation and never changes
+    `triage_level` or `needs_review`.
   - `is_pregnant` (bool, optional) — structured pregnancy flag; gates the
     preeclampsia-specific safety-net rule (docs/DECISIONS.md §30). Distinct
     from the free-text pregnancy keyword match `clinical_features.py`
@@ -91,8 +99,7 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   - `consent_captured` (bool, **must be true or the request is rejected**),
     `consent_captured_at`.
   - `patient_key` (optional, format `XXXX-XXXX`, unambiguous alphabet
-    excluding 0/O/1/I/L) — opaque patient continuity key, generated
-    client-side (`frontend/src/utils/patientKey.js`); see `GET
+    excluding 0/O/1/I/L) — opaque patient continuity key, generated client-side (`apps/web/src/utils/patientKey.js`); see `GET
     /api/cases/by-patient-key/{key}` below.
 - **Response `200`**: the created/existing `case_records` row (includes
   `triage_level`, `triage_confidence`, `risk_driver`, `id`, `created_at`,
@@ -108,14 +115,17 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   latency to this response).
 
 ### `GET /api/cases`
-Doctor dashboard feed — cursor-paginated, sorted EMERGENCY→URGENT→ROUTINE
-then newest-first within a tier.
+Doctor dashboard feed — cursor-paginated, sorted EMERGENCY→URGENT→ROUTINE,
+then cases with `needs_review=true` before unflagged cases within each tier,
+then newest-first and ID-descending as stable tie-breakers.
 - **Auth**: `doctor` (facility-scoped if `facility_id` set), `admin`
   (global). **Rate limit**: 60/min.
 - **Query params**: `before_time`, `before_priority` (0/1/2),
-  `before_id` (composite keyset cursor from the previous page), `limit`
-  (default 25, capped 100).
-- **Response `200`**: `{ cases: [...], hasMore, nextCursor, nextTriagePriority, nextId }`.
+  `before_needs_review` (`true`/`false`), `before_id` (composite keyset cursor
+  from the previous page), `limit` (default 25, capped 100). The review
+  component is optional for one-release compatibility with older clients.
+- **Response `200`**: `{ cases: [...], hasMore, nextCursor,
+  nextTriagePriority, nextNeedsReview, nextId }`.
 
 ### `PATCH /api/cases/{case_id}/review`
 Mark a case reviewed.
@@ -156,7 +166,10 @@ a worker recognize a returning patient (`docs/DECISIONS.md` §21).
 - **Path param**: `patient_key` — must match `XXXX-XXXX`; `400` if not.
 - **Response `200`**: `{ cases: [...] }` — up to 50 rows, reduced column set
   (`id`, `chief_complaint`, `triage_level`, `created_at`, `reviewed_at`,
-  `patient_age`, `patient_sex`, `facility_id`; no `briefing` JSONB).
+  `patient_age`, `patient_sex`, `facility_id`, `bp_systolic`,
+  `bp_diastolic`, `spo2`, `heart_rate`, `temperature`; no `briefing` JSONB,
+  observations, medications, or unrelated free text). The five vital fields
+  are included only to support display-only returning-patient trends.
 
 ### `GET /api/cases/{case_id}`
 Full case detail (including the `briefing` JSONB) after row-level
@@ -413,13 +426,18 @@ admin may update any. `403` otherwise.
 ### `POST /api/cases/{case_id}/refer` — 20/min — `doctor` (own facility), `admin`
 **Body** (`CreateReferralRequest`): `receiving_facility_id`, `reason`
 (1-1000 chars), `urgency` (`ROUTINE`/`URGENT`/`EMERGENCY`). `400` if
-referring a case to its own facility.
+referring a case to its own facility. The response includes a deterministic,
+versioned `sbar_draft` and `sbar_version` generated from recorded case and
+referral fields. The draft is a communication aid, not a diagnosis or
+autonomous recommendation; the clinician must review it before sending.
 
 ### `GET /api/referrals` — 60/min — `doctor`, `admin`
 **Query param**: `direction` (`outgoing`/`incoming`/`all`, default `all`) —
 ignored for `admin` (sees everything). **Response**: `{ referrals: [...] }`,
-each row embedding `case_records` (chief complaint/age/sex/triage) and
-`referring_facility`/`receiving_facility` names.
+each row embedding `case_records` (chief complaint/age/sex/triage),
+`referring_facility`/`receiving_facility` names, and the persisted
+`sbar_draft`/`sbar_version` when present. Referral RLS remains the sole
+visibility boundary.
 
 ### `PATCH /api/referrals/{referral_id}/status` — 30/min — `doctor` (receiving facility only), `admin`
 **Body**: `{ status }` — one of `acknowledged`/`patient_arrived`/

@@ -1,5 +1,14 @@
 import { useState, useEffect } from 'react'
-import { getPendingCount, getDeadLetters, retryDeadLetter, discardDeadLetter } from '../lib/outbox'
+import {
+  getPendingCount,
+  getRecoveryRequiredCount,
+  getStalePendingCount,
+  getDeadLetters,
+  retryDeadLetter,
+  discardDeadLetter,
+  purgeRecoveryRequired,
+  purgeStalePending,
+} from '../lib/outbox'
 import { useAuth } from '../store/authStore'
 
 export default function OfflineBanner() {
@@ -8,6 +17,8 @@ export default function OfflineBanner() {
   const [online,       setOnline]       = useState(navigator.onLine)
   const [queueCount,   setQueueCount]   = useState(0)
   const [deadLetters,  setDeadLetters]  = useState([])
+  const [recoveryCount, setRecoveryCount] = useState(0)
+  const [staleCount, setStaleCount] = useState(0)
   const [showDead,     setShowDead]     = useState(false)
 
   useEffect(() => {
@@ -16,9 +27,16 @@ export default function OfflineBanner() {
       // never see another worker's queued patient data (the list renders
       // patient_name/chief_complaint). The pending COUNT is a device-level
       // indicator only (no PHI), so it stays global.
-      const [count, dead] = await Promise.all([getPendingCount(), getDeadLetters(ownerId)])
+      const [count, dead, recovery, stale] = await Promise.all([
+        getPendingCount(),
+        getDeadLetters(ownerId),
+        getRecoveryRequiredCount(),
+        getStalePendingCount(ownerId),
+      ])
       setQueueCount(count)
       setDeadLetters(dead)
+      setRecoveryCount(recovery)
+      setStaleCount(stale)
     }
 
     function handleOnline()  { setOnline(true);  updateCounts() }
@@ -44,7 +62,23 @@ export default function OfflineBanner() {
     await discardDeadLetter(eventId)
   }
 
-  if (online && queueCount === 0 && deadLetters.length === 0) return null
+  const handlePurgeStale = async () => {
+    if (!session) return
+    const confirmed = window.confirm(
+      'Clear only your pending offline submissions older than seven days? This permanently deletes stale rows after review and does not affect newer submissions or another worker\'s rows.',
+    )
+    if (confirmed) await purgeStalePending(ownerId)
+  }
+
+  const handlePurgeRecovery = async () => {
+    if (!session) return
+    const confirmed = window.confirm(
+      'Clear legacy offline submissions that cannot be safely attributed to a worker? This permanently deletes only migrated recovery records and does not affect current pending submissions.',
+    )
+    if (confirmed) await purgeRecoveryRequired()
+  }
+
+  if (online && queueCount === 0 && deadLetters.length === 0 && recoveryCount === 0 && staleCount === 0) return null
 
   return (
     <div>
@@ -61,6 +95,43 @@ export default function OfflineBanner() {
       {online && queueCount > 0 && (
         <div role="status" aria-live="polite" className="bg-forest/10 border-b border-forest/30 px-4 py-2 text-center text-sm text-forest">
           Syncing {queueCount} offline submission{queueCount > 1 ? 's' : ''}…
+        </div>
+      )}
+
+      {staleCount > 0 && session && (
+        <div role="status" aria-live="polite" className="bg-urgent/10 border-b border-urgent/30 px-4 py-2 text-center text-sm text-urgent">
+          {staleCount} pending offline submission{staleCount > 1 ? 's are' : ' is'} older than seven days and require review.
+          <button
+            type="button"
+            onClick={handlePurgeStale}
+            className="ml-2 underline font-medium cursor-pointer"
+          >
+            Clear stale submissions
+          </button>
+        </div>
+      )}
+
+      {/* Legacy ownerless submissions are aggregate-only and deliberately
+          non-submittable. Never render their payloads on a shared device. */}
+      {recoveryCount > 0 && (
+        <div role="alert" aria-live="polite" className="bg-urgent/10 border-b border-urgent/30 px-4 py-2 text-sm text-urgent">
+          <div className="flex items-center justify-center gap-2 flex-wrap">
+            <span>
+              {recoveryCount} legacy offline submission{recoveryCount > 1 ? 's' : ''} require device cleanup before they can be safely removed.
+            </span>
+            {session && (
+              <button
+                type="button"
+                onClick={handlePurgeRecovery}
+                className="underline font-medium cursor-pointer"
+              >
+                Clear legacy data
+              </button>
+            )}
+          </div>
+          {!session && (
+            <p className="text-center text-xs mt-1">Sign in as the device owner to review this cleanup action.</p>
+          )}
         </div>
       )}
 

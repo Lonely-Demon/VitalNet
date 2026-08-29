@@ -20,3 +20,11 @@ When real translations are ready: replace the values (never the keys) in
 `fallbackLng: 'en'` means a missing key falls back to English rather than
 rendering blank, but a stale/missing key should still be added for
 completeness.
+
+`localeReviewManifest.json` is the machine-checkable review record. It records
+the source version, translator and reviewer identities, review status, and
+pilot-approval state for each locale. Hindi and Tamil must remain
+`draft-placeholder` and `pilotApproved: false` until a qualified medical-language
+reviewer completes a matched source-to-translation review. The language controls
+surface this status to prevent draft text being mistaken for approved clinical
+localization.

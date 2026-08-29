@@ -20,6 +20,8 @@ from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput, PAT
 from app.ml.classifier import predict_triage
 from app.services.llm import generate_briefing, generate_patient_summary
 from app.services.push import push_emergency_alert
+from app.utils.case_queue import build_cases_cursor_filter
+from app.utils.paediatric import build_paediatric_advisory
 
 logger = logging.getLogger("vitalnet")
 
@@ -202,6 +204,10 @@ async def submit_case(
             db, form.patient_key, triage_result["triage_level"]
         )
 
+        paediatric_advisory = build_paediatric_advisory(
+            {"patient_age": form.patient_age, "age_months": form.age_months, "muac_mm": form.muac_mm},
+            enabled=settings.paediatric_advisory_enabled,
+        )
         record = {
             "client_id": str(form.client_id or uuid_lib.uuid4()),
             "submitted_by": user["sub"],
@@ -217,6 +223,12 @@ async def submit_case(
             "temperature": float(form.temperature)
             if form.temperature is not None
             else None,
+            # Governance-gated paediatric capture. These fields are persisted
+            # for review/research only and are intentionally absent from the
+            # classifier and briefing inputs above.
+            "age_months": form.age_months,
+            "muac_mm": form.muac_mm,
+            "paediatric_advisory": paediatric_advisory,
             "is_pregnant": form.is_pregnant,
             "chief_complaint": form_data.get("chief_complaint", form.chief_complaint),
             "complaint_duration": form.complaint_duration,
@@ -282,7 +294,12 @@ async def submit_case(
             resource_id=response.get("id") if isinstance(response, dict) else None,
             facility_id=facility_id,
             ip_address=get_client_ip(request),
-            details={"created_offline": bool(form.created_offline), "needs_review": bool(record.get("needs_review"))},
+            details={
+                "created_offline": bool(form.created_offline),
+                "needs_review": bool(record.get("needs_review")),
+                "paediatric_capture": bool(form.age_months is not None or form.muac_mm is not None),
+                "paediatric_advisory_status": paediatric_advisory.get("status"),
+            },
         )
 
         # Genuinely new submission (not a retried duplicate) — record the
@@ -328,6 +345,7 @@ async def get_cases(
     user: dict = Depends(require_role("doctor", "admin")),
     before_time: str | None = None,       # ISO timestamp of the last seen case
     before_priority: int | None = None,   # triage_priority of the last seen case (0/1/2)
+    before_needs_review: bool | None = None,  # needs_review of the last seen case
     before_id: str | None = None,         # id of the last seen case (unique tie-breaker)
     limit: int = 25,
 ):
@@ -335,11 +353,11 @@ async def get_cases(
     Cursor-based pagination with composite keyset for the Doctor Dashboard.
 
     Sort order: EMERGENCY (0) → URGENT (1) → ROUTINE (2) first,
-    then by created_at DESC within each tier, then by id DESC as a unique
-    tie-breaker (handles multiple cases with an identical created_at).
+    flagged cases requiring review before unflagged cases within each tier,
+    then by created_at DESC, then by id DESC as a unique tie-breaker.
 
-    Use before_time + before_priority + before_id from the previous page's
-    nextCursor / nextTriagePriority / nextId to fetch the next page.
+    Use before_time + before_priority + before_needs_review + before_id from
+    the previous page's cursor fields to fetch the next page.
 
     Scoping: 'admin' sees all facilities (global). 'doctor' accounts with a
     facility_id are scoped to that facility only. Doctors without a
@@ -367,11 +385,12 @@ async def get_cases(
             "low_confidence, needs_review, human_review_requested, human_review_reason, "
             "contraindication_flags, deterioration_alert, deterioration_visit_count, "
             "triage_model_version, overridden_triage, override_reason, overridden_by, overridden_at, "
-            "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
+            "patient_key, created_at, reviewed_at, reviewed_by, facility_id, created_offline"
         )
         .is_("deleted_at", "null")
         .order("triage_priority", desc=False)   # EMERGENCY (0) first
-        .order("created_at", desc=True)          # Newest within each tier
+        .order("needs_review", desc=True)        # Flagged cases first within tier
+        .order("created_at", desc=True)          # Newest within each routing group
         .order("id", desc=True)                  # Unique tie-breaker for stable pagination
         .limit(limit + 1)                        # Fetch one extra to determine hasMore
     )
@@ -380,18 +399,14 @@ async def get_cases(
         query = query.eq("facility_id", facility_id)
 
     if normalized_before_time is not None and before_priority is not None:
-        # Composite keyset cursor with unique tie-breaker.
-        if parsed_before_id is not None:
-            query = query.or_(
-                f"triage_priority.gt.{before_priority},"
-                f"and(triage_priority.eq.{before_priority},created_at.lt.{normalized_before_time}),"
-                f"and(triage_priority.eq.{before_priority},created_at.eq.{normalized_before_time},id.lt.{parsed_before_id})"
+        query = query.or_(
+            build_cases_cursor_filter(
+                before_time=normalized_before_time,
+                before_priority=before_priority,
+                before_needs_review=before_needs_review,
+                before_id=parsed_before_id,
             )
-        else:
-            query = query.or_(
-                f"triage_priority.gt.{before_priority},"
-                f"and(triage_priority.eq.{before_priority},created_at.lt.{normalized_before_time})"
-            )
+        )
 
     result = query.execute()
     rows = result.data
@@ -404,6 +419,7 @@ async def get_cases(
         "hasMore": has_more,
         "nextCursor": cases[-1]["created_at"] if has_more and cases else None,
         "nextTriagePriority": cases[-1]["triage_priority"] if has_more and cases else None,
+        "nextNeedsReview": cases[-1]["needs_review"] if has_more and cases else None,
         "nextId": cases[-1]["id"] if has_more and cases else None,
     }
 
@@ -669,7 +685,8 @@ async def get_cases_by_patient_key(
         db.table("case_records")
         .select(
             "id, chief_complaint, triage_level, created_at, reviewed_at, "
-            "patient_age, patient_sex, facility_id"
+            "patient_age, patient_sex, facility_id, bp_systolic, bp_diastolic, "
+            "spo2, heart_rate, temperature"
         )
         .eq("patient_key", key)
         .is_("deleted_at", "null")
@@ -691,7 +708,7 @@ async def get_cases_by_patient_key(
         resource_id=None,
         facility_id=facility_id,
         ip_address=get_client_ip(request),
-        details={"view": "patient_key_history", "match_count": len(rows)},
+        details={"view": "patient_key_history", "match_count": len(rows), "include": "bounded_vitals"},
     )
 
     return {"cases": rows}

@@ -134,6 +134,8 @@ graph LR
 
 ## Dependency management
 
+- Every remote GitHub Action in `.github/workflows/` is pinned to a full commit SHA. The `action-pins` pull-request job runs `tools/ci/check_action_pins.py` and fails if a mutable tag, branch, or short SHA is introduced.
+- The root `package.json` contains narrowly scoped pnpm overrides for the audited transitive versions of `brace-expansion`, `esbuild`, `fast-uri`, `nanoid`, and `postcss`; the committed lockfile is regenerated with the same pnpm major version used by CI. A fresh `pnpm audit` must report zero known npm advisories for the locked graph.
 - `.github/dependabot.yml` opens daily update PRs for pip/npm/GitHub
   Actions dependencies, targeting `dev`. The npm entry points at the repo
   root, so the single `pnpm-lock.yaml` there covers both `apps/web` and
@@ -150,6 +152,7 @@ graph LR
   line, with a rationale comment — see `docs/DECISIONS.md` §13 for the
   correct (current) suppression syntax; the legacy `lgtm[query-id]` syntax
   is silently ignored by GitHub's current default CodeQL setup.
+- The frontend CycloneDX CLI used by the SBOM job is pinned to an exact package version rather than `latest`. The SBOM is retained as a build artifact and is not treated as clinical evidence.
 - **Software Bill of Materials (SBOM):** the `sbom` CI job (push-only)
   generates a CycloneDX SBOM for both the backend (`cyclonedx-py
   requirements backend/requirements.txt`) and frontend
@@ -157,6 +160,13 @@ graph LR
   chain transparency and a machine-readable dependency inventory for
   correlating against a future CVE disclosure. It's a diagnostic artifact,
   not a merge gate: it only fails if the SBOM tooling itself breaks.
+
+## Data and artifact safety controls
+
+- Offline queue migration is fail-closed for legacy rows without an owner identity. Such rows become aggregate-only `recovery_required` records and can never be submitted under a later worker's session.
+- The web client exposes only aggregate counts for ownerless recovery rows. Authenticated workers receive explicit cleanup actions for legacy recovery rows and for their own pending rows older than seven days; neither cleanup runs automatically, and newer or other-worker rows are preserved.
+- Candidate retraining verifies the SHA-256 of the frozen production model before comparing it with a candidate. A mismatch aborts the comparison, and candidate output is written to a separate artifact path.
+- Externally sourced KTAS XLSX workbooks are parsed with `defusedxml` at the OpenXML boundary. This is evaluation-only tooling and is intentionally excluded from the production API dependency set.
 
 ## Known limitations (accepted, not oversights)
 

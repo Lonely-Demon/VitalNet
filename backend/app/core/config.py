@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     # of trusted proxies to prevent IP spoofing in audit logs (VN-2026-08-C9-01).
     trusted_proxy_ips: str = ""
 
+    # Paediatric advisory calculations remain disabled until qualified clinical
+    # governance authorizes them. Capture fields are additive and independent.
+    paediatric_advisory_enabled: bool = False
+
     # ── API docs ───────────────────────────────────────────────────────────────
     # Swagger/ReDoc/OpenAPI JSON expose the full request/response schema and
     # every route. Off by default; enable only in dev/staging.
