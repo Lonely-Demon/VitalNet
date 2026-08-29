@@ -1,0 +1,13 @@
+BlooddpressurSystol,BlooddpressurDiastol,PulseRate,Temperature,O2Saturation,ChiefComplaint,TriageGrade,CriticalStatus,NeedFastExecute,triage_code
+120,80,75,37.0,98,chest pain,1,1,1,IRAN_001
+140,90,88,36.8,96,dyspnea,2,1,0,IRAN_002
+110,70,72,36.5,99,abdominal pain,3,0,0,IRAN_003
+130,85,80,37.2,97,headache,4,0,0,IRAN_004
+118,78,68,36.6,98,ankle sprain,5,0,0,IRAN_005
+125,82,76,36.9,,fever,2,0,1,IRAN_006
+135,88,,37.1,95,cough,3,0,0,IRAN_007
+,,90,38.5,94,high fever,1,1,1,IRAN_008
+115,75,65,,99,minor cut,5,0,0,IRAN_009
+122,79,70,36.7,97,dizziness,3,,,IRAN_010
+160,100,110,39.0,91,altered mental status,1,1,1,IRAN_011
+105,68,62,36.4,100,routine check,4,0,0,IRAN_012

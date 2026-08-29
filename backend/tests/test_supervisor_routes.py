@@ -1,8 +1,11 @@
 """
 Tests for app/api/routes/supervisor_routes.py — the per-ASHA-worker aggregate
 metrics used for supportive supervision (docs/DECISIONS.md §25). Covers the
-pure aggregation logic. Facility-scope resolution is shared with
-outbreak_routes.py and tested once in tests/test_scoping.py.
+pure aggregation logic over fn_team_metrics's row shape (backend/supabase/
+migrations/phase28_security_definer_fns.sql — full_name is a flat column,
+not nested under profiles, since the RPC already joins it server-side).
+Facility-scope resolution is shared with outbreak_routes.py and tested once
+in tests/test_scoping.py.
 
 Run: cd backend && pytest tests/test_supervisor_routes.py -v
 """
@@ -14,11 +17,11 @@ from app.api.routes.supervisor_routes import _aggregate_team_metrics
 def _row(uid, tier, needs_review=False, contraindication=False, deterioration=False, name="Asha One"):
     return {
         "submitted_by": uid,
+        "full_name": name,
         "triage_level": tier,
         "needs_review": needs_review,
         "contraindication_flags": ["x"] if contraindication else [],
         "deterioration_alert": deterioration,
-        "profiles": {"full_name": name},
     }
 
 
@@ -60,12 +63,12 @@ def test_rates_computed_correctly():
 
 
 def test_rows_with_no_submitted_by_are_skipped():
-    rows = [{"submitted_by": None, "triage_level": "ROUTINE", "profiles": {}}]
+    rows = [{"submitted_by": None, "triage_level": "ROUTINE", "full_name": "x"}]
     assert _aggregate_team_metrics(rows) == []
 
 
 def test_unknown_full_name_defaults_to_unknown():
-    rows = [{"submitted_by": "u1", "triage_level": "ROUTINE", "profiles": None,
+    rows = [{"submitted_by": "u1", "triage_level": "ROUTINE", "full_name": None,
              "needs_review": False, "contraindication_flags": [], "deterioration_alert": False}]
     result = _aggregate_team_metrics(rows)
     assert result[0]["full_name"] == "Unknown"

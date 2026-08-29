@@ -1,18 +1,22 @@
 """
 Supervisor Routes — aggregate, non-PHI, per-ASHA-worker team metrics.
 
-Grounded in NHM's real ASHA Facilitator role (docs/DECISIONS.md §25): a
-facility-scoped, workforce-quality-oversight role, structurally separate from
-clinical case authority (doctor) and organisation-wide administration (admin).
+Grounded in NHM's real ASHA Facilitator / Supervisor role (docs/DECISIONS.md §25, §39): an
+organisation-wide workforce-quality-oversight role, structurally separate from
+clinical case authority (doctor) and local facility administration (PHC Admin).
 
-Uses supabase_admin — a deliberate, narrow RLS bypass following the same
+Calls fn_team_metrics — a SECURITY DEFINER Postgres function (backend/
+supabase/migrations/phase40_supervisor_global_aggregate_scope.sql) — through the
+caller's own RLS-scoped client, following the same narrow-aggregate
 pattern already established in §20 (referral load-balancing) and §22
 (deterioration alert): what crosses the RLS boundary is always an aggregate,
 grouped by submitting worker, never an individual case row or any patient
-field (chief complaint, vitals, name — none of it is selected here).
-supervisor is never added to case_records' row-level SELECT policy; this
-endpoint is the only sanctioned path by which a supervisor account reasons
-about case data at all.
+field (chief complaint, vitals, name — none of it is selected here). The
+function re-derives the scoping rule (supervisor is global by default and can
+optionally narrow by facility_id query param; admin is pinned to their own facility)
+inside the database itself, not just in this route. supervisor is never added to case_records'
+row-level SELECT policy; this endpoint is the only sanctioned path by
+which a supervisor account reasons about team performance metrics.
 """
 import logging
 from datetime import datetime, timedelta, timezone
@@ -20,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.core.auth import require_role
-from app.core.database import supabase_admin
+from app.core.database import get_supabase_for_user, extract_bearer_token
 from app.core.scoping import resolve_facility_scope
 from app.api.routes.cases import limiter, _resolved_role, _resolved_facility
 
@@ -34,10 +38,11 @@ MAX_WINDOW_DAYS = 366
 
 def _aggregate_team_metrics(rows: list[dict]) -> list[dict]:
     """
-    Groups case_records rows by submitted_by into per-worker aggregates:
-    submission count, needs_review/contraindication/deterioration rates, and
-    triage-tier distribution. Pure function over already-fetched rows so it's
-    testable without a live Supabase connection.
+    Groups fn_team_metrics rows (phase28_security_definer_fns.sql) by
+    submitted_by into per-worker aggregates: submission count,
+    needs_review/contraindication/deterioration rates, and triage-tier
+    distribution. Pure function over already-fetched rows so it's testable
+    without a live Supabase connection.
     """
     workers: dict[str, dict] = {}
     for row in rows:
@@ -48,7 +53,7 @@ def _aggregate_team_metrics(rows: list[dict]) -> list[dict]:
         if w is None:
             w = {
                 "user_id": uid,
-                "full_name": (row.get("profiles") or {}).get("full_name") or "Unknown",
+                "full_name": row.get("full_name") or "Unknown",
                 "submission_count": 0,
                 "needs_review_count": 0,
                 "contraindication_flag_count": 0,
@@ -100,10 +105,9 @@ async def get_team_metrics(
     supervision needs (which workers need more training/support), with
     structurally no visibility into any individual case's content.
 
-    Scope: supervisor is always restricted to their own facility (the
-    `facility_id` query param is ignored for that role — a supervisor cannot
-    widen their own scope by passing a different id). admin defaults to
-    system-wide but may pass `facility_id` to narrow to one facility.
+    Scope: supervisor defaults to organisation-wide (facility_id = None) but may
+    pass facility_id to narrow to a specific PHC. admin is strictly restricted
+    to their resolved own facility (any passed facility_id query param is ignored).
     """
     if not (1 <= days <= MAX_WINDOW_DAYS):
         raise HTTPException(status_code=400, detail=f"days must be between 1 and {MAX_WINDOW_DAYS}")
@@ -113,20 +117,14 @@ async def get_team_metrics(
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-    query = (
-        supabase_admin.table("case_records")
-        .select(
-            "submitted_by, triage_level, needs_review, contraindication_flags, "
-            "deterioration_alert, profiles!submitted_by(full_name)"
-        )
-        .is_("deleted_at", "null")
-        .gte("created_at", since)
-    )
-    if scoped_facility_id:
-        query = query.eq("facility_id", scoped_facility_id)
+    raw_token = extract_bearer_token(authorization)
+    db = get_supabase_for_user(raw_token)
 
     try:
-        res = query.execute()
+        res = db.rpc(
+            "fn_team_metrics",
+            {"p_facility_id": scoped_facility_id, "p_since": since},
+        ).execute()
     except Exception as e:
         logger.warning("Supervisor team-metrics query failed: %s", e)
         raise HTTPException(status_code=502, detail="Team metrics query failed — try again")

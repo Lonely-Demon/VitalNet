@@ -7,7 +7,7 @@ that scope via a query parameter.
 """
 from fastapi import HTTPException
 
-GLOBAL_SCOPE_ROLE = "admin"
+GLOBAL_SCOPE_ROLE = "supervisor"
 
 
 def resolve_facility_scope(

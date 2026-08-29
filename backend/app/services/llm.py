@@ -189,6 +189,21 @@ async def _call_groq(model: str, patient_context: str) -> dict:
 
 # ─── Gemini async call ────────────────────────────────────────────────────────
 
+def _make_gemini_generation_config(genai, max_tokens: int = 1000):
+    """Construct GenerationConfig safely across older and newer google-generativeai SDK versions."""
+    try:
+        return genai.GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.1,
+            max_output_tokens=max_tokens,
+        )
+    except TypeError:
+        return genai.GenerationConfig(
+            temperature=0.1,
+            max_output_tokens=max_tokens,
+        )
+
+
 async def _call_gemini(model_name: str, patient_context: str) -> dict:
     """
     Attempt a Gemini model call using the native async API.
@@ -201,11 +216,7 @@ async def _call_gemini(model_name: str, patient_context: str) -> dict:
     model = genai.GenerativeModel(
         model_name=model_name,
         system_instruction=_SYSTEM_PROMPT,
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.1,
-            max_output_tokens=1000,
-        ),
+        generation_config=_make_gemini_generation_config(genai, 1000),
     )
     # Use native async method — avoids thread pool overhead
     response = await model.generate_content_async(patient_context)

@@ -29,21 +29,32 @@ combined query) into resolved_role / resolved_facility_id. require_role()
 and every route's authorization checks must read those, not user_metadata.
 """
 import time
+from collections import OrderedDict
 from typing import Dict, Optional, Tuple
 
+import httpx
 from fastapi import Depends, Header, HTTPException, status
-from jose import jwt, JWTError
+from jose import jwk, jwt, JWTError
 
 from app.core.config import settings
 from app.core.database import supabase_anon, get_supabase_for_user, extract_bearer_token
 
 ALGORITHM = "HS256"
 AUDIENCE = "authenticated"
+logger = logging.getLogger(__name__)
 
 # In-process cache: user_id -> (checked_at_epoch_seconds, is_active, role, facility_id).
 # Per-worker; each uvicorn worker maintains its own and re-checks within the TTL.
+# Bounded to _PROFILE_CACHE_MAX entries to prevent memory exhaustion (VN-2026-08-C2-01).
 _ProfileCacheEntry = Tuple[float, bool, str, Optional[str]]
-_profile_cache: Dict[str, _ProfileCacheEntry] = {}
+_PROFILE_CACHE_MAX = 10_000
+_profile_cache: OrderedDict[str, _ProfileCacheEntry] = OrderedDict()
+
+# In-process JWKS cache for asymmetric JWT verification in rate limiting (VN-2026-08-VER-04)
+_jwks_cache: Optional[dict] = None
+_jwks_lock = threading.Lock()
+_jwks_fetched_at: float = 0
+_JWKS_TTL = 3600  # 1 hour
 
 
 def _decode_local(token: str) -> Optional[dict]:
@@ -76,10 +87,28 @@ def _verify_token(token: str) -> dict:
         # signing algorithm and also catches revocation immediately.
 
     # Network fallback: get_user() raises if the token is invalid/expired/revoked.
-    supabase_anon.auth.get_user(token)
-    # Signature already validated above (network call) — read claims get_user()
-    # omits without re-verifying.
-    return jwt.get_unverified_claims(token)
+    user_resp = supabase_anon.auth.get_user(token)
+    if user_resp and getattr(user_resp, "user", None):
+        u = user_resp.user
+        return {
+            "sub": str(u.id),
+            "email": getattr(u, "email", None),
+            "role": getattr(u, "role", "authenticated"),
+            "app_metadata": getattr(u, "app_metadata", {}) or {},
+            "user_metadata": getattr(u, "user_metadata", {}) or {},
+        }
+
+    # Signature already validated or decode safely
+    try:
+        return jwt.decode(
+            token,
+            settings.supabase_jwt_secret,
+            algorithms=[ALGORITHM],
+            audience=AUDIENCE,
+            options={"verify_aud": True, "verify_exp": True},
+        )
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
 
 
 def _resolve_profile(user_id: str, token: str) -> Tuple[bool, str, Optional[str]]:
@@ -113,20 +142,25 @@ def _resolve_profile(user_id: str, token: str) -> Tuple[bool, str, Optional[str]
         )
         profile = res.data if res else None
     except Exception:
-        # Transient failure — do not cache; fall back to last known state.
+        # Transient failure — do not cache; fall back to last known state if available,
+        # otherwise fail CLOSED (VN-2026-08-VER-05).
         if cached:
             return cached[1], cached[2], cached[3]
-        return True, "", None
+        return False, "", None
 
     if profile is None:
         # Confirmed: no profile row for this authenticated user. Fail closed.
         _profile_cache[user_id] = (now, False, "", None)
+        if len(_profile_cache) > _PROFILE_CACHE_MAX:
+            _profile_cache.popitem(last=False)
         return False, "", None
 
     is_active = bool(profile.get("is_active", True))
     role = profile.get("role") or ""
     facility_id = profile.get("facility_id")
     _profile_cache[user_id] = (now, is_active, role, facility_id)
+    if len(_profile_cache) > _PROFILE_CACHE_MAX:
+        _profile_cache.popitem(last=False)
     return is_active, role, facility_id
 
 
@@ -140,10 +174,13 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
 
     try:
         payload = _verify_token(token)
-    except Exception as e:
+    except Exception:
+        # Never echo verifier, upstream, URL, or transport exception text to an
+        # unauthenticated client. Keep details server-side for diagnostics.
+        logger.warning("JWT verification failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired token: {str(e)}",
+            detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -185,8 +222,9 @@ def require_role(*roles: str):
 def verify_sub_for_rate_limit(token: str) -> str | None:
     """
     Best-effort extraction of a VERIFIED user id for rate-limiting keys.
-    Returns the sub only if the token signature verifies locally (HS256);
-    returns None otherwise so the caller falls back to IP-based limiting.
+    Returns the sub only if the token signature verifies locally (HS256)
+    or via cached JWKS (RS256/ES256); returns None otherwise so the caller
+    falls back to IP-based limiting (VN-2026-08-VER-04).
     This prevents an attacker from forging a token with a victim's sub to
     consume the victim's rate-limit budget.
     """

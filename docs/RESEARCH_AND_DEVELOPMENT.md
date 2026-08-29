@@ -848,7 +848,7 @@ This table reflects the system as of today, not aspirationally.
 
 | Requirement | Current State |
 |---|---|
-| Clinical validation against real outcomes | Not done — all reported accuracy is against a synthetic, evidence-informed label generator (NEWS2/qSOFA/PALS-derived), explicitly and repeatedly stated as such in `MODEL_CARD.md`. The doctor override + outcome-recording endpoints already exist specifically to *start* collecting the real-label data a future validation study would need |
+| Clinical validation against real outcomes | **Not done.** Public-data proxy evaluations are now completed and documented in `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`, but they do not provide clinician-adjudicated outcomes, prospective evidence, rural/ASHA equivalence, or clinical validation. The doctor override + outcome-recording endpoints remain the collection mechanism for a future real-label validation study |
 | Real (not synthetic) training data | Not available yet; the outcome-recording loop above is the collection mechanism, not a substitute for it |
 | Regulatory classification | Not sought — VitalNet plausibly sits in a lower-risk CDSCO SaMD category as decision support with mandatory human review, but this is stated as a working hypothesis for a future formal exercise, not a self-certification (`docs/CLINICAL_GOVERNANCE.md`) |
 | Government/PLI integration for adoption at scale | Not started — a policy decision, not a software one (§1.5) |

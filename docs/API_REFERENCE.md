@@ -73,6 +73,14 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   - `bp_systolic` (30-300), `bp_diastolic` (10-200, must be < systolic if
     both given), `spo2` (50-100), `heart_rate` (10-250), `temperature`
     (25.0-45.0°C) — all optional.
+  - `age_months` (0-23) is optional and valid only when `patient_age` is under
+    2 years. `muac_mm` (50-300) is optional and valid only for children under
+    5 years. Both are additive governance-gated capture fields and are not
+    consumed by the frozen production triage path.
+  - `paediatric_advisory` is persisted as versioned metadata with a
+    default-off gate; when enabled for a research-only study it remains an
+    advisory requiring qualified clinical interpretation and never changes
+    `triage_level` or `needs_review`.
   - `is_pregnant` (bool, optional) — structured pregnancy flag; gates the
     preeclampsia-specific safety-net rule (docs/DECISIONS.md §30). Distinct
     from the free-text pregnancy keyword match `clinical_features.py`
@@ -108,14 +116,17 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   latency to this response).
 
 ### `GET /api/cases`
-Doctor dashboard feed — cursor-paginated, sorted EMERGENCY→URGENT→ROUTINE
-then newest-first within a tier.
+Doctor dashboard feed — cursor-paginated, sorted EMERGENCY→URGENT→ROUTINE,
+then cases with `needs_review=true` before unflagged cases within each tier,
+then newest-first and ID-descending as stable tie-breakers.
 - **Auth**: `doctor` (facility-scoped if `facility_id` set), `admin`
   (global). **Rate limit**: 60/min.
 - **Query params**: `before_time`, `before_priority` (0/1/2),
-  `before_id` (composite keyset cursor from the previous page), `limit`
-  (default 25, capped 100).
-- **Response `200`**: `{ cases: [...], hasMore, nextCursor, nextTriagePriority, nextId }`.
+  `before_needs_review` (`true`/`false`), `before_id` (composite keyset cursor
+  from the previous page), `limit` (default 25, capped 100). The review
+  component is optional for one-release compatibility with older clients.
+- **Response `200`**: `{ cases: [...], hasMore, nextCursor,
+  nextTriagePriority, nextNeedsReview, nextId }`.
 
 ### `PATCH /api/cases/{case_id}/review`
 Mark a case reviewed.
@@ -156,7 +167,10 @@ a worker recognize a returning patient (`docs/DECISIONS.md` §21).
 - **Path param**: `patient_key` — must match `XXXX-XXXX`; `400` if not.
 - **Response `200`**: `{ cases: [...] }` — up to 50 rows, reduced column set
   (`id`, `chief_complaint`, `triage_level`, `created_at`, `reviewed_at`,
-  `patient_age`, `patient_sex`, `facility_id`; no `briefing` JSONB).
+  `patient_age`, `patient_sex`, `facility_id`, `bp_systolic`,
+  `bp_diastolic`, `spo2`, `heart_rate`, `temperature`; no `briefing` JSONB,
+  observations, medications, or unrelated free text). The five vital fields
+  are included only to support display-only returning-patient trends.
 
 ### `GET /api/cases/{case_id}`
 Full case detail (including the `briefing` JSONB) after row-level
@@ -285,11 +299,11 @@ selected.
 Per-ASHA-worker aggregate metrics over a trailing window: submission count,
 `needs_review` rate, contraindication-flag rate, deterioration-alert rate,
 and triage-tier distribution.
-- **Query params**: `days` (default 30, 1–366), `facility_id` (optional,
-  **admin only** — a `supervisor`'s own facility always wins; passing a
-  different id as a supervisor is silently ignored, not an error).
-- **Scope**: `supervisor` is always restricted to their own facility;
-  `admin` defaults to system-wide, or narrows via `facility_id`.
+- **Query params**: `days` (default 30, 1–366), `facility_id` (optional —
+  `supervisor` defaults to organisation-wide but may pass `facility_id` to narrow to a specific PHC;
+  `admin` is strictly pinned to their resolved own facility).
+- **Scope**: `supervisor` is organisation-wide by default, or narrows via `facility_id`;
+  `admin` (PHC Administrator) is restricted to their own facility.
 - **Response**: `{ facility_id, window_days, worker_count, workers: [{
   user_id, full_name, submission_count, needs_review_count,
   needs_review_rate, contraindication_flag_count,
@@ -313,11 +327,11 @@ as §20/§22/§25.
 Today's aberration signals: `(facility, symptom)` pairs whose case count
 today exceeds the 7-day trailing baseline mean + 3 standard deviations, with
 a minimum floor of 3 cases before a day is even eligible to be flagged.
-- **Query params**: `facility_id` (optional, **admin only** — `doctor`/
-  `supervisor` are always scoped to their own facility; a different id
-  passed as either of those roles is silently ignored, not an error).
-- **Scope**: `doctor`/`supervisor` restricted to their own facility;
-  `admin` defaults to system-wide, or narrows via `facility_id`.
+- **Query params**: `facility_id` (optional — `supervisor` defaults to organisation-wide
+  but may pass `facility_id` to narrow to a specific PHC; `doctor` and `admin` are
+  strictly pinned to their resolved own facility).
+- **Scope**: `supervisor` is organisation-wide by default, or narrows via `facility_id`;
+  `doctor` and `admin` (PHC Administrator) are restricted to their own facility.
 - **Response**: `{ facility_id, date, baseline_days, signal_count, signals:
   [{ facility_id, symptom, today_count, baseline_mean, baseline_stddev,
   threshold }] }`, sorted by `today_count` descending.
@@ -326,7 +340,7 @@ a minimum floor of 3 cases before a day is even eligible to be flagged.
 
 ## Protocol assistant (`app/api/routes/protocol_routes.py`, prefix `/api/protocol`)
 
-A grounded, non-clinical guideline lookup assistant (`docs/DECISIONS.md` §27),
+A grounded, non-clinical guideline lookup assistant (`docs/DECISIONS.md` §27, §40),
 informed by ASHABot's own published design (Khushi Baby + Microsoft Research
 India, CHI 2025). Structurally separate from the triage pipeline: the LLM
 call (`app/services/llm.py::generate_protocol_answer`) never takes patient
@@ -340,8 +354,9 @@ Asks a general protocol/guideline question, answered against a small curated
 reference document (ANC schedule, immunisation schedule, danger signs,
 referral criteria) stuffed directly into the LLM's system prompt.
 - **Body**: `{ question_text (1-500 chars), language: "en"|"hi"|"ta" }`.
-- Requires the caller to have a `facility_id` (400 otherwise — this is a
-  facility-scoped feature).
+- Requires the caller to have a resolved `facility_id` unless the caller is a
+  `supervisor` (an unassigned supervisor persists `facility_id = null`, representing
+  an organisation-wide general question; 400 for other roles missing a facility).
 - **Response**: the created row — `{ id, asked_by, facility_id,
   question_text, language, llm_answer_text, llm_grounded, status, ... }`.
   `status` is `"answered"` when the LLM found it in the reference material,
@@ -350,15 +365,18 @@ referral criteria) stuffed directly into the LLM's system prompt.
 
 ### `GET /questions` — 60/min — `asha_worker`, `doctor`, `supervisor`, `admin`
 Lists protocol questions visible to the caller — the shared, growing
-facility FAQ. RLS is the real access boundary (facility-wide for every
-role, global for admin); `status`/`facility_id` query params only narrow
+FAQ. RLS is the real access boundary (facility-wide for local roles:
+`asha_worker`, `doctor`, `admin`; global across all facilities and unassigned
+questions for `supervisor`); `status`/`facility_id` query params only narrow
 the result, they don't grant access.
 
 ### `PATCH /questions/{question_id}/curate` — 30/min — `doctor`, `supervisor`, `admin`
 Records a human curator's answer for a `pending_curation` question —
 asynchronous curation, not ASHABot's synchronous multi-reviewer consensus
 (that mechanism's own published data showed it averaged ~60h, too slow to
-be useful). Sets `status` to `"curated"`.
+be useful). Sets `status` to `"curated"`. Doctors and PHC Admins curate their
+own facility's questions; Supervisors curate organisation-wide (including
+global questions).
 - **Body**: `{ curator_answer_text (1-2000 chars) }`.
 
 ---
@@ -407,13 +425,18 @@ admin may update any. `403` otherwise.
 ### `POST /api/cases/{case_id}/refer` — 20/min — `doctor` (own facility), `admin`
 **Body** (`CreateReferralRequest`): `receiving_facility_id`, `reason`
 (1-1000 chars), `urgency` (`ROUTINE`/`URGENT`/`EMERGENCY`). `400` if
-referring a case to its own facility.
+referring a case to its own facility. The response includes a deterministic,
+versioned `sbar_draft` and `sbar_version` generated from recorded case and
+referral fields. The draft is a communication aid, not a diagnosis or
+autonomous recommendation; the clinician must review it before sending.
 
 ### `GET /api/referrals` — 60/min — `doctor`, `admin`
 **Query param**: `direction` (`outgoing`/`incoming`/`all`, default `all`) —
 ignored for `admin` (sees everything). **Response**: `{ referrals: [...] }`,
-each row embedding `case_records` (chief complaint/age/sex/triage) and
-`referring_facility`/`receiving_facility` names.
+each row embedding `case_records` (chief complaint/age/sex/triage),
+`referring_facility`/`receiving_facility` names, and the persisted
+`sbar_draft`/`sbar_version` when present. Referral RLS remains the sole
+visibility boundary.
 
 ### `PATCH /api/referrals/{referral_id}/status` — 30/min — `doctor` (receiving facility only), `admin`
 **Body**: `{ status }` — one of `acknowledged`/`patient_arrived`/

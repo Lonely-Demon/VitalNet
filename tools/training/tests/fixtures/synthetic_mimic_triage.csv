@@ -1,0 +1,14 @@
+subject_id,stay_id,temperature,heartrate,resprate,o2sat,sbp,dbp,pain,acuity,chiefcomplaint
+1001,20001,102.5,135,28,88,75,40,8,1,chest pain and shortness of breath
+1002,20002,98.6,98,18,99,110,70,9,2,severe bleeding from arm laceration
+1003,20003,99.1,82,16,97,140,85,6,3,moderate abdominal pain and persistent vomiting
+1004,20004,98.4,72,14,99,120,78,2,4,mild sore throat and nasal congestion
+1005,20005,98.0,68,16,98,130,80,0,5,routine medication refill
+1006,20061,98.8,76,16,98,124,80,4,3,headache for two days
+1006,20062,101.2,110,22,94,90,55,10,2,severe headache with altered mental status and confusion
+1007,20007,98.6,80,18,98,120,80,3,3,flank pain
+1008,20008,98.4,88,18,97,118,76,5,2,sudden onset weakness on right side and slurred speech
+1009,20009,99.0,90,20,96,80,110,7,3,severe stomach pain
+1010,20010,70.0,998,32,85,60,998,10,1,unresponsive after major trauma
+1011,20011,98.6,75,16,99,120,80,1,0,ankle sprain
+1012,20012,98.2,105,24,92,100,60,8,1,facial swelling tongue swelling and difficulty speaking

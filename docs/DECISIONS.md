@@ -696,19 +696,18 @@ and not onto `admin` (would wrongly hand a facility-level workforce
 supervisor organisation-wide system authority, which they don't have in
 NHM's real structure either). It is:
 
-- **Facility-scoped**, the same way `doctor` already is (`resolved_facility_id`
-  — no new scoping primitive needed).
+- **Organisation-wide by default** (with no `facility_id` required on their profile;
+  may optionally narrow an aggregate query to a specific PHC — see §39).
 - **Aggregate-only, non-PHI, read-only** by design: per-ASHA-worker
   submission counts, `needs_review` rate, contraindication-flag rate,
-  deterioration-alert rate, and triage-tier distribution at their own
-  facility. This is exactly the signal real supportive supervision needs
+  deterioration-alert rate, and triage-tier distribution across the organisation
+  (or narrowed to a specific PHC). This is exactly the signal real supportive supervision needs
   (which workers need more training or support) and structurally cannot
   see an individual patient's case — no new PHI exposure surface at all.
 - **Not** clinical review/override authority (stays `doctor`-only — a
   supervisor is not a clinician) and **not** user/facility CRUD (stays
-  `admin`-only — a facility-level role has no business managing the whole
-  organisation).
-- Also scoped into the facility-level view of the outbreak dashboard
+  `admin`-only — PHC Administrators manage local staff; Supervisors govern PHCs).
+- Also scoped into the outbreak dashboard
   (§26) and the curation queue for the protocol assistant (§27) — both are
   a natural extension of "workforce quality and support," not scope creep.
 
@@ -750,9 +749,9 @@ chief-complaint cluster, day)` aggregate counts — a floor (e.g. at least 3
 cases) is also required before a day is even eligible to be flagged, so a
 jump from 0 to 1 case in a tiny population is never treated as
 "elevated." Output is **aggregate counts only** — no patient names, no
-individual case content, ever. Scope: `admin` sees every facility;
-`doctor` and `supervisor` see their own facility only (the same facility-
-scoping convention used everywhere else). Framed explicitly, in the UI and
+individual case content, ever. Scope: `supervisor` sees organisation-wide
+by default (or narrows to a specific PHC); `admin` (PHC Administrator) and
+`doctor` see their own facility only. Framed explicitly, in the UI and
 the code, as an informational aid for a human to review — not a validated
 public-health surveillance system — matching the same honesty standard
 already applied to `fairness_audit.py`/`drift_monitor.py`.
@@ -1182,3 +1181,827 @@ long-lived branch is more to keep track of than the previous exactly-three
 model, and it must not become a dumping ground for anything someone would
 rather not put through normal review — it is specifically for reforms of
 this scale, not a general-purpose "experiments" branch.
+
+### 33. Round 6 rebuild — TypeScript migration, rules-first triage, unified outbox, DB discipline: what, why, evidence, rollback
+
+**Context**: four clinical-logic pairs were hand-mirrored across Python
+(the FastAPI backend) and JavaScript (the browser, for offline triage) —
+Pydantic↔Zod validation, `_safety_net_check`↔`safetyNetCheck`,
+`ClinicalFeatureEngineer`↔`buildFeatureMap`, and a contraindications table
+— plus a whole parity-test apparatus (four suites, golden vectors, CI jobs)
+whose only job was catching drift between the copies. Three further
+problems compounded it: the ML model was trained on its own scorer's
+labels (a circular validation of sorts) yet sat in the *authoritative*
+triage path in production, with the deterministic safety net only as a
+backstop around it; the offline layer was a set of feature-specific
+IndexedDB queues rather than one generic outbox with server-side dedup; and
+DB privilege boundaries lived in app-layer discipline (`supabase_admin`
+"narrow exceptions," §29) rather than the database itself. This entry
+records the six-phase rebuild (`experimental` branch, §32) that addressed
+all four, what changed, the evidence it didn't silently change clinical
+behaviour where it shouldn't have, and exactly what's still gated before
+any of it touches production traffic.
+
+**Decision**: build a pnpm workspace monorepo alongside the existing
+`backend/`, strangler-fig style — every phase lands green and shippable,
+the legacy backend stays fully deployable throughout, and nothing is
+deleted until its replacement is validated.
+
+1. **One language for clinical logic.** `packages/clinical-core`
+   (TypeScript) is now the single source of truth: the Zod intake schema
+   (merging `schemas.py`'s bounds with the old `validation.js`), the
+   deterministic rules engine (bands + overrides + citations), 43-feature
+   engineering, an offline tree evaluator with Saabas-style path
+   attribution, and contraindication checks. Both `apps/web` (browser,
+   offline) and `apps/api` (server, online) import it directly — there is
+   no second copy to drift out of sync, and the four apps/web-side parity
+   test suites that used to guard against that drift are deleted (their job
+   is now structurally impossible to fail at, not just tested for).
+2. **Rules-first triage: the model becomes advisory.** The rules engine
+   (promoted from `train_classifier.py`'s v3.1.0 age-aware training-label
+   scorer, previously training-only code) is now the sole authority over
+   `triage_level`. The model's own tier, confidence, and low-confidence
+   flag are persisted and shown as a *suggestion* — it drives queue
+   prioritization and a documented model-promotion gate (comparing
+   `model_tier` against outcomes/overrides), but never the tier itself.
+   Model/rules disagreement (`model_agreed === false`) folds into
+   `needs_review` server-side, so an EMERGENCY(model)→lower(rules)
+   de-escalation can never silently sink out of the priority queue
+   unflagged — the rules engine is never "low confidence" about its own
+   decision the way a probabilistic model can be. Saabas path attribution
+   (`treeEvaluator.ts`) replaces SHAP at inference for the advisory
+   model's `top_factors`; `shap` remains a training-only dependency for
+   artifacts no longer shipped.
+3. **A unified offline outbox.** `apps/web/src/lib/outbox.js` replaces the
+   case-submission-specific `offlineQueue.js` with a generic IndexedDB
+   event queue (`{event_id, type, payload, created_at, attempts, status,
+   last_error}`). `event_id` is the *same* uuid as `case_records.client_id`
+   and the `X-Event-Id` header `apps/api`'s new idempotency middleware
+   dedupes on — one idempotency key end-to-end instead of three
+   independently-generated ones. A permanently-failing (4xx) event is
+   dead-lettered, not silently dropped, and surfaced in `OfflineBanner.jsx`
+   with retry/discard actions. Doctor actions stay online-only for now;
+   the store itself is generic enough that a future offline-capable action
+   doesn't need another IndexedDB version bump.
+4. **DB discipline moves into the database.** `phase28_security_definer_fns.sql`
+   replaces four narrow `supabase_admin` aggregate-query exceptions
+   (§29's "retired narrow aggregate exception") with `SECURITY DEFINER`
+   Postgres functions (`fn_deterioration_count`, `fn_open_case_counts`,
+   `fn_team_metrics`, `fn_outbreak_signal_counts`, `fn_rate_limit`,
+   `fn_schema_fingerprint`) — internal role checks via `auth.uid()`, `REVOKE
+   ALL` + `GRANT EXECUTE TO authenticated`, so service-role usage stays
+   confined to `/api/admin` + audit writes, the invariant §29 already
+   claimed but hadn't fully enforced. `phase29`/`phase31` add `client_events`
+   (outbox dedup) and `fn_client_event_record` (a second `SECURITY DEFINER`
+   function, since `client_events` has no INSERT policy — it derives
+   `submitted_by` from `auth.uid()` internally, so spoofing it is
+   structurally impossible, not just policy-forbidden). A new CI job,
+   `db-schema-drift.yml`, replays every tracked migration against a fresh
+   Postgres on each PR and diffs the result against a committed schema
+   snapshot, plus a weekly live-fingerprint check via
+   `fn_schema_fingerprint()` — catching both "a migration is wrong" and "the
+   live dashboard drifted outside any tracked migration" (the failure mode
+   that caused the ten-migrations-behind incident in §29).
+5. **A new backend, not a rewrite of the old one.** `apps/api` is a single
+   Supabase Edge Function (Deno + Hono) implementing the full route surface
+   in `rules_first` mode, built and tested green in CI
+   (`api-edge-function.yml`) — but **not yet receiving production traffic**.
+   `apps/web/src/api/base.js`'s `ENDPOINT_BACKEND` map resolves every
+   endpoint to `'legacy'` today; flipping one entry to `'edge'` is the
+   entire per-tranche cutover, and reverting it is the entire rollback.
+
+**Conformance evidence** (not trusted by inspection — verified):
+`tools/training/export_conformance_patients.py` generated 10,000 synthetic
+patients and ran Python's pre-migration `predict_triage` (safety net →
+model → NEWS2 floor) against clinical-core's `triage()` in `hybrid` mode
+(the same order, reproducing the legacy semantics exactly) —
+**10,000/10,000 (100.000%) agreement, zero mismatches**
+(`packages/clinical-core/test/conformance/report.md`, asserted by
+`hybrid.conformance.test.ts` in CI). This is the proof the TypeScript port
+changed nothing before `rules_first` ever shipped. The *separate*,
+informational delta — the same 10,000 patients replayed in `rules_first`
+mode instead — shows **88/10,000 (0.88%) changed**: 35 upgraded to a
+higher tier, 53 downgraded. Of the downgrades, **51 are
+EMERGENCY(legacy)→URGENT(rules_first)**. This is not a bug: it is the
+intended, quantified behavioural delta of making the rules engine
+authoritative instead of the model (the model, trained on the same rules
+engine's own historical labels, drifts from them slightly on borderline
+cases, especially where it learned patterns the deterministic scorer's
+exact boundaries don't capture). It is exactly the number a clinician
+reviewer needs before `rules_first` reaches production — see the Phase 7
+sign-off gate (`docs/CLINICAL_REVIEW.md`, `CODEOWNERS` on
+`packages/clinical-core/src/rules/**`). The phase28/29/31 SQL migrations
+were separately verified empirically against a real local Postgres 16
+instance (RLS scoping, idempotent insert, unspoofable `submitted_by`,
+insert-denied-without-the-function), not by inspection alone.
+
+**Rollback map**: per-tranche, one line in `ENDPOINT_BACKEND` — verified
+against a live E2E run before flipping, per §29's methodology, before
+watching audit logs/metrics. `backend/app/` and
+`.github/workflows/backend-keepalive.yml` are **deliberately not deleted**
+as part of this rebuild — deletion is deferred until `apps/api` has
+actually taken production traffic and been verified for real, not on the
+strength of its test suite alone (the JWKS/ES256 auth path and the webpush
+VAPID crypto have zero live-network coverage by design — see
+`apps/api/README.md`'s status section and `test/auth.test.ts`'s header).
+Training rewired last: `tools/training/train_classifier.py` (moved from
+`backend/scripts/`) now pipes synthetic patients through
+`packages/clinical-core/cli.mjs` for both labeling and feature engineering
+instead of maintaining a ~190-line Python port of the same scorer — the
+last hand-mirrored pair, eliminated once the TypeScript rules engine it
+would have mirrored was itself verified against the legacy production path
+above.
+
+**Consequences**: online and offline triage cannot silently diverge any
+more — there is one rules-engine *implementation*, not two kept in sync by
+hand, and the four parity-test suites that existed only to catch that
+class of bug are gone because the bug class is gone. Same implementation
+does not mean same *mode*, though, and that distinction mattered in
+practice — see the correction immediately below. The tradeoff this entry
+exists to make explicit: `rules_first`'s 51 EMERGENCY→URGENT downgrades
+are a real, quantified change in clinical behaviour, not a regression to
+wave through — it does not ship to production until a named clinician has
+reviewed the delta and the rules tables it comes from (Phase 7). Until
+`apps/api` cuts over, `backend/`'s hybrid (model-primary) behaviour
+remains what patients actually experience, and this document,
+`backend/app/ml/README.md`, and `backend/app/ml/MODEL_CARD.md` describe it
+accurately as the live system — not as a legacy curiosity.
+
+**Correction, found in PR review before merge**: the first version of this
+migration's `apps/web` offline triage (`utils/triageClassifier.js`)
+hardcoded `mode: 'rules_first'` unconditionally, with no gate. That meant
+an offline ASHA worker could see a `rules_first`-computed preliminary
+tier — including, in principle, one of the 51 EMERGENCY→URGENT
+cases above — *before* this entry's own sign-off gate had cleared, and
+before the server itself had cut over to `rules_first`. The persisted,
+authoritative record was never at risk (the outbox enqueues the raw form,
+never the locally-computed tier — see Phase 5's outbox design above — so
+`/api/submit` always retriages from scratch on sync), but the preliminary
+*display* could disagree with what the case became once synced, which is
+exactly the kind of quietly-shipped clinical-behaviour change this whole
+entry argues against doing without sign-off. Fixed in the same PR:
+`triageClassifier.js` now calls `triage()` in `hybrid` mode — matching
+`backend/app/`'s actual live semantics — and falls back to an
+override-only safety-net check (never a guessed tier) when the model
+can't be loaded offline, rather than silently computing a `rules_first`
+tier without one. `apps/web` moves to `rules_first` only alongside the
+real `apps/api` cutover, not before it. See `apps/web/README.md`'s
+"Triage logic lives in one place" section for the corrected design.
+
+### 34. `apps/web` visual identity redesign — teal brand chroma, triage-tag signature, self-hosted type
+
+**Context**: the shipped UI ("Parsley Health" tokens — cream background,
+forest-green brand, italic serif wordmark, DM Sans/DM Serif Display via a
+Google Fonts `<link>`) had a real, specific problem, not just a vague
+"doesn't feel professional" one: `--color-forest` (the brand's primary
+interactive color — buttons, active nav state, headings) sat in the same
+green hue family as `--color-routine`, the ROUTINE triage tier. Brand
+chrome and the single signal in this app that must never be ambiguous
+could render in visually adjacent colors on the same screen. Separately,
+every icon in the app was a unicode glyph (▲▼✓⚠⚑→) or emoji (📭🚫🎤),
+and fonts loaded from a Google Fonts CDN in an app that is explicitly
+offline-first.
+
+**Process**: two rounds of static HTML mockups (self-contained artifacts,
+real embedded fonts, browser-screenshotted before being shown), following
+the `interface-design` design process — a named domain-grounded signature
+element, a token plan with a stated reason for every choice, then build —
+rather than going straight to code. Both rounds were reviewed and
+explicitly approved before any `apps/web` file was touched.
+
+**What changed**:
+- **Color**: brand chroma (`--color-forest`/`sage`/`mint`/`leaf`) moves
+  from green to a teal (`#0E5B66`) that appears nowhere in the
+  `--color-emergency`/`urgent`/`routine` system — brand and triage-severity
+  color can no longer collide. Ground/surface tones shift cool
+  (`#F3F5F3`) instead of cream. Every text/background pair was
+  re-verified against WCAG AA by script before shipping (see
+  `docs/ACCESSIBILITY.md`), not carried over from the old palette by
+  assumption.
+- **Type**: DM Sans/DM Serif Display, loaded via a render-blocking Google
+  Fonts `<link>`, replaced with self-hosted IBM Plex Sans / Sans
+  Condensed / Mono (SIL OFL 1.1, license text at
+  `apps/web/public/fonts/LICENSE.txt`). Two reasons, not one: IBM Plex
+  ships matching Devanagari and Tamil weights — hi/ta are real target
+  languages here, and the old fonts had no non-Latin coverage at all —
+  and self-hosting removes a third-party CDN dependency from an
+  offline-first app. The font files are now part of the PWA's
+  service-worker precache.
+- **Signature element**: a real mass-casualty triage tag is perforated
+  cardstock, torn along a dotted line to whichever tier applies. Every
+  case card (`BriefingCard.jsx`) and the intake form's preliminary-result
+  card now carry that as a literal CSS `mask-image` punch-hole texture on
+  the severity edge (`.tag-perforated` in `index.css`), replacing a flat
+  4px color bar — chosen specifically because it's an object that could
+  only belong to a triage tool, not a generic dashboard.
+- **Icons**: `lucide-react` installed; every unicode-glyph icon and
+  decorative emoji across the whole app replaced with real icons,
+  `aria-label`ed where icon-only (the NavBar sign-out button went from a
+  text link to an icon-only button in this pass, so it needed one newly).
+- **Triage badges**: `TriageBadge.jsx`, `IntakeForm.jsx`'s
+  `PRELIM_RESULT_STYLES`, and `BADGE_COLORS` all moved from a translucent
+  tint (`bg-emergency/10 text-emergency`) to solid fill with white text
+  (`bg-emergency text-white`) — the "stamped tag" look was the motivation,
+  but it also closed a real, previously-documented accessibility gap (the
+  tint badges computed ~4.0-4.3:1, short of AA; solid-fill computes
+  ~5.1-7.8:1 across every tier). Found and fixed while updating this
+  document, not in the original redesign PR — see
+  `docs/ACCESSIBILITY.md`.
+- **NavBar**: underline tab indicator instead of filled pills, a
+  pulse-line SVG wordmark mark.
+
+**Verified, not assumed**: every text/background token pair recomputed
+against WCAG AA (script, not eyeballed — see `docs/ACCESSIBILITY.md`);
+the mocked-auth Playwright harness (`docs/TESTING_STRATEGY.md`) re-run
+across ASHA worker and doctor roles at mobile (390px) and tablet (768px)
+widths after the change, not just a production build. That verification
+pass caught a real, pre-existing layout bug unrelated to the redesign
+itself: three secondary text-link buttons in `BriefingCard.jsx` (correct
+triage tier / record outcome / refer to another facility) were
+`inline-block` siblings relying on `space-y-5` for spacing, which only
+creates visible separation when each element wraps to its own line —
+when two rendered adjacent (common, since the fieldsets between them are
+conditionally hidden), their text ran together with no visible gap.
+Fixed by making all three `block`-level.
+
+**Consequences**: Supervisor, Admin, and Outbreak panels were not
+individually re-mocked or screenshotted in this pass — they inherit the
+new tokens and shared components (`NavBar`, card/button/badge styles)
+automatically, on the same logic that made the token remap low-risk in
+the first place (existing Tailwind utility classes like `bg-forest`
+kept their names, only their resolved color changed), but that inheritance
+hasn't been visually verified screen-by-screen the way ASHA/doctor flows
+were. Worth a follow-up pass if those panels are heavily used.
+
+### 35. The `dev` branch test pass that found phase28–31 were never applied to the live project — and the schema-drift CI job built from what that uncovered
+
+**Context**: asked to "test the dev branch" (the Round 6 rebuild's full TS
+surface — `packages/clinical-core`, `apps/api`, `apps/web`, plus the still-
+authoritative `backend/` FastAPI service). All four automated suites
+passed cleanly (297 tests total: clinical-core 61, backend 108, apps/api
+121 — plus a clean `apps/web` build and a11y suite). That was reassuring
+but incomplete: every one of `apps/api`'s 121 tests mocks its Supabase
+client, so none of them touch a real database. The Round 6 rebuild plan's
+own verification section called for exactly this gap to be closed with a
+live smoke test; it never was.
+
+*Correction, made while opening the PR for this work*: this entry
+originally also claimed `apps/api`'s Deno suite had never run in CI before
+this pass, and added a second CI job (`apps-api-test` in `ci.yml`) on that
+premise. That claim was wrong — `.github/workflows/api-edge-function.yml`'s
+`test` job has run this exact suite on every PR/push touching `apps/api`
+or `packages/clinical-core` since the Round 6 rebuild's Phase 3 (PR #54),
+well before this pass. The duplicate `apps-api-test` job has been removed
+from `ci.yml`; `api-edge-function.yml` remains the one place this suite
+runs, more correctly path-scoped than the duplicate was. The one genuine
+CI gap this pass found and closed was the schema-drift check below.
+
+**What "test the dev branch" actually found**: closing the one real CI gap
+surfaced by that pass (the DB schema-drift job from Phase 2 of the Round 6
+plan was never built) required a real schema snapshot from the live
+Supabase project. Getting one — via a
+pg_catalog introspection query run in the SQL Editor, not `pg_dump`, since
+the user only had SQL Editor access, and a live connection string was
+deliberately never shared into this chat (schema DDL is safe to paste;
+passwords aren't, regardless of who's offering) — revealed that
+`backend/supabase/migrations/phase28_security_definer_fns.sql` through
+`phase31_client_event_record_fn.sql` had never been applied to the live
+project. Concretely: `case_records` was missing `model_tier`/
+`rules_fired`/`model_agreed`; the `client_events` table (the entire
+unified-outbox idempotency mechanism) didn't exist; and all 8
+`fn_*` SECURITY DEFINER functions phase28/30/31 define — including
+`fn_rate_limit`, which `apps/api`'s middleware calls on every single
+request — were absent. **`apps/api` was completely non-functional against
+the real database**, not merely unverified; it would have failed on its
+first request in production. Cross-referencing the live dump against the
+actual codebase (`grep`, not assumption) also surfaced: `case_referrals`
+is a fully orphaned table (zero references anywhere in `backend/app` or
+`apps/api` — only the separate `referrals` table, created by the tracked
+`phase19_referrals.sql`, is actually used); `get_user_role(uuid)` and
+`get_user_facility(uuid)`, called by `profiles_select_policy_hardened`,
+exist live but in no tracked migration anywhere in this repo; a duplicate
+UNIQUE constraint on `case_records.client_id`; and RLS policies on
+`profiles`, `case_records`, and `facilities` where an older, looser
+PERMISSIVE policy sits alongside a newer, more restrictive one — since
+Postgres OR-combines multiple permissive policies for the same command,
+the looser one governs effective access regardless of the newer one's
+intent (`profiles_select_policy_hardened`'s name says what it was
+*supposed* to replace). None of these were touched at the time this
+paragraph was first written — they needed the user's own judgment, not a
+unilateral fix. The RLS policies, the untracked functions, and the dead
+table were subsequently investigated, authorized, fixed, and re-verified
+live; see §36. The duplicate `UNIQUE` constraint on
+`case_records.client_id` remains open and undocumented-fix, as originally
+recorded here.
+
+**What was fixed, in order, with the user's explicit sign-off at each
+step**: (1) the four migration files — verified additive-only (no `DROP`/
+`TRUNCATE` against real data) before handing them over — were run by the
+user via the SQL Editor, in phase order; (2) re-verified via the exact
+same introspection query plus a function-existence check, both showing the
+expected post-migration state; (3) the schema-drift CI job was built from
+the *pre*-migration dump (captured earlier in the same session) as
+`backend/supabase/schema_snapshot.sql`'s baseline — recorded as
+`SNAPSHOT_BASELINE_PHASE=27` in its header — with the job applying every
+tracked migration numbered higher than that baseline to a disposable
+Postgres service container on every PR. This needs no live credentials:
+the baseline is a verified capture, not a live comparison. The one
+piece that does need credentials (a scheduled job diffing the live
+project's `fn_schema_fingerprint()` against the tracked baseline, catching
+future *live* drift the same way this pass caught past drift) is
+deliberately deferred — it needs `SUPABASE_URL`/`SERVICE_ROLE_KEY` added
+as GitHub repo secrets by the user directly, never seen by this session.
+
+**A bug the process itself caught**: loading the snapshot into a fresh
+container failed on the first attempt — `case_records.triage_priority`'s
+default was reconstructed as a bare `DEFAULT CASE triage_level ...`,
+which is illegal Postgres syntax (a column default cannot reference a
+sibling column in the same row). The live column is actually a
+`GENERATED ALWAYS AS (...) STORED` computed column; `pg_get_expr()`
+returns a generated column's expression through the same code path as a
+plain default, and the introspection query hadn't checked
+`pg_attribute.attgenerated` to distinguish the two. Fixed in both the
+committed snapshot and the introspection query itself. Caught because the
+snapshot was actually loaded into a real, disposable Postgres instance and
+the real phase28–31 files were actually applied on top of it before this
+entry was written — not merely asserted to work.
+
+**Verification, concretely**: `schema_snapshot.sql` loads cleanly into a
+fresh `postgres:16` container with the Supabase-managed objects it
+references stubbed (`backend/supabase/ci_stubs.sql` — the `auth` schema,
+plus the two untracked `get_user_role`/`get_user_facility` functions,
+clearly commented as CI-only and not a substitute for tracking them
+properly); phase28–31 apply on top with zero errors; the resulting
+schema's tables/columns/functions match the live post-migration capture
+exactly. The full loop — introspect, snapshot, reapply from scratch, diff
+— was run locally before any of it was committed.
+
+**Consequences**: `apps/api` is now schema-compatible with the live
+project for the first time, though still not deployed or cut over
+(`apps/web/src/api/base.js` still routes every endpoint to `'legacy'`) —
+that remains a separate, larger decision. Of the open items found along
+the way: the untracked functions and overlapping RLS policies were
+resolved in §36 below (phase32–34); the dead `case_referrals` table was
+dropped outright as part of that same fix. The duplicate `UNIQUE`
+constraint on `case_records.client_id` remains genuinely open, documented
+here rather than fixed, pending the user's own review.
+
+### 36. A privilege-escalation RLS vulnerability inside §35's "overlapping policies" finding — client-writable JWT metadata trusted for authorization, found and fixed
+
+**Context**: §35 flagged, as an open item requiring the user's own
+judgment, that `profiles`, `case_records`, and `facilities` had older
+PERMISSIVE RLS policies sitting alongside newer, stricter ones — Postgres
+OR-combines permissive policies, so the looser one governs regardless of
+the newer one's intent. Reading those specific policies' `USING` clauses
+turned this from a policy-hygiene finding into an actively exploitable
+privilege-escalation vulnerability.
+
+**What was found**: `doctor_update` and part of `asha_select_own` on
+`case_records`, and `profile_select` on `profiles`, authorized access by
+reading `auth.jwt() -> 'user_metadata' ->> 'role'`. `user_metadata`
+(`auth.users.raw_user_meta_data`) is writable by any authenticated user via
+Supabase's own Auth REST API (`PUT /auth/v1/user` with `{"data": {...}}`,
+using nothing but their own access token) — it is not an app-controlled
+claim, regardless of what VitalNet's own frontend does with it. Any
+authenticated user could call that endpoint directly, set
+`user_metadata.role = "admin"`, and any policy trusting that claim would
+grant them elevated access, independent of their real role in
+`public.profiles`. Because these unsafe policies were PERMISSIVE and
+coexisted with safer, stricter policies on the same tables, they silently
+widened access beyond what the safer policies alone would have allowed:
+`case_records_update_policy` already used a correct table-lookup pattern,
+but `doctor_update`'s presence OR-combined it with the unsafe check, so the
+safe policy's restriction was never actually enforced in practice. Same
+story for `profiles_select_policy_hardened` — its name says what it was
+supposed to replace, but `profile_select` (unsafe) was still active
+alongside it.
+
+A fourth location — three policies on `case_referrals` — used the
+identical pattern. Initially recorded here as a deferred follow-up on the
+reasoning that the table had zero references anywhere in the codebase
+(confirmed by grep) and so wasn't worth the risk of touching pending its
+own removal decision. That reasoning was wrong: Supabase exposes every
+`public`-schema table through its auto-generated PostgREST API regardless
+of whether an app's own code ever queries it, so "nothing in this
+codebase references it" did not mean "unreachable" — any authenticated
+user could hit `case_referrals` directly and exploit the same
+privilege-escalation path being fixed everywhere else in this entry. Once
+that was pointed out, a whole-repo grep (every `.py`/`.js`/`.jsx`/`.ts`/
+`.tsx` file, not just the two directories originally checked) confirmed
+zero references anywhere, and the table — fully superseded by the
+separate `referrals` table from `phase19_referrals.sql` — was dropped
+outright (`phase34_drop_case_referrals.sql`) rather than patched: with no
+code path reading or writing it, keeping dead schema (and any
+PHI-adjacent referral rows already stored in it) around indefinitely once
+its vulnerable policies were noticed served no purpose. No `FOREIGN KEY`
+anywhere in the schema referenced it, so the drop had no cascading
+effect; verified locally against a full phase28–34 rebuild before being
+applied live and re-verified via `SELECT to_regclass('public.case_referrals')`
+returning `NULL`.
+
+**What was fixed** (`phase32_fix_jwt_metadata_rls_vulnerability.sql`):
+dropped `doctor_update` outright (redundant with
+`case_records_update_policy`, which already does this correctly); rewrote
+`asha_select_own` to replace its JWT-trusting doctor/admin clause with the
+same `EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND
+role = ...)` table-lookup pattern, keeping its self-access clause
+(`submitted_by = auth.uid()`) unchanged; dropped `profile_select` outright,
+since `profiles_select_policy_hardened` already covers the same access
+correctly via `get_user_role()`/`get_user_facility()`.
+
+`get_user_role(uuid)`/`get_user_facility(uuid)` — flagged in §35 as
+untracked functions called by `profiles_select_policy_hardened` — were
+pulled from the live project via `pg_get_functiondef()` and inspected
+before relying on them further: both are plain `SECURITY DEFINER` lookups
+against `public.profiles`, no JWT trust, safe.
+`phase33_track_get_user_role_and_facility.sql` starts tracking their real
+definitions for the first time (`CREATE OR REPLACE`, idempotent against
+the live project's existing functions), deliberately without touching
+grants — guessing a grant state different from what's already working live
+risks narrowing access based on a guess.
+
+**Verification**: a local Postgres test database was rebuilt from
+`ci_stubs.sql` → `schema_snapshot.sql` → phase28 through phase33, seeded
+with two facilities and five profiles spanning every role, then exercised
+with nine functional RLS tests that simulate real authenticated users the
+way PostgREST does — `SET ROLE authenticated` (not `SET LOCAL`, which
+silently no-ops outside a transaction and leaves the session as the
+bypassing superuser) plus `set_config('request.jwt.claims', '{"sub":
+"...", ...}', false)` — against `ci_stubs.sql`'s
+`auth.jwt()`/`auth.uid()`/`auth.role()` stubs, upgraded from static
+placeholders to real implementations reading that same GUC so the
+simulation is behaviorally accurate rather than parse-only. Confirmed:
+legitimate access (ASHA worker sees own case; same-facility doctor sees
+facility cases; different-facility doctor sees none; real admin sees
+everything, including all 5 profiles via `profiles_select_policy_hardened`)
+is unchanged; the vulnerability itself — a user with `user_metadata.role =
+"admin"` set but no matching row in `public.profiles` — now sees zero
+cases, zero profiles beyond their own, and an UPDATE attempt affects zero
+rows. Both migrations were then applied to the live project via the SQL
+Editor and re-verified with a read-only `pg_policies` query confirming
+`doctor_update`/`profile_select` are gone and
+`asha_select_own`/`profiles_select_policy_hardened` are the only policies
+remaining on their respective commands.
+
+**Why documentation waited for the live fix**: this repository was public
+for the duration of this investigation. Committing the vulnerable
+policies' exact text and a full writeup of the exploit path before the
+live database was patched would have been a public disclosure of an
+active, unpatched privilege-escalation vulnerability in a system handling
+PHI — so the fix was applied live first (via the same SQL-Editor handoff
+pattern as §35), re-verified, and only then documented and committed.
+
+**Consequences**: every JWT-metadata privilege-escalation path §35's
+"overlapping policies" finding turned out to contain is now closed —
+`case_records`, `profiles`, and `case_referrals` (dropped entirely) all
+resolved. `facilities`' policy situation was not part of this pass and
+remains open.
+
+### 37. Reviewing the PR for §35/§36 found three more real bugs — two more untracked-drift instances and an unscoped CI job
+
+**Context**: before merging the PR carrying §35/§36's work, it got a
+multi-angle automated code review (10 independent finder passes — line-by-line,
+removed-behavior, cross-file, language-pitfall, wrapper-correctness, reuse,
+simplification, efficiency, altitude, conventions) against the full diff.
+Several angles converged independently on the same issues, which is what
+made them worth chasing down rather than a single low-confidence flag.
+
+**A third instance of tracked-vs-live drift, in a migration nobody had
+reason to suspect**: two review angles independently noticed that
+`phase15_data_security_hardening.sql` — a migration years older than this
+PR, untouched by it — tracks `profiles_select_policy_hardened` using an
+inline self-join `EXISTS` check, but `schema_snapshot.sql`'s live capture
+shows the real, live policy calls `get_user_role()`/`get_user_facility()`
+instead (the same functions §36 tracks for the first time in phase33).
+Verified directly (`grep` on both files, side by side): confirmed real.
+Someone changed this policy against the live project outside any tracked
+migration, at some unknown point before this session's involvement — a
+third instance of the exact failure mode phase28-31 (§35) and the
+JWT-metadata policies (§36) already surfaced twice. `phase35_retrack_
+profiles_select_policy_hardened.sql` fixes it: applying it live is a
+no-op (it reproduces what's already there verbatim), but it corrects the
+migration history itself, which otherwise would hand a fresh
+bootstrap-from-migrations project the wrong, years-stale policy.
+
+**A real, live indexing bug caused by this PR's own `case_referrals`
+drop**: a third review angle found that `phase19_referrals.sql`'s `CREATE
+INDEX IF NOT EXISTS idx_referrals_case_id`/`idx_referrals_status` on
+`public.referrals` silently no-op'd when it originally ran — Postgres
+index names are schema-scoped, not table-scoped, and `case_referrals` (a
+different table) already had indexes by those exact names. Confirmed via
+`schema_snapshot.sql`: `public.referrals`, the table the referral workflow
+actually uses, has been missing both indexes since. phase34 (dropping
+`case_referrals`) frees the names but doesn't recreate them on the right
+table; `phase36_backfill_referrals_indexes.sql` does.
+
+**The new `db-schema-drift` CI job had no path filter**: added directly
+to `ci.yml`, it ran on every PR regardless of whether anything relevant
+changed — a regression from the job it replaced, which was properly
+path-scoped. Fixed by moving it back into its own
+`.github/workflows/db-schema-drift.yml` (as `migration-replay`, alongside
+`live-schema-fingerprint`), restoring `paths:` scoping to
+`backend/supabase/migrations/**`, `schema_snapshot.sql`, and
+`ci_stubs.sql`.
+
+**CI only ever proved DDL parses, never that RLS actually restricts
+access**: four review angles converged on this independently. The
+`migration-replay` job connects as the `postgres` superuser, and RLS does
+not apply to superusers regardless of policy content — so a future
+migration that reintroduced the exact `user_metadata` JWT-trust pattern
+phase32 fixes would apply cleanly and pass CI. Fixed by adding
+`backend/supabase/ci_rls_regression_check.sql` as a job step: it seeds a
+facility/profile/case record, then `SET ROLE authenticated` and simulates
+two real requests via `set_config('request.jwt.claims', ...)` — the same
+functional technique used to hand-verify the phase32 fix (§36), now
+re-run on every relevant PR. Verified it actually has teeth, not just a
+vacuous pass: deliberately reverted `asha_select_own` to the vulnerable
+JWT-trusting version locally and confirmed the check fails loudly with a
+clear message; restored the fix and confirmed it passes again.
+
+**Smaller fixes from the same pass, all verified**: `ci_stubs.sql`'s
+`auth.role()` defaulted to `'anon'` when `request.jwt.claims` was unset;
+real Supabase's returns `NULL` in that state, and defaulting could mask a
+test that forgot to call `set_config` at all — fixed to match.
+`ci_stubs.sql` also gained the `authenticated`/`anon` PostgREST roles
+(needed for the new regression check to `SET ROLE` at all) via `ALTER
+DEFAULT PRIVILEGES`, not a plain `GRANT ... ON ALL TABLES`, since the
+grant runs before `schema_snapshot.sql` creates any tables and a
+snapshot-style grant would silently apply to nothing. An unused
+`CREATE EXTENSION pgcrypto` was removed (nothing loaded afterward calls
+anything from it). The migration-ordering loop was simplified from a
+hand-rolled extract-pair-sort-strip pipeline to `sort -V`, matching what
+the job it replaced already did, with a null-delimited read loop to
+survive a filename with a space.
+
+**Found, not fixed — genuinely lower severity or out of scope**:
+`case_records_update_policy`'s `WITH CHECK` clause contains a tautological
+`submitted_by = submitted_by`, which on its own would let any doctor/admin
+UPDATE silently reassign a case's `submitted_by`. Checked before treating
+this as urgent: phase15 also created a `BEFORE UPDATE` trigger
+(`trg_protect_case_records_submitted_by`) that independently `RAISE
+EXCEPTION`s if `submitted_by` changes, and cannot be bypassed by RLS
+policy text — the tautology is real, confusing dead code, but not
+currently exploitable, since the trigger is the actual enforcement
+mechanism. Left as a documented cleanup item rather than an urgent fix.
+`facilities_public_read USING (true)` OR-combining with the stricter
+`facilities_select_policy` was already documented as open in §36; nothing
+new here. A live-vs-mocked gap remains even after this PR:
+`live-schema-fingerprint` still needs `SUPABASE_URL`/
+`SUPABASE_SERVICE_ROLE_KEY`/`EXPECTED_SCHEMA_FINGERPRINT` configured by the
+user before it does anything beyond warning — unchanged from §35.
+
+*Correction (§38 below): the "not currently exploitable, since the
+trigger is the actual enforcement mechanism" claim above was wrong. The
+trigger didn't exist on the live project. §38 has the full story.*
+
+### 38. The submitted_by trigger §37 assumed protected the tautology didn't exist on the live project either
+
+**Context**: while scoping how to bootstrap a genuinely new pre-production
+Supabase project from `schema_snapshot.sql` alone (rather than the
+disposable, `ci_stubs.sql`-stubbed containers CI uses), the snapshot's own
+documented scope limitation — it doesn't capture functions or triggers —
+stopped being a hypothetical CI-only gap and became a real question: what,
+specifically, would be missing? A repo-wide check found exactly one
+answer across the entire pre-phase28 range: `phase15_data_security_
+hardening.sql`'s `protect_case_records_submitted_by()` function and its
+`trg_protect_case_records_submitted_by` trigger — the same trigger §37
+had just cited as the reason `case_records_update_policy`'s tautological
+`WITH CHECK (submitted_by = submitted_by)` clause wasn't actually
+exploitable.
+
+**What a direct check found**: a read-only query against
+`pg_proc`/`pg_trigger` on the live project — run by the user via the SQL
+Editor, the same pattern used throughout this engagement for anything
+touching production — confirmed neither the function nor the trigger
+exists live. `phase15` tracks them in git; they were never applied. A
+fourth instance of the exact failure mode this whole effort exists to
+catch (§35's phase28-31, §36/§37's `profiles_select_policy_hardened`),
+this time inside the pre-phase28 range that `schema_snapshot.sql`'s
+baseline had always treated as an already-verified black box — nothing in
+`db-schema-drift`'s `migration-replay` job could have caught it, since
+that job only ever applies migrations *newer* than the baseline.
+
+**Why this one is a real vulnerability, not just hygiene**: without the
+trigger, `submitted_by` on `case_records` has no protection at all against
+being changed. `case_records_update_policy`'s USING clause grants UPDATE
+to a fairly broad set — the original submitter, any doctor/facility_admin
+at the same facility, any admin — and its WITH CHECK clause's `submitted_by
+= submitted_by` conjunct is always true for a non-null value, i.e. no
+actual constraint. Any of those roles could reassign a case's `submitted_
+by` to an arbitrary uuid, corrupting the audit trail for who actually
+submitted it — reachable directly via Supabase's PostgREST API regardless
+of whether any application endpoint's request schema even exposes
+`submitted_by` as settable, the same "app code doesn't call it isn't a
+safety boundary" lesson §36 already learned once with `case_referrals`.
+
+**What was fixed** (`phase37_backfill_submitted_by_trigger.sql`): applies
+phase15's original, already-tracked function and trigger definitions
+verbatim — this isn't a new design, it's finishing a migration that never
+landed. Verified locally before handing off: rebuilt the full phase28-37
+chain from a fresh database, then ran a genuine functional test — attempted
+to `UPDATE case_records SET submitted_by = ...`, confirmed it fails with
+the trigger's `RAISE EXCEPTION`, then confirmed an unrelated column update
+on the same row still succeeds normally (the trigger doesn't over-block
+legitimate writes). Applied to the live project via the SQL Editor and
+re-verified with the same `pg_proc`/`pg_trigger` existence check, now
+returning true for both.
+
+**`schema_snapshot.sql` updated too**: rather than leave this as a
+documented-but-uncaptured exception indefinitely, the function and trigger
+were added directly into the snapshot itself (phase15 predates the
+snapshot's phase27 baseline, so this belongs there, not in a separate
+tracked migration layered on top). The same repo-wide grep that found this
+one instance confirmed it's the *only* function/trigger defined anywhere
+in phase10-27 — closing this specific gap closes the pre-phase28 range
+completely for functions/triggers, not just partially. Re-verified
+end-to-end afterward: a fresh database loading the updated snapshot, then
+applying phase28 through phase37 on top, applies with zero errors and
+creates the trigger exactly once (no duplicate-object conflict between the
+snapshot's copy and phase37's own `CREATE OR REPLACE`/`DROP TRIGGER IF
+EXISTS` — both are idempotent by design).
+
+**Consequences**: §37's characterization of the tautology as "not
+currently exploitable" is retracted — it was exploitable the entire time
+this repository believed otherwise. The lesson generalizes: `schema_
+snapshot.sql`'s baseline being "verified" only ever meant verified against
+what the introspection query captured (tables/constraints/indexes/
+policies) — it was never a guarantee that everything phase10-27 tracked
+had actually landed. This pass checked functions/triggers specifically
+because a new practical need (bootstrapping a real project) forced the
+question; the same kind of check has not been run for every other DDL
+category those migrations touch. Worth treating as a standing open
+question rather than an assumption the next time schema_snapshot.sql is
+relied on for something it hasn't been asked to do before.
+
+### 39. Second adversarial audit pass — fail-closed scoping, RPC hardening, shared-device outbox ownership
+
+**Context**: an external two-pass adversarial review (1 critical, 2 high, 10
+medium, 9 low/info) was run against `dev`. Every finding was re-verified
+against the live code before acting; several turned out to be real, and the
+"critical" turned out to be substantially mitigated by RLS but still worth
+closing at the app layer.
+
+**What was fixed** (branch `security/audit-hardening-round2`):
+
+- **App-layer facility scoping now fails CLOSED (was open).**
+  `analytics.ts::resolveScope`, `cases.ts` list, and `cases.ts`
+  by-patient-key all previously dropped the `facility_id` filter (served
+  system-wide data) when a non-admin account had a null `facility_id`. All
+  three now route through `_shared/scoping.ts::resolveFacilityScope`, which
+  throws 400 for a non-admin with no facility. Important nuance recorded for
+  the next reviewer: the `asha_select_own` RLS policy (phase32) already
+  restricts doctors to their facility and ASHA workers to their own
+  submissions, so this was defense-in-depth, not the unbounded "every
+  facility" leak the report described — **provided phase32 is actually live**
+  (see §36/§38 on how often that assumption has been wrong here; worth a live
+  spot-check).
+
+- **`fn_rate_limit` DoS bounded (phase38).** It is granted to `anon`, so it
+  was callable directly via PostgREST with an unbounded `p_window_s` (which
+  also set the cleanup horizon `4 × p_window_s`) and no `p_key` length cap —
+  a storage-exhaustion vector against the shared limiter. Now bounds
+  `p_window_s ≤ 3600`, `p_key ≤ 200`, `p_max ≤ 1e6`. Legit callers only ever
+  pass window ≤ ~300 and short keys, so no real traffic is affected.
+
+- **`fn_deterioration_count` role-checked (phase38).** Was `is_active`-only,
+  so a supervisor could probe a patient's repeated-severe-visit signal by
+  key — contradicting supervisor_routes.py's documented "only sanctioned
+  path" isolation. Now restricted to `asha_worker`/`doctor`/`admin` (the
+  submit-path + already-case-authorized roles); supervisor is excluded.
+
+- **Shared-device outbox is owner-scoped.** On the handed-between-workers PHC
+  tablets, `processQueue()` drained *all* pending outbox rows under whoever
+  was logged in (submitting Worker A's patient data under Worker B's JWT),
+  and the dead-letter UI rendered any worker's `patient_name`/complaint. Rows
+  now carry `owner_id`; draining and the dead-letter list are scoped to the
+  logged-in worker. `signOut()` additionally clears in-progress form-drafts
+  and the cached facility phone. The outbox itself is deliberately **not**
+  wiped on logout (it is owner-scoped, and wiping it would break the
+  offline-first guarantee that a queued case survives until it syncs) — the
+  residual "raw IndexedDB readable via devtools on a shared device" is a
+  lower-severity, inherent-to-offline-first item left open (see below).
+
+- **Bounded LLM briefing chain (30s), sanitized LLM→LLM chaining, CORS
+  fail-closed, Gemini key moved to a header, dependabot repointed at the
+  monorepo, admin/user pagination ordered, degraded-count clamped, push
+  payload sanitized, draft-key `'anonymous'` collision closed.**
+
+**Deliberately deferred (documented, not fixed here):** LOW-1 (X-Forwarded-For
+left-most trust — fixing safely needs the exact proxy hop count), LOW-5
+(referral write-endpoint doc gap), LOW-6 (newborn age clamp — advisory-model
+only, needs golden-vector regeneration in two languages + clinician review, so
+its own PR), LOW-7/LOW-8/INFO-1 (perf/non-security), MED-5 (await-in-loop
+latency), MED-6 (voice buffers before size check), MED-10 (legacy `/api/admin/
+stats` under-count — the legacy backend is on the decommission path). Also
+open: the shared-device IndexedDB-at-rest residue described above.
+
+**Verification**: full migration-replay chain (stubs → snapshot → phase28–38 →
+RLS regression) applied cleanly against a local Postgres 16; phase38's bounds
+and the supervisor block were functionally exercised. `deno fmt/lint/check`
+and the edge test suite pass for all edited files (the 4 pre-existing
+`auth.test.ts`/`queryTimeout.test.ts` timer-leak failures reproduce
+unchanged on clean `dev` under Deno 2.4's stricter sanitizer — a
+deno-version artifact, not this change). clinical-core (61) and the web build
+are green.
+
+### 39. Supervisor global aggregate-scope database migration alignment (phase40)
+
+**Context**: During pre-production testing on `test` branch commit `99e9bd2`, sign-in for an organisation-scoped Supervisor (no `facility_id` assigned) succeeded, but loading the Team Metrics panel sent `GET /api/supervisor/team-metrics?days=30` which failed with HTTP `502`. Render logs showed `Supervisor team-metrics query failed: {'code': '22023', ..., 'message': 'account has no facility assigned'}`.
+
+**Root cause analysis**: The application-level scope resolver `app/core/scoping.py` was correctly updated to `GLOBAL_SCOPE_ROLE = "supervisor"` (Supervisor is organisation-wide by default, no `facility_id` required). However, the underlying SECURITY DEFINER PostgreSQL functions created in `phase28_security_definer_fns.sql` (`fn_team_metrics` and `fn_outbreak_signal_counts`) still contained an obsolete check requiring `v_own_facility IS NOT NULL` for non-admin roles and threw SQLSTATE `22023`.
+
+**Decision**: Added additive migration `phase40_supervisor_global_aggregate_scope.sql` to align the database-level authorization with the application RBAC model:
+- `fn_team_metrics`: `supervisor` and `admin` are permitted. `supervisor` defaults to organisation-wide (`p_facility_id = NULL`), or narrows if `p_facility_id` is supplied. `admin` (PHC Administrator) is strictly forced to `v_own_facility`.
+- `fn_outbreak_signal_counts`: `doctor`, `supervisor`, and `admin` are permitted. `supervisor` is organisation-wide by default (`p_facility_id = NULL`), or narrows if `p_facility_id` is supplied. `doctor` and `admin` are strictly forced to `v_own_facility`.
+- Permissions: `REVOKE ALL FROM PUBLIC`, `GRANT EXECUTE TO authenticated`. `SECURITY DEFINER` and `SET search_path = public` hardening preserved.
+- **Clinical Data Boundary**: Supervisor remains aggregate-only with zero direct `case_records` row-level access.
+
+### 40. Protocol Assistant Supervisor global scope and nullable facility_id (phase41)
+
+**Context**: In pre-production testing on `test` commit `48335f4`, a facility-unassigned Supervisor (`supervisor@test.vitalnet`) attempted to submit a general protocol question (`POST /api/protocol/ask`), which returned HTTP 400 `{"detail": "Account has no facility assigned"}`.
+
+**Root cause analysis**:
+1. In `backend/app/api/routes/protocol_routes.py`, `ask_protocol_question` checked `if not facility_id: raise HTTPException(status_code=400, detail="Account has no facility assigned")` without checking whether the caller was a Supervisor.
+2. In the original `phase25_protocol_questions.sql` migration, `protocol_questions.facility_id` was defined with a `NOT NULL` constraint, preventing a facility-unassigned Supervisor from persisting an organisation-wide general question.
+3. The Phase 39 RLS policies (`phase39_protocol_rls_governance.sql`) had already established that Supervisors have global SELECT and UPDATE access across all protocol questions, including rows with `facility_id IS NULL`, while Doctors, PHC Admins, and ASHA Workers remain strictly facility-scoped.
+
+**Decision**:
+- Added incremental migration `phase41_protocol_supervisor_global_scope.sql` to execute `ALTER TABLE public.protocol_questions ALTER COLUMN facility_id DROP NOT NULL;`. Foreign key referential integrity and indexes are retained.
+- Updated `ask_protocol_question` route guard in `protocol_routes.py` to derive `role = user.get("resolved_role") or ""` from the verified database profile (never JWT metadata) and only reject missing `facility_id` if `role != "supervisor"`. Facility-unassigned Supervisors persist `facility_id = None`.
+- Preserved all existing security boundaries: `require_role(*ALL_ROLES)`, rate limit 20/min, max 500 chars, LLM patient-specific refusal, user-scoped Supabase client (never service role), and 0 direct patient `case_records` row access for Supervisors.
+- Updated UI wording in `ProtocolAssistant.jsx` to render "Organization FAQ" for Supervisors while retaining "Facility FAQ" for PHC-local roles.
+
+### 41. ASHA online submission CORS preflight X-Event-Id allow-list and backend reachability probe (phase42)
+
+**Context**: In pre-production testing on `test`, an ASHA Worker's online case submission failed to reach the backend, displaying "Saved Offline" and remaining queued in the outbox.
+
+**Root cause analysis**:
+1. `apps/web/src/stores/syncStore.js` sends custom idempotency header `X-Event-Id` on case submission (`POST /api/submit`) and outbox drain.
+2. In `backend/app/main.py`, `CORSMiddleware` configured `allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Device-Id", "X-Request-ID"]` which omitted `X-Event-Id`.
+3. The browser sent an `OPTIONS /api/submit` preflight with `Access-Control-Request-Headers: authorization,content-type,x-event-id`. Because `X-Event-Id` was omitted from `allow_headers`, the backend rejected the preflight with HTTP 400 `Disallowed CORS headers`, causing the browser `fetch` to reject with a `TypeError`.
+4. `syncStore.js` caught the network failure and queued the submission in the offline outbox as intended for true network outages, resulting in the misleading "Saved Offline" state.
+5. In addition, `apps/web/src/lib/connectivity.js` probed relative path `/api/health`, hitting the frontend Vercel SPA domain (which returned HTML 200) instead of the actual configured backend URL (`VITE_API_BASE_URL`).
+
+**Decision**:
+- Explicitly added `"X-Event-Id"` to `CORSMiddleware` `allow_headers` in `backend/app/main.py`. Retained the explicit allow-list without wildcards (`*`) to preserve origin and header boundaries.
+- Added middleware-level regression tests in `backend/tests/test_cors_preflight.py` asserting 200 OK, `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, case-insensitive inclusion of `x-event-id`, `authorization`, `content-type`, and denial of untrusted origins.
+- Updated `apps/web/src/lib/connectivity.js` to probe `${apiBase('health')}/api/health`, preserving the 5-second timeout and `cache: 'no-store'` behavior while targeting the configured backend URL.
+
+### 42. MIMIC-IV-ED Gate 2 benchmark architecture and credentialed data governance
+
+**Context**: To conduct VitalNet's first credentialed external benchmark on a large clinical emergency dataset (MIMIC-IV-ED v2.2, ~425k stays from Beth Israel Deaconess Medical Center, Boston, MA) while keeping the production classifier frozen and strictly enforcing local-only data boundaries.
+
+**Decisions**:
+1. **Primary arm strictly triage-time (`mimic_triage_contract_v1`)**:
+   - Ingests triage vitals (`triage.csv`), anchor age (`patients.anchor_age`), and stay-level sex (`edstays.gender`).
+   - Does not claim full unrestricted or full frontline ASHA-contract validation (unmeasured fields like pregnancy, location, endemic exposures, illness duration remain uninvented empty/None placeholders).
+2. **Hard-disabled medication reconciliation arm (`mimic_full_available_context_v1`)**:
+   - `medrecon.charttime` records medication reconciliation entry time, not proven availability at triage time.
+   - Refused by default (`EvaluationRefusedError`), requiring independent temporal-eligibility review and separate authorization (`gate_medrecon_temporal_authorized=True`). Gate M4 authorization alone cannot unlock this arm.
+3. **Prohibited tables and fields constants**:
+   - `PROHIBITED_TABLE_NAMES = ["diagnosis", "pyxis", "vitalsign", "disposition", "admission", "outcomes"]` rejected at adapter instantiation.
+   - `PROHIBITED_FIELD_NAMES = ["hadm_id", "outtime", "disposition", "length_of_stay", "los", "dod", "anchor_year", "anchor_year_group"]` stripped *before* canonical patient record construction and never included in `form_data`, `raw_fields`, or output reports.
+4. **Exact source precedence and version-specific age handling**:
+   - Sex precedence: `edstays.gender` (primary) -> `patients.gender` (fallback if missing) with aggregate `gender_conflict` tracking.
+   - Age precedence: `patients.anchor_age` directly. Preserves MIMIC-IV v2.x integer `91` top-coding for patients $\ge 89$ years without attempting de-identified date reconstruction. Missing age linkages are excluded and tracked (`missing_age_linkage`).
+5. **Vital plausibility filtering & BP inversion handling**:
+   - Temperature converted from °F to °C via `(temp_f - 32.0) * 5/9` with plausible range bounds ($80.0^\circ\text{F} \le \text{temp} \le 110.0^\circ\text{F}$). Readings outside bounds are sanitized to `None` (not silently clipped or imputed) and counted under `temp_out_of_plausible_range`.
+   - Doppler sentinel code `998` sanitized to `None`.
+   - Blood pressure inversion (`sbp <= dbp`) sanitized to `None` and tracked under `invalid_bp_inversion`.
+6. **Isolation of respiratory rate and pain**:
+   - `resprate` and `pain` are isolated from model input (`form_data`) and included solely in aggregate inspection metadata.
+7. **Deterministic allow-list symptom parser (`mimic_symptom_parser_v1`)**:
+   - Regex/keyword parser mapping unstructured chief complaints into the 12 canonical `ALLOWED_SYMPTOMS`.
+   - 100% deterministic, zero external API/LLM calls, strictly sorted outputs.
+   - Local and aggregate-only: raw complaint strings are never logged, emitted in exceptions, or stored in report JSONs.
+8. **Pre-registered cohort policies**:
+   - `all_stays` (primary): evaluates all eligible `stay_id` encounters, auditing repeated `subject_id` visits in metadata.
+   - `first_stay_only` (pre-registered sensitivity): evaluates only the first chronological encounter per `subject_id`, tracking exclusions under `duplicate_subject_excluded`.
+9. **Staged scoring refusal & internal synthetic testing**:
+   - `load_for_evaluation()` refuses evaluation by default (`EvaluationRefusedError`, exit code 2) unless `--gate-m4-authorized` is explicitly provided.
+   - Test harness uses internal `_synthetic_test_mode=True`, strictly bounded to `tests/fixtures/` and rejected if pointed at any non-fixture path.
+10. **Strict zero patient data leakage assertion**:
+    - All JSON reports and console outputs are recursively validated via `assert_zero_patient_leakage()`.
+
+### 43. Public-data evaluation closure and safety-remediation pivot
+**Context**: VitalNet completed its authorized public-data evaluation cycle on the frozen model using Iran ED inspection, NHAMCS 2022 partial-input scoring, a synthetic ASHA input-contract study, and Korean KTAS 2019 Gate 3A scoring. MIMIC-IV-ED credentialing was not completed and no full MIMIC score exists.
+**Decisions**:
+1. **Close the current public-data evaluation cycle** and consolidate the evidence in `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`.
+2. **Record the safety signal without averaging incompatible benchmarks**: NHAMCS emergency sensitivity was 14.4%; KTAS primary emergency sensitivity was 25.2%; KTAS vital-only emergency sensitivity was 17.9%. These are cohort-specific proxy results, not clinical validation.
+3. **Keep the production model frozen**. No retraining, tuning, threshold changes, classifier changes, deployment, or promotion are justified by these results.
+4. **Treat missing symptoms and clinical context as the next safety-remediation target**. The ASHA contract study and KTAS arm comparison show that structured symptom/context availability materially affects emergency sensitivity.
+5. **Defer MIMIC-IV-ED**. Credentialing remains incomplete; no unofficial copy may be used and no full MIMIC benchmark claim may be made.
+6. **Create a design-only safety-remediation gate** before any candidate implementation. The design must define missing-context behavior, required ASHA/PHC intake fields, human escalation, pre-registered safety metrics, subgroup analyses, and a qualified clinical reviewer for acceptance criteria.
+7. **Require synthetic-first comparison against the frozen baseline** for any future candidate. Any real-data rerun requires fresh dataset-specific explicit authorization, and no candidate may reach production or preproduction without clinical review, prospective/shadow evidence, and governance approval.
+**Evidence**: `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`, `docs/evaluation/KTAS_2019_SOURCE_CARD.md`, `docs/VALIDATION_PROTOCOL.md`, and `docs/CLINICAL_RISK_MANAGEMENT.md`.
+
+
+### 44. Roadmap refinement workstreams remain additive, deterministic, and governance-gated
+
+**Context**: The roadmap refinement cycle addressed five high-value gaps without changing the frozen model v3.1.0: doctor review routing, cross-visit vital trends, deterministic referral handoff, paediatric capture, and localization review infrastructure. These features touch clinical workflow and data capture, so a superficially successful implementation must not be mistaken for clinical validation or authorization to activate new advisories.
+
+**Decision**: Merge the five workstreams into `dev` only, through reviewed pull requests, while keeping production inference, model weights, thresholds, rules, APIs outside the approved additive scope, and deployment branches untouched. PR #123 implements flagged-first doctor queue routing with stable `needs_review` keyset pagination. PR #124 implements bounded five-vital history, accessible trend visualization, and deterministic SBAR drafting with a persisted/editable handoff. PR #125 implements nullable, bounded `age_months` and `muac_mm` capture with cross-field validation and a default-off paediatric advisory. PR #126 implements a machine-checkable locale review manifest, exact key-parity enforcement, and visible review-status signaling; Hindi and Tamil remain English placeholders until qualified medical-language review.
+
+The paediatric advisory may not be activated from engineering evidence alone. Any activation, tier-floor behavior, or effective-age model wiring requires a qualified clinical-governance decision. Likewise, localization may not be described as pilot-ready until a qualified reviewer has checked the medical terminology and approved the locale. The deterministic SBAR is authoritative; optional LLM polishing is not part of this cycle. The bounded history and routing features are workflow aids, not clinical validation.
+
+**Consequences**: The roadmap can distinguish implemented engineering foundations from external clinical gates. Future work must preserve the model freeze and must not promote these changes to `test`, `main`, pre-production, Render, Vercel, or Supabase without the separately documented release process. The existing public-data evaluation closure and shadow-evaluation protocol remain evaluation/governance artifacts; they do not establish clinical validity.

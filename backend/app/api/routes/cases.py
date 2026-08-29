@@ -5,7 +5,7 @@ Extracted from main.py as part of Phase 12 architectural modularisation.
 import logging
 import re
 import uuid as uuid_lib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
@@ -14,12 +14,14 @@ from slowapi import Limiter
 from app.core.auth import require_role, verify_sub_for_rate_limit
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
-from app.core.database import get_supabase_for_user, supabase_admin, extract_bearer_token
+from app.core.database import get_supabase_for_user, extract_bearer_token
 from app.core.metrics import record_triage_classification
 from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput, PATIENT_KEY_RE
 from app.ml.classifier import predict_triage
 from app.services.llm import generate_briefing, generate_patient_summary
 from app.services.push import push_emergency_alert
+from app.utils.case_queue import build_cases_cursor_filter
+from app.utils.paediatric import build_paediatric_advisory
 
 logger = logging.getLogger("vitalnet")
 
@@ -92,37 +94,36 @@ def _resolved_facility(user: dict) -> str | None:
 # from the same patient within this trailing window is a signal worth a
 # clinician's eyes even if today's reading alone wouldn't trigger review.
 _DETERIORATION_WINDOW_DAYS = 7
-_DETERIORATION_QUALIFYING_TIERS = ("URGENT", "EMERGENCY")
 
 
-def _check_deterioration_pattern(patient_key: str | None, current_triage_level: str) -> tuple[bool, int | None]:
+def _check_deterioration_pattern(db, patient_key: str | None, current_triage_level: str) -> tuple[bool, int | None]:
     """
     Counts prior URGENT/EMERGENCY visits sharing patient_key within the
-    trailing window, using supabase_admin for exactly one count-only
-    query — the same narrow, documented exception as the referral
-    load-balancing aggregate (docs/DECISIONS.md §20, §22): a patient_key
-    carries no PII, and an ASHA worker submitting THIS case is already
-    trusted to reason about whether this same patient has recently had
-    repeated severe visits, regardless of which worker saw them each time
-    (RLS would otherwise silently restrict an asha_worker's own query to
-    only their own past submissions, undercounting cross-worker visits).
+    trailing window via fn_deterioration_count (a SECURITY DEFINER Postgres
+    function, backend/supabase/migrations/phase28_security_definer_fns.sql),
+    called through `db` — the CALLING USER's own RLS-scoped client, not
+    supabase_admin. A patient_key carries no PII (docs/DECISIONS.md §20,
+    §22, §29), and an ASHA worker submitting THIS case is already trusted
+    to reason about whether this same patient has recently had repeated
+    severe visits, regardless of which worker saw them each time (plain
+    RLS would otherwise silently restrict an asha_worker's own query to
+    only their own past submissions, undercounting cross-worker visits) —
+    fn_deterioration_count re-derives that same narrow exception inside
+    the database, next to the table it protects, instead of in Python.
     """
     if not patient_key:
         return False, None
 
-    window_start = (datetime.now(timezone.utc) - timedelta(days=_DETERIORATION_WINDOW_DAYS)).isoformat()
-    result = (
-        supabase_admin.table("case_records")
-        .select("id", count="exact")
-        .eq("patient_key", patient_key)
-        .gte("created_at", window_start)
-        .in_("triage_level", _DETERIORATION_QUALIFYING_TIERS)
-        .is_("deleted_at", "null")
-        .execute()
-    )
-    prior_count = result.count if result.count is not None else len(result.data or [])
-    total = prior_count + (1 if current_triage_level in _DETERIORATION_QUALIFYING_TIERS else 0)
-    return total >= 2, (total if total >= 2 else None)
+    result = db.rpc(
+        "fn_deterioration_count",
+        {
+            "p_patient_key": patient_key,
+            "p_current_triage_level": current_triage_level,
+            "p_window_days": _DETERIORATION_WINDOW_DAYS,
+        },
+    ).execute()
+    row = (result.data or [{}])[0]
+    return bool(row.get("has_pattern")), row.get("visit_count")
 
 
 def _authorize_case_row_access(user: dict, row: dict) -> None:
@@ -200,9 +201,13 @@ async def submit_case(
         db = get_supabase_for_user(raw_token)
 
         deterioration_alert, deterioration_visit_count = _check_deterioration_pattern(
-            form.patient_key, triage_result["triage_level"]
+            db, form.patient_key, triage_result["triage_level"]
         )
 
+        paediatric_advisory = build_paediatric_advisory(
+            {"patient_age": form.patient_age, "age_months": form.age_months, "muac_mm": form.muac_mm},
+            enabled=settings.paediatric_advisory_enabled,
+        )
         record = {
             "client_id": str(form.client_id or uuid_lib.uuid4()),
             "submitted_by": user["sub"],
@@ -218,6 +223,12 @@ async def submit_case(
             "temperature": float(form.temperature)
             if form.temperature is not None
             else None,
+            # Governance-gated paediatric capture. These fields are persisted
+            # for review/research only and are intentionally absent from the
+            # classifier and briefing inputs above.
+            "age_months": form.age_months,
+            "muac_mm": form.muac_mm,
+            "paediatric_advisory": paediatric_advisory,
             "is_pregnant": form.is_pregnant,
             "chief_complaint": form_data.get("chief_complaint", form.chief_complaint),
             "complaint_duration": form.complaint_duration,
@@ -283,7 +294,12 @@ async def submit_case(
             resource_id=response.get("id") if isinstance(response, dict) else None,
             facility_id=facility_id,
             ip_address=get_client_ip(request),
-            details={"created_offline": bool(form.created_offline), "needs_review": bool(record.get("needs_review"))},
+            details={
+                "created_offline": bool(form.created_offline),
+                "needs_review": bool(record.get("needs_review")),
+                "paediatric_capture": bool(form.age_months is not None or form.muac_mm is not None),
+                "paediatric_advisory_status": paediatric_advisory.get("status"),
+            },
         )
 
         # Genuinely new submission (not a retried duplicate) — record the
@@ -329,6 +345,7 @@ async def get_cases(
     user: dict = Depends(require_role("doctor", "admin")),
     before_time: str | None = None,       # ISO timestamp of the last seen case
     before_priority: int | None = None,   # triage_priority of the last seen case (0/1/2)
+    before_needs_review: bool | None = None,  # needs_review of the last seen case
     before_id: str | None = None,         # id of the last seen case (unique tie-breaker)
     limit: int = 25,
 ):
@@ -336,11 +353,11 @@ async def get_cases(
     Cursor-based pagination with composite keyset for the Doctor Dashboard.
 
     Sort order: EMERGENCY (0) → URGENT (1) → ROUTINE (2) first,
-    then by created_at DESC within each tier, then by id DESC as a unique
-    tie-breaker (handles multiple cases with an identical created_at).
+    flagged cases requiring review before unflagged cases within each tier,
+    then by created_at DESC, then by id DESC as a unique tie-breaker.
 
-    Use before_time + before_priority + before_id from the previous page's
-    nextCursor / nextTriagePriority / nextId to fetch the next page.
+    Use before_time + before_priority + before_needs_review + before_id from
+    the previous page's cursor fields to fetch the next page.
 
     Scoping: 'admin' sees all facilities (global). 'doctor' accounts with a
     facility_id are scoped to that facility only. Doctors without a
@@ -368,11 +385,12 @@ async def get_cases(
             "low_confidence, needs_review, human_review_requested, human_review_reason, "
             "contraindication_flags, deterioration_alert, deterioration_visit_count, "
             "triage_model_version, overridden_triage, override_reason, overridden_by, overridden_at, "
-            "created_at, reviewed_at, reviewed_by, facility_id, created_offline"
+            "patient_key, created_at, reviewed_at, reviewed_by, facility_id, created_offline"
         )
         .is_("deleted_at", "null")
         .order("triage_priority", desc=False)   # EMERGENCY (0) first
-        .order("created_at", desc=True)          # Newest within each tier
+        .order("needs_review", desc=True)        # Flagged cases first within tier
+        .order("created_at", desc=True)          # Newest within each routing group
         .order("id", desc=True)                  # Unique tie-breaker for stable pagination
         .limit(limit + 1)                        # Fetch one extra to determine hasMore
     )
@@ -381,18 +399,14 @@ async def get_cases(
         query = query.eq("facility_id", facility_id)
 
     if normalized_before_time is not None and before_priority is not None:
-        # Composite keyset cursor with unique tie-breaker.
-        if parsed_before_id is not None:
-            query = query.or_(
-                f"triage_priority.gt.{before_priority},"
-                f"and(triage_priority.eq.{before_priority},created_at.lt.{normalized_before_time}),"
-                f"and(triage_priority.eq.{before_priority},created_at.eq.{normalized_before_time},id.lt.{parsed_before_id})"
+        query = query.or_(
+            build_cases_cursor_filter(
+                before_time=normalized_before_time,
+                before_priority=before_priority,
+                before_needs_review=before_needs_review,
+                before_id=parsed_before_id,
             )
-        else:
-            query = query.or_(
-                f"triage_priority.gt.{before_priority},"
-                f"and(triage_priority.eq.{before_priority},created_at.lt.{normalized_before_time})"
-            )
+        )
 
     result = query.execute()
     rows = result.data
@@ -405,6 +419,7 @@ async def get_cases(
         "hasMore": has_more,
         "nextCursor": cases[-1]["created_at"] if has_more and cases else None,
         "nextTriagePriority": cases[-1]["triage_priority"] if has_more and cases else None,
+        "nextNeedsReview": cases[-1]["needs_review"] if has_more and cases else None,
         "nextId": cases[-1]["id"] if has_more and cases else None,
     }
 
@@ -670,7 +685,8 @@ async def get_cases_by_patient_key(
         db.table("case_records")
         .select(
             "id, chief_complaint, triage_level, created_at, reviewed_at, "
-            "patient_age, patient_sex, facility_id"
+            "patient_age, patient_sex, facility_id, bp_systolic, bp_diastolic, "
+            "spo2, heart_rate, temperature"
         )
         .eq("patient_key", key)
         .is_("deleted_at", "null")
@@ -692,7 +708,7 @@ async def get_cases_by_patient_key(
         resource_id=None,
         facility_id=facility_id,
         ip_address=get_client_ip(request),
-        details={"view": "patient_key_history", "match_count": len(rows)},
+        details={"view": "patient_key_history", "match_count": len(rows), "include": "bounded_vitals"},
     )
 
     return {"cases": rows}
@@ -716,7 +732,16 @@ async def get_case_detail(
 
     result = (
         db.table("case_records")
-        .select("*")
+        .select(
+            "id, created_at, updated_at, patient_name, patient_age, patient_sex, patient_location, patient_key, "
+            "chief_complaint, complaint_duration, symptoms, observations, known_conditions, current_medications, "
+            "temperature, heart_rate, bp_systolic, bp_diastolic, spo2, respiratory_rate, "
+            "triage_level, triage_priority, triage_confidence, triage_model_version, model_version, risk_driver, "
+            "briefing, reviewed_at, reviewed_by, doctor_notes, overridden_triage, override_reason, overridden_by, overridden_at, "
+            "facility_id, submitted_by, is_pregnant, contraindication_flags, needs_review, "
+            "human_review_requested, human_review_reason, deterioration_alert, deterioration_visit_count, low_confidence, "
+            "consent_captured, consent_captured_at, client_id, created_offline, synced_at"
+        )
         .eq("id", case_uuid)
         .is_("deleted_at", "null")
         .maybe_single()

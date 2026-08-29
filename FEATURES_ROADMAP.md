@@ -84,7 +84,7 @@ identical to production.
 
 ### 1.2 Golden-vector Python/JS feature-engineering parity test (CI-enforced) — ✅ DONE
 
-**Status**: Implemented. `backend/scripts/export_golden_vectors.py` generates
+**Status**: Implemented. `tools/training/export_golden_vectors.py` generates
 240 synthetic patients across all four severities and writes
 `tests/fixtures/golden_feature_vectors.json` (mirrored into
 `frontend/tests/fixtures/`); `backend/tests/test_feature_parity.py` and
@@ -110,10 +110,14 @@ audit fixed once already (the previous two-model architecture had this
 problem structurally); a parity test prevents it from being reintroduced
 one feature at a time.
 
-**Effort**: Small.
+**Why (original)**: The earlier Python/JavaScript hand-mirror could silently
+diverge when a feature changed on one side. The shared package removes that
+structural duplication. The current web runtime uses the package in `hybrid`
+mode to match the live FastAPI model-primary contract; the Edge Function uses
+the same package in `rules_first` mode, but has not been cut over to production.
 
 **Implementation**:
-1. Create `backend/scripts/export_golden_vectors.py`: generates ~200
+1. Create `tools/training/export_golden_vectors.py`: generates ~200
    diverse synthetic patients (reuse `generate_patient()` from
    `train_classifier.py`), runs each through
    `ClinicalFeatureEngineer.engineer_features()`, and writes
@@ -139,9 +143,10 @@ one feature at a time.
    change to `triageClassifier.js::buildFeatureMap()` — CI will fail
    otherwise."
 
-**Acceptance check**: Deliberately introduce a one-line discrepancy between
-the Python and JS feature engineering in a scratch branch; confirm CI fails
-on it.
+**Acceptance check**: A deliberate change to shared feature/rules behavior
+must fail the package’s golden, conformance, or safety tests before it can be
+merged. Clinical-rule changes also require the review gates in
+`docs/CLINICAL_REVIEW.md`.
 
 ---
 
@@ -200,10 +205,10 @@ periodic — not real-time — retraining job).
    shown only after a case is marked reviewed. A small form (severity
    dropdown pre-filled with the ML's original triage_level as the default,
    disposition dropdown, notes textarea) posting to the new endpoint via a
-   new `recordCaseOutcome()` wrapper in `frontend/src/api/cases.js`.
+   new `recordCaseOutcome()` wrapper in `apps/web/src/api/cases.js`.
 4. **Retraining pipeline** (NOT real-time, NOT automatic — a human-gated
    periodic job, given the safety stakes): a new script
-   `backend/scripts/retrain_from_outcomes.py` that:
+   `tools/training/retrain_from_outcomes.py` that:
    - Pulls all `case_outcomes` joined with their `case_records` (need
      `bp_systolic`, `spo2`, etc. — the original submitted vitals).
    - Where `actual_severity` disagrees with the original `triage_level`,
@@ -293,7 +298,7 @@ the service worker infrastructure to hang this off of).
    null) using `pywebpush`. Do this as an `asyncio` background task
    (`BackgroundTasks` from FastAPI) so it never adds latency to the
    ASHA worker's submission response.
-4. **Frontend**: add a `frontend/src/lib/push.js` helper: requests
+4. **Frontend**: add a `apps/web/src/lib/push.js` helper: requests
    Notification permission, subscribes via
    `registration.pushManager.subscribe({ userVisibleOnly: true,
    applicationServerKey: VITE_VAPID_PUBLIC_KEY })`, posts the subscription
@@ -364,30 +369,13 @@ meeting our EMERGENCY response target?" without exporting raw data.
 
 ## Tier 2 — High value, larger effort
 
-### 2.1 Multi-language intake form (i18n) — ✅ INFRASTRUCTURE DONE (translations pending clinician review)
+### 2.1 Multi-language intake form (i18n) — ✅ REVIEW INFRASTRUCTURE DONE (PR #126; translations pending qualified review)
 
-**Status**: The infrastructure is real and working: `react-i18next` +
-`i18next` (added to `package.json`), `frontend/src/i18n.js` (init, persists
-the chosen language to `localStorage` under `vn_language`, updates
-`document.documentElement.lang`), and a language switcher in `NavBar.jsx`
-(English/Hindi/Tamil). `IntakeForm.jsx` — the single component the spec
-itself names as highest-value — is fully wired: every displayed string
-(section titles, field labels, placeholders, complaint/duration/symptom
-options, consent text, error messages) goes through `t()`.
+**Status**: The intake localization infrastructure is implemented and verified. `react-i18next` + `i18next`, `apps/web/src/i18n.js`, the persisted English/Hindi/Tamil language switcher, and the fully wired `IntakeForm.jsx` remain in place. PR #126 adds `localeReviewManifest.json`, exact locale key-parity tests, synchronized paediatric placeholder keys, documentation of approval semantics, and a visible locale-review status indicator in `NavBar.jsx`.
 
-**Deliberately NOT done this pass**: `hi.json` and `ta.json` are byte-for-
-byte English copies of `en.json` (see `frontend/src/locales/README.md`), not
-real translations. The spec itself warns that machine-translating clinical
-terminology without a clinician review pass is a patient-safety issue, not a
-cosmetic one — a mistranslated symptom option could change what a worker
-believes they're recording. Populating real translations is tracked as
-follow-on work requiring that review; it is not a coding task and was
-explicitly excluded from this pass by user decision. The mechanical string
-extraction for the *other* panels/components (`Dashboard.jsx`,
-`AdminPanel.jsx`, etc.) also hasn't been done — `IntakeForm.jsx` is the
-reference implementation demonstrating the pattern works end-to-end;
-extending it to the rest of the app is the same mechanical pattern, not a
-design question.
+Hindi and Tamil remain English placeholder content, not clinical translations. The manifest marks both locales `draft-placeholder` with `pilotApproved: false`; qualified medical-language review is required before pilot use. No machine-translated symptom or complaint labels were introduced. Stable English wire identifiers for complaints, durations, and symptoms remain unchanged regardless of the displayed language.
+
+The mechanical string extraction for other panels/components remains outside this refinement workstream. The current implementation is therefore a safe intake-form localization foundation and review-control mechanism, not a claim of multilingual clinical readiness.
 
 **Wire-format guarantee preserved**: `chief_complaint`'s submitted value and
 every `symptoms[]` id are unchanged regardless of the selected language —
@@ -407,10 +395,10 @@ triage context.
 **Effort**: Medium (mechanical but touches every form/panel).
 
 **Implementation**:
-1. Add `react-i18next` + `i18next` to `frontend/package.json`.
+1. Add `react-i18next` + `i18next` to `apps/web/package.json`.
 2. Extract all user-facing strings from `IntakeForm.jsx`, `Dashboard.jsx`,
    `panels/*.jsx`, `components/*.jsx` into
-   `frontend/src/locales/en.json`, then produce `hi.json` (Hindi),
+   `apps/web/src/locales/en.json`, then produce `hi.json` (Hindi),
    `ta.json` (Tamil) as the first two targets given the Tamil Nadu default
    — professionally reviewed translations for clinical terminology are
    important here; do not machine-translate symptom/complaint labels
@@ -914,10 +902,14 @@ for `doctor`/`supervisor`/`admin`).
 These emerged from the round-5 ML-and-hardening pass. Several are direct
 follow-ons to the age-aware classifier work (§ ML retrain, DECISIONS §31):
 the model now reasons about paediatric physiology, but the intake form still
-can't *capture* the inputs that make that reasoning precise (age in months,
-gestational age, weight). The rest are high-value, mostly-deterministic,
-offline-first tools that fit the weak-hardware / poor-connectivity target
-without adding ML risk. Each is written implementation-ready; none is built.
+needs governance-controlled capture for inputs that make that reasoning
+precise. The rest are high-value, mostly-deterministic, offline-first tools
+that fit the weak-hardware / poor-connectivity target without adding ML risk.
+The five refinement workstreams covered by the current execution cycle are
+now implemented on `dev` in PRs #123–#126, with paediatric advisory activation
+and translation approval deliberately left as external gates. The original
+specification remains below to distinguish shipped scope from deferred or
+out-of-scope extensions.
 
 Prioritisation note: 4.1, 4.2, and 4.4 are the highest value-to-effort —
 each is small, each sharpens a clinical-safety guarantee the app already
@@ -926,7 +918,9 @@ dependency, no ML retrain, trivially offline). 4.3 and 4.6 are the biggest
 day-to-day utility wins for the health worker. 4.5 and 4.7 build on data
 the app already collects.
 
-### 4.1 Age-in-months entry for infants (< 2 years)
+### 4.1 Age-in-months entry for infants (< 2 years) — ✅ GOVERNANCE-GATED CAPTURE IMPLEMENTED (PR #125)
+
+**Status**: Additive nullable `age_months` capture, bounds validation, cross-field eligibility validation, browser serialization, and database constraints are implemented behind `VITE_ENABLE_PAEDIATRIC_CAPTURE`. The backend paediatric advisory remains default-off (`PAEDIATRIC_ADVISORY_ENABLED=false`), and this workstream does not alter the frozen production classifier or claim that age-months capture is clinically validated. Effective-age model wiring and advisory activation require a separate qualified clinical-governance decision.
 
 **Why**: `patient_age` is an integer year, so every child under 1 is entered
 as `0` and every child under 2 collapses to `0` or `1`. That erases exactly
@@ -1034,7 +1028,9 @@ worked reference values as its test.
 5. **Explicitly out of scope**: adult dosing, IV compatibility, anything
    requiring a real drug database. State this in the module docstring.
 
-### 4.4 Paediatric malnutrition screen (MUAC + weight-for-age z-score)
+### 4.4 Paediatric malnutrition screen (MUAC + weight-for-age z-score) — ✅ GOVERNANCE-GATED CAPTURE IMPLEMENTED (PR #125; advisory activation pending)
+
+**Status**: Additive nullable `muac_mm` capture, bounds validation, paediatric eligibility checks, database constraints, and a default-off WHO-scoped advisory helper are implemented in PR #125. The advisory does not change the triage tier and is disabled by default pending qualified clinical governance. Weight-for-age z-score lookup, clinical activation, and any tier-floor behavior from the original specification remain deferred; the production model is frozen.
 
 **Why**: Severe acute malnutrition is one of the highest-impact,
 most-missed rural paediatric red flags, and it is invisible to a
@@ -1067,7 +1063,9 @@ clinical-safety win for a tiny amount of code, and it is exactly the kind of
    present — pure lookup, offline; specify the table source (WHO Child
    Growth Standards) but leave the ~2 KB LMS asset for a follow-up.
 
-### 4.5 Cross-visit vitals trend sparkline for returning patients
+### 4.5 Cross-visit vitals trend sparkline for returning patients — ✅ IMPLEMENTED (PR #124)
+
+**Status**: A bounded, facility-scoped patient-history response exposes only the five required vital fields and timestamps. `VitalTrendSparkline.jsx` renders dependency-free accessible SVG trends with text alternatives, and `BriefingCard.jsx` lazy-loads history so the initial dashboard path remains light. Deterministic trend utilities and focused Node tests are included. No new clinical inference is performed.
 
 **Why**: The patient continuity code (DECISIONS §21) and the cross-visit
 deterioration flag (§22) already collect a patient's visit history, but the
@@ -1094,7 +1092,9 @@ new data collection**, just visualisation of rows already in `case_records`.
 4. **Tests**: a small component test asserting the SVG path is generated from
    a known series; no clinical-logic test needed (pure visualisation).
 
-### 4.6 Structured SBAR handoff note for referrals
+### 4.6 Structured SBAR handoff note for referrals — ✅ DETERMINISTIC HANDOFF IMPLEMENTED (PR #124)
+
+**Status**: PR #124 adds a deterministic Python SBAR builder, the referral persistence migration, Edge/API parity, a locally editable draft in `ReferralsPanel`, and clipboard copy. The draft is built only from recorded case/referral fields and is designed to avoid invention. Optional LLM polishing from the original specification is not implemented; deterministic text remains the authoritative offline fallback.
 
 **Why**: The referral workflow (§2.3) records *that* a patient was referred,
 but the receiving facility gets no structured clinical handoff — the single
@@ -1128,7 +1128,9 @@ just a status change.
    triage tier in the SBAR always equals the case's tier (the hard-lock
    invariant).
 
-### 4.7 Confidence-and-acuity review routing for the doctor queue
+### 4.7 Confidence-and-acuity review routing for the doctor queue — ✅ IMPLEMENTED (PR #123)
+
+**Status**: PR #123 implements flagged-first ordering across the Python backend and Edge/API queue, with a pure `build_cases_cursor_filter()` utility and focused tests. The cursor carries `needs_review` so keyset pagination remains stable across priority boundaries. This is routing and visibility only; it does not modify model weights, thresholds, or triage decisions.
 
 **Why**: The backend already computes two signals the doctor queue ignores:
 `low_confidence` (model abstention) and `deterioration_alert`. A case that is
@@ -1155,6 +1157,168 @@ using data already in every row.
 4. **Tests**: assert the sort places a flagged EMERGENCY above an unflagged
    EMERGENCY of the same recency; assert pagination stays stable across the
    new sort key.
+
+### 4.8 ABHA (Ayushman Bharat Health Account) integration — spec only
+
+**Status**: Specification, not implemented. No ABDM sandbox credentials
+exist for this project; nothing below is wired into any code path. This
+section exists so a future implementation has a concrete starting design
+instead of starting from zero, and so VitalNet's existing patient-key
+mechanism (`docs/DECISIONS.md` §21) is deliberately designed to not
+conflict with it.
+
+**Why**: India's Ayushman Bharat Digital Mission (ABDM) issues every
+citizen a portable, opt-in health ID (ABHA number, a 14-digit ID, and/or an
+ABHA address, a human-readable `name@abdm` handle) meant to link health
+records across providers. VitalNet's own patient continuity key
+(`XXXX-XXXX`, generated client-side, internal to this app only — §21) was
+deliberately scoped to solve a narrower, more urgent problem: letting an
+ASHA worker recognize a *returning* patient across visits to *this app*,
+without any dependency on connectivity, a government API, or a patient
+having already enrolled in ABDM (rural enrollment is uneven). ABHA
+integration is a genuinely separate, larger effort — real-time API
+dependency on an external government system, a formal consent-manager
+handshake, and PHI flowing to/from a system outside VitalNet's own audit
+boundary — and is out of scope for the offline-first rural PHC triage tool
+this app currently is. This spec exists so that *if* ABDM integration is
+ever prioritized, it is designed to extend the existing patient-key
+mechanism rather than replace or conflict with it.
+
+**Effort**: Large — genuinely out of scope for an autonomous coding pass;
+requires ABDM sandbox enrollment (a real organizational registration, not
+a code change), a consent-manager integration decision, and likely legal/
+compliance review beyond `docs/COMPLIANCE_DPDP.md`'s current scope (ABDM's
+consent framework is a distinct regulatory regime layered on top of, not
+replacing, DPDP).
+
+**Spec**:
+
+1. **ABDM sandbox first, always.** Any implementation work starts against
+   the ABDM sandbox environment (https://sandbox.abdm.gov.in — a real
+   external dependency to register for, not something this spec can
+   pre-configure) with synthetic ABHA IDs. No real-patient ABHA number is
+   ever exercised against non-production code.
+2. **Capture field, additive and optional.** A new nullable
+   `case_records.abha_id` (or address, whichever the eventual integration
+   targets) column, captured *in addition to* — never instead of — the
+   existing internal `patient_key`. An ASHA worker without a scanner/reader
+   for the patient's ABHA card, or a patient not yet enrolled in ABDM, must
+   be able to submit a case exactly as today, with the field simply absent.
+   ABHA capture is never a submission blocker.
+3. **Patient-key fallback mapping.** `patient_key` remains the primary
+   internal identity `useLocalTriage`/cross-visit deterioration detection
+   (§22) key off, since it is guaranteed available (generated locally,
+   works offline) where `abha_id` is not. If both are present on a
+   patient's records, a mapping table (`patient_key <-> abha_id`, not a
+   replacement of one by the other) lets a future feature reconcile the
+   two without forcing a migration of existing `patient_key`-keyed data.
+   This mapping is itself PHI and inherits the same RLS/audit posture as
+   `case_records`.
+4. **Consent-manager notes.** ABDM requires interaction through a
+   registered Consent Manager (CM) — VitalNet would need to either
+   integrate with an existing CM or the ABDM Consent Manager reference
+   sandbox, and obtain patient consent *through that flow* before any
+   health-record fetch/push, which is a distinct consent artifact from
+   VitalNet's own DPDP consent-capture gate (`docs/COMPLIANCE_DPDP.md`) —
+   the two must not be conflated or treated as satisfying each other.
+   Any future implementation should treat the ABDM consent artifact
+   (a signed consent request/grant, with its own ID and expiry) as a
+   first-class audited record, same posture as `phi_audit_log` today.
+5. **Read scope, deliberately unspecified.** Whether a future integration
+   only *links* an ABHA ID (identity linking, no record exchange) or also
+   *fetches* prior records via ABDM's Health Information Exchange is an
+   explicit open product decision, not decided by this spec — record
+   exchange is a materially larger scope (consent-manager record-fetch
+   flows, FHIR-format health records to parse/display) than identity
+   linking alone, and should be scoped as a separate decision once linking
+   itself is validated.
+6. **Not this app's launch blocker.** See "Pilot v1 scope" below — ABHA
+   integration is explicitly not required for a first pilot deployment.
+
+---
+
+## Pilot v1 scope — launch blockers and surface area
+
+This section names what must be true, and what can reasonably be deferred,
+before VitalNet is used with real patients at any facility, even a small
+controlled pilot. It complements `docs/CLINICAL_GOVERNANCE.md` (regulatory/
+clinical-validation gaps) and `docs/CLINICAL_REVIEW.md` (the rules-engine
+sign-off gate) — this section is about product/deployment scope, not model
+correctness.
+
+### Launch blocker: hi/ta translations are English placeholders
+
+**This blocks any pilot where ASHA workers or doctors are not comfortable
+working in English.** `hi.json`/`ta.json` are currently byte-for-byte
+copies of `en.json` (`apps/web/src/locales/README.md`,
+`docs/DECISIONS.md` §10) — selecting Hindi or Tamil in the language
+switcher changes `document.documentElement.lang` and persists the
+preference, but every displayed string, including every symptom label and
+clinical option, is still English. This was a deliberate choice, not an
+oversight: machine-translating clinical terminology without a clinician
+review pass risks a mistranslated symptom option changing what a worker
+believes they're recording, which is a patient-safety issue, not a
+cosmetic one. Real Hindi/Tamil text requires a clinician (or a qualified
+medical translator with clinician review) pass on every string in
+`en.json`, not just `hi.json`/`ta.json` file population — a coding task
+cannot close this gap. **Any pilot site where the primary working language
+of ASHA workers/doctors is not English should not launch until this is
+done for that site's language**, full stop — English-fluent pilot sites
+(if any exist in VitalNet's actual target deployment geography) are the
+only ones this does not block.
+
+### Pilot v1 surface — what's actually needed for a first controlled trial
+
+A minimal first pilot needs the safety-critical loop and nothing else has
+to be *removed* to be safe — but a smaller surface reduces the training
+burden on a small pilot cohort and narrows what needs monitoring closely
+during an initial trial. Suggested split, for whoever scopes an actual
+pilot to decide against real constraints (facility count, staffing,
+timeline):
+
+**Core (the loop a pilot cannot function without)**:
+- Intake form + consent capture, online and offline (`IntakeForm.jsx`)
+- Local + server triage (rules-first once `docs/CLINICAL_REVIEW.md`'s
+  sign-off lands; hybrid/model-primary until then) with the safety net and
+  NEWS2 floor
+- Doctor review dashboard, override, and outcome recording
+  (`DoctorPanel.jsx`'s Pending Review / All Cases)
+- Offline outbox + background sync (`lib/outbox.js`)
+- PHI audit logging (non-optional, not a feature toggle)
+- `asha_worker`/`doctor` roles, RLS
+
+**Not required for v1** (present in the codebase, genuinely useful, but a
+pilot can defer without compromising the core safety loop):
+- `supervisor` role + Team Metrics dashboard (needs a facility with an
+  actual ASHA-Facilitator-equivalent role staffed to be meaningful)
+- Outbreak Signals dashboard (needs enough facilities reporting for EARS
+  aggregation to mean anything — a single-facility pilot has no population
+  to aggregate over)
+- Protocol/guideline assistant (valuable, but adds an LLM-dependent
+  surface + a curation workflow that's easier to introduce once the core
+  loop is validated)
+- Admin CSV bulk user import, analytics dashboard + CSV export (a handful
+  of pilot users can be onboarded manually; analytics needs volume to be
+  meaningful)
+- Web Push notifications, voice-to-text intake
+- QR patient-continuity card, cross-visit deterioration trend flag (useful
+  once there's a returning-patient population to actually observe)
+- ABHA integration (§4.8 — spec only, not implemented; explicitly not a
+  pilot blocker)
+- The SMS-alert scaffolding and photo-attachment scaffolding (neither has
+  a live endpoint — see `docs/DECISIONS.md` §11, §14)
+
+### Optional: a `VITE_PILOT_MODE` flag
+
+Not built. If a real pilot needs a genuinely reduced UI surface (rather
+than the above being purely a "what to train pilot users on" list), a
+single `VITE_PILOT_MODE=true` env var read once in `App.jsx`'s role-based
+routing could hide the "Not required for v1" panels/nav entries above per
+role, without deleting any code or requiring a build variant. This is
+scaffolding-only guidance, not a decision to build it — implement only
+once an actual pilot's requirements confirm the UI needs hiding (as
+opposed to the pilot org just not being trained on those panels, which
+needs no code change at all).
 
 ---
 

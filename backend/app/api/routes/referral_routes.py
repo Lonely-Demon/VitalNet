@@ -14,8 +14,9 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import require_role
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
-from app.core.database import get_supabase_for_user, supabase_admin, extract_bearer_token
+from app.core.database import get_supabase_for_user, extract_bearer_token
 from app.api.routes.cases import limiter, _parse_uuid, _resolved_role, _resolved_facility
+from app.utils.sbar import SBAR_VERSION, build_sbar
 
 logger = logging.getLogger("vitalnet")
 
@@ -32,7 +33,7 @@ ALLOWED_TRANSITIONS = {
 
 REFERRAL_SELECT_COLUMNS = (
     "id, case_id, referred_by, referring_facility_id, receiving_facility_id, "
-    "reason, urgency, status, created_at, updated_at, "
+    "reason, urgency, sbar_version, sbar_draft, status, created_at, updated_at, "
     "case_records(chief_complaint, patient_age, patient_sex, triage_level), "
     "referring_facility:facilities!referring_facility_id(name), "
     "receiving_facility:facilities!receiving_facility_id(name)"
@@ -95,22 +96,18 @@ async def list_active_facilities(
     # Open (unreviewed) case load per facility — a decision-support ranking
     # signal, not authoritative bed availability (docs/DECISIONS.md §20).
     # A doctor's own RLS-scoped token can only see their OWN facility's
-    # case_records (by design — the whole point of RLS here), so this ONE
-    # narrow aggregate uses supabase_admin instead. It is deliberately
-    # limited to a facility_id count — no patient data, no free text, no
-    # individual case rows ever leave this function.
-    open_cases = (
-        supabase_admin.table("case_records")
-        .select("facility_id")
-        .is_("reviewed_at", "null")
-        .is_("deleted_at", "null")
-        .execute()
-    )
+    # case_records (by design — the whole point of RLS here), so this calls
+    # fn_open_case_counts (a SECURITY DEFINER Postgres function, backend/
+    # supabase/migrations/phase28_security_definer_fns.sql) through `db`
+    # instead of supabase_admin. It is deliberately limited to a
+    # facility_id count — no patient data, no free text, no individual
+    # case rows ever leave the database.
+    open_cases = db.rpc("fn_open_case_counts", {}).execute()
     load_by_facility: dict[str, int] = {}
     for row in open_cases.data or []:
         fid = row.get("facility_id")
         if fid:
-            load_by_facility[fid] = load_by_facility.get(fid, 0) + 1
+            load_by_facility[fid] = row.get("open_count", 0)
 
     for f in facilities:
         f["open_case_count"] = load_by_facility.get(f["id"], 0)
@@ -202,7 +199,12 @@ async def create_referral(
 
     case_result = (
         db.table("case_records")
-        .select("id, facility_id, deleted_at")
+        .select(
+            "id, facility_id, deleted_at, patient_age, patient_sex, chief_complaint, "
+            "complaint_duration, known_conditions, current_medications, symptoms, "
+            "bp_systolic, bp_diastolic, spo2, heart_rate, temperature, triage_level, "
+            "risk_driver, contraindication_flags, deterioration_alert"
+        )
         .eq("id", case_uuid)
         .maybe_single()
         .execute()
@@ -220,6 +222,7 @@ async def create_referral(
     if receiving_facility_uuid == referring_facility_id:
         raise HTTPException(status_code=400, detail="Cannot refer a case to its own facility")
 
+    sbar_draft = build_sbar(case_row, {"reason": body.reason, "urgency": body.urgency})
     result = (
         db.table("referrals")
         .insert(
@@ -230,6 +233,8 @@ async def create_referral(
                 "receiving_facility_id": receiving_facility_uuid,
                 "reason": body.reason,
                 "urgency": body.urgency,
+                "sbar_version": SBAR_VERSION,
+                "sbar_draft": sbar_draft,
             }
         )
         .execute()

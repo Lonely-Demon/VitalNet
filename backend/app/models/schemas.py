@@ -36,6 +36,13 @@ class IntakeForm(BaseModel):
     heart_rate: Optional[int] = Field(None, ge=10, le=250)
     temperature: Optional[float] = Field(None, ge=25.0, le=45.0)
 
+    # Governance-gated paediatric capture. These values are persisted for
+    # research and clinician review only; the frozen production classifier does
+    # not consume them. MUAC follows the WHO 6–59-month scope (docs/FEATURE_
+    # REFINEMENT_EXECUTION_PLAN.md §4.4) but is not an autonomous diagnosis.
+    age_months: Optional[int] = Field(None, ge=0, le=23)
+    muac_mm: Optional[int] = Field(None, ge=50, le=300)
+
     # Structured pregnancy flag — feeds a dedicated safety-net rule for
     # severe hypertension in pregnancy (docs/DECISIONS.md §30). Deliberately
     # a real field rather than relying on free-text known_conditions/
@@ -84,6 +91,14 @@ class IntakeForm(BaseModel):
         if self.bp_systolic is not None and self.bp_diastolic is not None:
             if self.bp_diastolic >= self.bp_systolic:
                 raise ValueError("Diastolic BP must be lower than systolic BP")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_paediatric_capture(self):
+        if self.age_months is not None and self.patient_age >= 2:
+            raise ValueError("age_months is only valid when patient_age is under 2 years")
+        if self.muac_mm is not None and not 0 <= self.patient_age <= 4:
+            raise ValueError("muac_mm is only valid for children under 5 years")
         return self
 
     @model_validator(mode="after")
