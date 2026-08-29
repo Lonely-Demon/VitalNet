@@ -33,6 +33,8 @@ const ENDPOINT_BACKEND = {
   // ── Tranche A (Read-only / Safe / Diagnostics) ─────────────────────────
   'health': 'edge',
   'outbreak.signals': 'edge',
+  // referrals.listFacilities: GET /api/facilities ported to edge (apps/api/supabase/functions/api/routes/referral.ts);
+  // executes fn_open_case_counts via caller's RLS client and merges open_case_count identically to legacy.
   'referrals.listFacilities': 'edge',
 
   // Retained on legacy:

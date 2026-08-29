@@ -30,6 +30,10 @@ const TABS = [
 ]
 
 export default function ClinicalCalculators({ scope = 'all' }) {
+  if (scope !== 'asha' && scope !== 'all') {
+    throw new Error(`ClinicalCalculators: invalid scope "${scope}" — must be 'asha' or 'all'`)
+  }
+
   const { t } = useTranslation()
   const [activeTab, setActiveTab] = useState('dose')
 
@@ -124,6 +128,7 @@ export default function ClinicalCalculators({ scope = 'all' }) {
 function DoseCalculator({ scope = 'all' }) {
   const [selectedPresetId, setSelectedPresetId] = useState('paracetamol')
   const [weightKg, setWeightKg] = useState('12')
+  const [ageMonths, setAgeMonths] = useState('')
   const [mgPerKg, setMgPerKg] = useState('15')
   const [maxMgPerDose, setMaxMgPerDose] = useState('1000')
   const [maxMgPerDay, setMaxMgPerDay] = useState('4000')
@@ -165,6 +170,7 @@ function DoseCalculator({ scope = 'all' }) {
     const maxDose = parseFloat(maxMgPerDose)
     const maxDay = parseFloat(maxMgPerDay) || undefined
     const maxKgDay = parseFloat(maxMgPerKgPerDay) || undefined
+    const ageM = ageMonths ? parseFloat(ageMonths) : undefined
 
     if (isNaN(wt) || wt <= 0 || isNaN(doseMgKg) || isNaN(maxDose) || maxDose <= 0) {
       return { error: 'Please enter valid positive numbers for weight, dose, and maximum cap.' }
@@ -185,12 +191,16 @@ function DoseCalculator({ scope = 'all' }) {
           maxMgPerKgPerDay: maxKgDay,
           frequency,
           concentrationMgPerMl: concMgPerMl,
+          drugName: selectedPreset?.drugName,
+          minWeightKg: selectedPreset?.minWeightKg,
+          minAgeMonths: selectedPreset?.minAgeMonths,
+          ageMonths: ageM,
         }),
       }
     } catch (err) {
       return { error: err.message || 'Calculation error' }
     }
-  }, [weightKg, mgPerKg, maxMgPerDose, maxMgPerDay, maxMgPerKgPerDay, frequency, selectedPreset, selectedConcentrationIdx])
+  }, [weightKg, ageMonths, mgPerKg, maxMgPerDose, maxMgPerDay, maxMgPerKgPerDay, frequency, selectedPreset, selectedConcentrationIdx])
 
   const res = calculationResult.data
 
@@ -232,7 +242,7 @@ function DoseCalculator({ scope = 'all' }) {
         {/* Patient Weight */}
         <div>
           <label className="block text-xs font-semibold text-text2 uppercase tracking-wider mb-1">
-            Patient Weight (kg) *
+            Patient Weight (kg) *{selectedPreset?.minWeightKg ? ` — min ${selectedPreset.minWeightKg} kg` : ''}
           </label>
           <input
             type="number"
@@ -241,6 +251,22 @@ function DoseCalculator({ scope = 'all' }) {
             step="0.1"
             value={weightKg}
             onChange={(e) => setWeightKg(e.target.value)}
+            placeholder="e.g. 12"
+            className="w-full bg-surface2 border border-leaf/40 rounded-lg px-3 py-2 text-sm text-text font-mono focus:outline-none focus:ring-2 focus:ring-forest/30"
+          />
+        </div>
+
+        {/* Patient Age (months) */}
+        <div>
+          <label className="block text-xs font-semibold text-text2 uppercase tracking-wider mb-1">
+            Patient Age (months{selectedPreset?.minAgeMonths ? ` — min ${selectedPreset.minAgeMonths} mo` : ''})
+          </label>
+          <input
+            type="number"
+            min="0"
+            max="216"
+            value={ageMonths}
+            onChange={(e) => setAgeMonths(e.target.value)}
             placeholder="e.g. 12"
             className="w-full bg-surface2 border border-leaf/40 rounded-lg px-3 py-2 text-sm text-text font-mono focus:outline-none focus:ring-2 focus:ring-forest/30"
           />
@@ -575,7 +601,9 @@ function OrsCalculator() {
                 <span className="text-sm font-semibold text-text2 font-mono">mL</span>
               </div>
               <p className="text-xs text-text3 font-mono mt-1">
-                Duration: {res.durationHours} hours ({res.rateMlPerHour} mL/hour)
+                {res.rateMlPerHour !== null
+                  ? `Duration: ${res.durationHours} hours (${res.rateMlPerHour} mL/hour)`
+                  : `Dosed per loose stool episode (${res.totalVolumeMl} mL / stool)`}
               </p>
             </div>
 

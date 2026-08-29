@@ -288,6 +288,9 @@ export interface WeightDoseInput {
   maxMgPerDay?: number;
   maxMgPerKgPerDay?: number;
   drugName?: string;
+  minWeightKg?: number;
+  minAgeMonths?: number;
+  ageMonths?: number;
 }
 
 export interface WeightDoseResult {
@@ -310,13 +313,31 @@ export interface WeightDoseResult {
 }
 
 export function calculateWeightBasedDose(input: WeightDoseInput): WeightDoseResult {
-  const { weightKg, mgPerKg, maxMgPerDose, frequency, concentrationMgPerMl, maxMgPerDay, maxMgPerKgPerDay, drugName } = input;
+  const {
+    weightKg,
+    mgPerKg,
+    maxMgPerDose,
+    frequency,
+    concentrationMgPerMl,
+    maxMgPerDay,
+    maxMgPerKgPerDay,
+    drugName,
+    minWeightKg,
+    minAgeMonths,
+    ageMonths,
+  } = input;
 
   if (weightKg < 1.0) {
     throw new Error("Patient weight < 1.0 kg is out of bounds for standard paediatric dosing protocols. Specialist neonatal care required.");
   }
   if (weightKg > 100.0) {
     throw new Error("Patient weight > 100.0 kg exceeds paediatric parameters. Use adult dosing protocols with adult maximum caps.");
+  }
+  if (minWeightKg !== undefined && weightKg < minWeightKg) {
+    throw new Error(`Patient weight (${weightKg} kg) is below the minimum threshold (${minWeightKg} kg) for ${drugName || "this medication"}. Specialist paediatric evaluation required.`);
+  }
+  if (minAgeMonths !== undefined && ageMonths !== undefined && ageMonths < minAgeMonths) {
+    throw new Error(`Patient age (${ageMonths} months) is below the minimum threshold (${minAgeMonths} months) for ${drugName || "this medication"}. Specialist paediatric evaluation required.`);
   }
   if (mgPerKg < 0 || maxMgPerDose <= 0) {
     throw new Error("mg/kg must be non-negative and max dose must be greater than zero.");
@@ -421,7 +442,7 @@ export interface OrsPlanResult {
   weightKg: number;
   totalVolumeMl: number;
   durationHours: number;
-  rateMlPerHour: number;
+  rateMlPerHour: number | null;
   guidance: string;
   reassessmentMinutes: number;
   steps: readonly string[];
@@ -442,7 +463,7 @@ export function calculateOrsVolume(input: OrsPlanInput): OrsPlanResult {
     // <2 yrs: 50-100 mL per stool; 2-10 yrs: 100-200 mL per stool; >10 yrs: as much as wanted.
     const perStoolMl = Number((weightKg * 10).toFixed(0));
     steps.push(`WHO Plan A (No Signs of Dehydration): Maintenance & replacement of ongoing fluid losses.`);
-    steps.push(`Replacement: Give ${perStoolMl} mL (10 mL/kg) of ORS solution after every loose stool or vomit.`);
+    steps.push(`Replacement: Give ${perStoolMl} mL (10 mL/kg) of ORS solution after every loose stool or vomit episode.`);
     steps.push(`Continue age-appropriate feeding and frequent breastfeeding.`);
     steps.push(`Prescribe 14-day course of Zinc Sulfate.`);
 
@@ -452,8 +473,8 @@ export function calculateOrsVolume(input: OrsPlanInput): OrsPlanResult {
       weightKg,
       totalVolumeMl: perStoolMl,
       durationHours: 24,
-      rateMlPerHour: Number((perStoolMl / 4).toFixed(0)),
-      guidance: `Give ~${perStoolMl} mL ORS after each loose stool. Continue normal feeding and Zinc for 14 days. Seek immediate care if blood in stool, persistent vomiting, or lethargy develops.`,
+      rateMlPerHour: null, // Plan A is dosed per loose stool episode, not as continuous hourly infusion.
+      guidance: `Give ~${perStoolMl} mL ORS after each loose stool or vomit episode. Continue normal feeding and Zinc for 14 days. Reassess hydration status in 4 hours. Seek immediate care if blood in stool, persistent vomiting, or lethargy develops.`,
       reassessmentMinutes: 240, // 4 hours
       steps,
     };
@@ -494,6 +515,11 @@ export function calculateOrsVolume(input: OrsPlanInput): OrsPlanResult {
   const bolusVolume = Number((weightKg * 30).toFixed(0));
   const maintenanceVolume = Number((weightKg * 70).toFixed(0));
   const durationHours = isInfant ? 6 : 3;
+
+  if (ageMonths === undefined) {
+    const ageAdvisory = `Clinical Note: Patient age was not provided; protocol schedule was selected based on weight heuristic (${weightKg < 10 ? "<10 kg (Infant split: 1h bolus + 5h maintenance)" : "≥10 kg (Child split: 30m bolus + 2.5h maintenance)"}). Please verify patient age (<12 months vs ≥12 months) before administering IV fluids.`;
+    steps.push(ageAdvisory);
+  }
 
   steps.push(`WHO Plan C (Severe Dehydration / Medical Emergency): Immediate IV Fluid Resuscitation.`);
   steps.push(`Fluid Choice: Ringer's Lactate (preferred) or Normal Saline (0.9% NaCl). Total 100 mL/kg = ${totalVolumeMl} mL.`);

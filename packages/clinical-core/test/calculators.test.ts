@@ -159,6 +159,43 @@ describe("Pediatric Dose Calculator (calculateWeightBasedDose)", () => {
     expect(result.isCappedSingleDose).toBe(true);
   });
 
+  it("enforces per-drug minWeightKg and minAgeMonths thresholds", () => {
+    // Paracetamol: minWeightKg = 2.5
+    expect(() =>
+      calculateWeightBasedDose({
+        weightKg: 2.0,
+        mgPerKg: 15,
+        maxMgPerDose: 1000,
+        minWeightKg: 2.5,
+        drugName: "Paracetamol",
+      })
+    ).toThrow(/below the minimum threshold \(2.5 kg\) for Paracetamol/);
+
+    // Azithromycin: minAgeMonths = 6
+    expect(() =>
+      calculateWeightBasedDose({
+        weightKg: 6.0,
+        mgPerKg: 10,
+        maxMgPerDose: 500,
+        minAgeMonths: 6,
+        ageMonths: 4,
+        drugName: "Azithromycin",
+      })
+    ).toThrow(/below the minimum threshold \(6 months\) for Azithromycin/);
+
+    // Allowed when satisfying thresholds
+    const valid = calculateWeightBasedDose({
+      weightKg: 6.0,
+      mgPerKg: 10,
+      maxMgPerDose: 500,
+      minWeightKg: 5.0,
+      minAgeMonths: 6,
+      ageMonths: 8,
+      drugName: "Azithromycin",
+    });
+    expect(valid.doseMg).toBe(60);
+  });
+
   it("attaches low weight cautionary warning for neonates under 3 kg", () => {
     const result = calculateWeightBasedDose({
       weightKg: 2.8,
@@ -170,10 +207,11 @@ describe("Pediatric Dose Calculator (calculateWeightBasedDose)", () => {
 });
 
 describe("WHO Diarrhoea & ORS Protocol (calculateOrsVolume)", () => {
-  it("calculates Plan A ongoing loss replacement correctly", () => {
+  it("calculates Plan A ongoing loss replacement correctly with rateMlPerHour = null", () => {
     const result = calculateOrsVolume({ weightKg: 12, plan: "PLAN_A" });
     expect(result.plan).toBe("PLAN_A");
     expect(result.totalVolumeMl).toBe(120); // 12 * 10 = 120 mL per stool
+    expect(result.rateMlPerHour).toBeNull(); // Plan A is per-loose-stool, not a continuous hourly rate
     expect(result.reassessmentMinutes).toBe(240);
     expect(result.guidance).toContain("Zinc");
   });
@@ -202,6 +240,11 @@ describe("WHO Diarrhoea & ORS Protocol (calculateOrsVolume)", () => {
     expect(result.durationHours).toBe(3);
     expect(result.steps.some((s) => s.includes("Rapid Bolus 30 mL/kg = 450 mL over 30 minutes"))).toBe(true);
     expect(result.steps.some((s) => s.includes("Remainder 70 mL/kg = 1050 mL over 2.5 hours"))).toBe(true);
+  });
+
+  it("includes clinical notice when Plan C age is undefined and defaults to weight heuristic", () => {
+    const result = calculateOrsVolume({ weightKg: 8, plan: "PLAN_C" });
+    expect(result.steps.some((s) => s.includes("Patient age was not provided; protocol schedule was selected based on weight heuristic"))).toBe(true);
   });
 });
 
