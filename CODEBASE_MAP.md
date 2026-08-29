@@ -1181,7 +1181,14 @@ phase34) already had indexes by those exact names — Postgres index names
 are schema-scoped, not table-scoped. `referrals` — the table the referral
 workflow actually uses — has been missing both indexes since. phase34
 frees the names by dropping case_referrals; phase36 creates them on the
-right table.
+right table; `phase42_force_drop_untracked_metadata_policies.sql` — force-drops
+all untracked/legacy user_metadata policies and legacy case_referrals, creating
+a facility-checked case_records_insert_policy; `phase43_case_records_update_column_protection.sql` —
+immutability trigger protecting 30 clinical/vital columns from submitter mutation;
+`phase44_referral_insert_case_facility_check.sql` — validates case facility ownership on referral creation;
+`phase45_case_reviews_immutability_trigger.sql` — append-only triggers on case_reviews;
+`phase46_rls_null_uid_guards.sql` — explicit auth.uid() IS NOT NULL guards;
+`phase47_restrict_schema_fingerprint.sql` — restricts fn_schema_fingerprint to service_role and adds fn_list_policies.
 
 **phase28 through phase31 sat committed in git for a while without ever
 being applied to the live project** — every `apps/api` endpoint that

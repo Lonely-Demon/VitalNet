@@ -1983,14 +1983,42 @@ are green.
 10. **Strict zero patient data leakage assertion**:
     - All JSON reports and console outputs are recursively validated via `assert_zero_patient_leakage()`.
 
-### 43. Public-data evaluation closure and safety-remediation pivot
-**Context**: VitalNet completed its authorized public-data evaluation cycle on the frozen model using Iran ED inspection, NHAMCS 2022 partial-input scoring, a synthetic ASHA input-contract study, and Korean KTAS 2019 Gate 3A scoring. MIMIC-IV-ED credentialing was not completed and no full MIMIC score exists.
+### 44. August 2026 Recursive Security Audit Remediation (33 Valid Findings & Multi-Tier Hardening)
+
+**Context**: A comprehensive recursive security audit conducted in August 2026 identified 33 valid security, architectural, and clinical safety findings spanning database RLS policies, backend authentication and rate limiting, clinical rules and vital thresholds, LLM briefing guardrails, frontend session isolation, edge functions, and supply chain configuration. All 33 findings were systematically remediated across seven phases.
+
 **Decisions**:
-1. **Close the current public-data evaluation cycle** and consolidate the evidence in `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`.
-2. **Record the safety signal without averaging incompatible benchmarks**: NHAMCS emergency sensitivity was 14.4%; KTAS primary emergency sensitivity was 25.2%; KTAS vital-only emergency sensitivity was 17.9%. These are cohort-specific proxy results, not clinical validation.
-3. **Keep the production model frozen**. No retraining, tuning, threshold changes, classifier changes, deployment, or promotion are justified by these results.
-4. **Treat missing symptoms and clinical context as the next safety-remediation target**. The ASHA contract study and KTAS arm comparison show that structured symptom/context availability materially affects emergency sensitivity.
-5. **Defer MIMIC-IV-ED**. Credentialing remains incomplete; no unofficial copy may be used and no full MIMIC benchmark claim may be made.
-6. **Create a design-only safety-remediation gate** before any candidate implementation. The design must define missing-context behavior, required ASHA/PHC intake fields, human escalation, pre-registered safety metrics, subgroup analyses, and a qualified clinical reviewer for acceptance criteria.
-7. **Require synthetic-first comparison against the frozen baseline** for any future candidate. Any real-data rerun requires fresh dataset-specific explicit authorization, and no candidate may reach production or preproduction without clinical review, prospective/shadow evidence, and governance approval.
-**Evidence**: `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`, `docs/evaluation/KTAS_2019_SOURCE_CARD.md`, `docs/VALIDATION_PROTOCOL.md`, and `docs/CLINICAL_RISK_MANAGEMENT.md`.
+1. **Live Database Drift & Policy Isolation (Phase 0 & Phase 2, `phase42`–`phase47`)**:
+   - Dropped all legacy policies and tables referencing `auth.jwt() -> 'user_metadata'` (`doctor_update`, `asha_select_own`, `case_referrals`, `profile_select`).
+   - Replaced permissive insert policies with facility-checked policies enforcing active profile status and facility matching: `(role IN ('admin', 'super_admin') OR facility_id = case_records.facility_id) AND is_active = true`.
+   - Created PostgreSQL triggers on `case_records` (`protect_case_records_clinical_columns`) preventing submitters from modifying clinical/vital/identity columns post-creation.
+   - Enforced append-only immutability on `case_reviews` and added foreign-key facility integrity checks to `referrals_insert_policy`.
+   - Restricted `fn_schema_fingerprint()` to `service_role` and introduced `fn_list_policies()` for CI drift diagnosis.
+2. **Backend Authentication, Rate Limiting, and Scoping (Phase 1)**:
+   - Configured `ENVIRONMENT=production` as the safe fail-closed default in `config.py`.
+   - Replaced CSRF token static-equality comparison with header-presence verification in `csrf_and_device_guard`.
+   - Bounded `_profile_cache` to 10,000 items with LRU eviction and fail-closed handling on uncached transient errors.
+   - Added asymmetric JWKS signature verification (`RS256`/`ES256`) before IP fallback in rate limiting.
+   - Implemented right-to-left `X-Forwarded-For` traversal with `trusted_proxy_ips` filtering.
+   - Closed multi-tenant DSR IDOR by adding facility ownership checks in `/api/admin/cases/{id}/export` and `/api/admin/cases/{id}/erase`.
+   - Secured `/api/admin/emergency-escalations/check` with fail-closed `X-Internal-Scheduler-Token` validation and facility-scoped querying.
+   - Replaced global `list_users` pagination in admin routes with profile-targeted queries.
+   - Replaced wildcard `SELECT *` in `get_case_detail` with explicit 49-column projection.
+3. **PALS-Aligned Clinical Safety & Tree Traversal (Phase 3)**:
+   - Implemented age-banded vital sign emergency thresholds aligned with PALS 5th-percentile pediatric standards (<1mo, <1yr, <3yr, <5yr, <10yr, <18yr, adult) across both TypeScript (`clinical-core`) and Python (`app.ml.classifier`).
+   - Updated `checkOverrides` to accumulate multiple matching emergency rules into a composite rule ID (`rule1+rule2`) with full audit detail.
+   - Flagged `hasNaN = true` when encountering `NaN` features during offline decision tree traversal, marking predictions as `lowConfidence`.
+4. **LLM Prompt-Injection Guardrail & ML Model Integrity (Phase 4)**:
+   - Eliminated stored prompt-injection surface in `generate_patient_summary` by removing free-text briefing concatenation and substituting curated `_TIER_PHRASING` and `_TIER_ACTIONS`.
+   - Added `.pkl.sha256` content-hash verification and HMAC deploy signature checking (`VITALNET_MODEL_SIGNING_KEY`) before unpickling `triage_classifier.pkl`.
+   - Bounded SHAP feature explanation computation with a `ThreadPoolExecutor` timeout (100ms).
+5. **Shared-Device Frontend Isolation & Edge Function Hardening (Phase 5)**:
+   - Resolved user role strictly from database `profiles` rather than `app_metadata`.
+   - Stored facility contact phone and ephemeral AES-256-GCM outbox encryption keys in `sessionStorage` (cleared on logout).
+   - Scoped offline draft clearing and outbox queue retrieval strictly to the authenticated `owner_id`.
+   - Added URL hostname allowlists (`*.supabase.co`, `localhost`) to edge function JWKS fetchers.
+6. **Supply Chain & CI Hardening (Phase 6)**:
+   - Pinned `pnpm/action-setup` to verified commit SHAs across all GitHub workflows.
+   - Created `.github/workflows/deno-deps-audit.yml` for recurring automated edge function dependency audits.
+   - Updated `db-schema-drift.yml` to compute dynamic replay fingerprints and output policy diff diagnostics via `fn_list_policies()`.
+

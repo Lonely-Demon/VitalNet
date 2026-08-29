@@ -715,7 +715,16 @@ async def get_case_detail(
 
     result = (
         db.table("case_records")
-        .select("*")
+        .select(
+            "id, created_at, updated_at, patient_name, patient_age, patient_sex, patient_location, patient_key, "
+            "chief_complaint, complaint_duration, symptoms, observations, known_conditions, current_medications, "
+            "temperature, heart_rate, bp_systolic, bp_diastolic, spo2, respiratory_rate, "
+            "triage_level, triage_priority, triage_confidence, triage_model_version, model_version, risk_driver, "
+            "briefing, reviewed_at, reviewed_by, doctor_notes, overridden_triage, override_reason, overridden_by, overridden_at, "
+            "facility_id, submitted_by, is_pregnant, contraindication_flags, needs_review, "
+            "human_review_requested, human_review_reason, deterioration_alert, deterioration_visit_count, low_confidence, "
+            "consent_captured, consent_captured_at, client_id, created_offline, synced_at"
+        )
         .eq("id", case_uuid)
         .is_("deleted_at", "null")
         .maybe_single()

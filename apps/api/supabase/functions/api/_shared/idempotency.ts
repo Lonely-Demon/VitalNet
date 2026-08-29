@@ -42,6 +42,10 @@ export function idempotent(eventType: string) {
     }
 
     const user = c.get("user");
+    if (!user || !user.token) {
+      await next();
+      return;
+    }
     const db = getSupabaseForUser(user.token);
 
     const { data: existing, error: lookupError } = await db
@@ -61,14 +65,16 @@ export function idempotent(eventType: string) {
 
     if (c.res.status >= 200 && c.res.status < 300) {
       try {
-        const body = await c.res.clone().json();
-        const { error: recordError } = await db.rpc("fn_client_event_record", {
-          p_event_id: eventId,
-          p_event_type: eventType,
-          p_response: body,
-        });
-        if (recordError) {
-          console.warn("fn_client_event_record failed — this event won't replay on retry:", recordError);
+        const body = await c.res.clone().json().catch(() => null);
+        if (body) {
+          const { error: recordError } = await db.rpc("fn_client_event_record", {
+            p_event_id: eventId,
+            p_event_type: eventType,
+            p_response: body,
+          });
+          if (recordError) {
+            console.warn("fn_client_event_record failed — this event won't replay on retry:", recordError);
+          }
         }
       } catch (e) {
         console.warn("Failed to capture response for client_events:", e);

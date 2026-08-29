@@ -68,12 +68,16 @@ def main():
 
     print(f"Loading classifier...")
     load_classifier()
+    import app.ml.classifier
+    app.ml.classifier._generate_shap_explanation = lambda *a, **k: ""
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Generating {n} synthetic patients and running predict_triage on each...")
     tier_counts = {"ROUTINE": 0, "URGENT": 0, "EMERGENCY": 0}
-    with patch("app.ml.clinical_features.datetime", _FrozenDateTime), open(OUTPUT_PATH, "w") as f:
+    with patch("app.ml.clinical_features.datetime", _FrozenDateTime), \
+         patch("app.ml.classifier._generate_shap_explanation", lambda *a, **k: ""), \
+         open(OUTPUT_PATH, "w") as f:
         for i in range(n):
             severity = np.random.choice(SEVERITIES, p=SEVERITY_WEIGHTS)
             pediatric = np.random.random() < PEDIATRIC_FRACTION

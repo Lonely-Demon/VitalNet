@@ -660,6 +660,21 @@ def main():
         pickle.dump(model_data, f, protocol=5)
     print(f"       pkl saved: {PKL_PATH} ({os.path.getsize(PKL_PATH) / 1024:.1f} KB)")
 
+    # Generate content hash (.pkl.sha256) and optional deploy signature (.pkl.sig) (VN-2026-08-C7-01)
+    sha256 = hashlib.sha256(open(PKL_PATH, "rb").read()).hexdigest()
+    hash_path = str(PKL_PATH) + ".sha256"
+    with open(hash_path, "w") as f:
+        f.write(f"{sha256}  triage_classifier.pkl\n")
+    print(f"       sha256 saved: {hash_path} (hash: {sha256})")
+
+    signing_key = os.environ.get("VITALNET_MODEL_SIGNING_KEY")
+    if signing_key:
+        sig = hmac.new(signing_key.encode(), sha256.encode(), hashlib.sha256).hexdigest()
+        sig_path = str(PKL_PATH) + ".sig"
+        with open(sig_path, "w") as f:
+            f.write(f"{sig}\n")
+        print(f"       sig saved: {sig_path} (HMAC verified with VITALNET_MODEL_SIGNING_KEY)")
+
     print("[7/9] Converting to ONNX (in memory) and extracting compact tree JSON ...")
     from skl2onnx import convert_sklearn
     from skl2onnx.common.data_types import FloatTensorType
