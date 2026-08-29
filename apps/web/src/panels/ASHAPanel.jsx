@@ -10,11 +10,13 @@ import { useAuth } from '../store/authStore'
 import { useRealtimeCases } from '../hooks/useRealtimeCases'
 
 const ProtocolAssistant = lazy(() => import('../components/ProtocolAssistant'))
+const ClinicalCalculators = lazy(() => import('../components/ClinicalCalculators'))
 
 const TABS = [
-  { id: 'new',      label: 'New Case' },
-  { id: 'history',  label: 'My Submissions' },
-  { id: 'protocol', label: 'Ask a Question' },
+  { id: 'new',         label: 'New Case' },
+  { id: 'history',     label: 'My Submissions' },
+  { id: 'calculators', label: 'Calculators' },
+  { id: 'protocol',    label: 'Ask a Question' },
 ]
 
 const TRIAGE_STYLES = {
@@ -156,6 +158,12 @@ export default function ASHAPanel() {
               </div>
             ))}
           </div>
+        )}
+
+        {activeTab === 'calculators' && (
+          <Suspense fallback={<TabLoadingFallback />}>
+            <ClinicalCalculators />
+          </Suspense>
         )}
 
         {activeTab === 'protocol' && (

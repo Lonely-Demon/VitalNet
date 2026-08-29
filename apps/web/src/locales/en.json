@@ -173,5 +173,11 @@
       "patientKey": "Leave blank for a new patient — a code will be generated after submission so staff can recognize them next visit.",
       "paediatricCapture": "Optional governance-gated capture for research and clinician review. It does not change the triage result."
     }
+  },
+  "calculators": {
+    "title": "Clinical Calculators",
+    "subtitle": "Deterministic offline calculation tools for paediatric dosing, rehydration, and fluid management.",
+    "disclaimerTitle": "Clinical Decision-Support Advisory",
+    "disclaimerBody": "These calculators provide arithmetic reference guidance based on WHO and standard paediatric protocols. All calculated values must be verified by a qualified clinician against local institutional guidelines and patient clinical status before administration."
   }
 }

@@ -118,8 +118,9 @@ VitalNet/
 │   ├── web/             React 19 + Vite PWA — see §4. Was `frontend/` pre-migration.
 │   └── api/              NEW backend: one Supabase Edge Function (Deno + Hono),
 │                       running clinical-core in rules-first mode — see §3b.
-│                       NOT YET LIVE (no production traffic; apps/web's
-│                       ENDPOINT_BACKEND map resolves every endpoint to 'legacy').
+│                       Tranche A non-PHI endpoints ('health', 'outbreak.signals',
+│                       'referrals.listFacilities') route to 'edge' when configured;
+│                       write/PHI paths and metrics currently route to 'legacy'.
 ├── backend/            LIVE (legacy) FastAPI Python app — see §3. Migrations live in
 │                       backend/supabase/migrations/ (version-controlled,
 │                       idempotent SQL — the canonical schema source; see §5),

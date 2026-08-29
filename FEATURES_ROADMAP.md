@@ -958,19 +958,10 @@ existing pregnancy rule.
 4. **LLM briefing** (`llm.py`): include gestational age in the prompt context
    when present so the differential reflects trimester.
 
-### 4.3 Offline clinical calculators (dose-by-weight, ORS/dehydration, drip rate)
+### 4.3 Offline clinical calculators (dose-by-weight, ORS/dehydration, drip rate) — ✅ IMPLEMENTED
 
-**Why**: The single most-requested day-to-day tool for a rural health worker
-is not triage — it's arithmetic they must get exactly right under pressure:
-paediatric drug dose by weight, ORS volume for a dehydrated child, IV drip
-rate. These are pure deterministic formulae, need no connectivity, carry no
-PHI, and involve no ML. Shipping them as an offline calculator panel turns
-VitalNet from a triage-only tool into the app a worker keeps open all shift,
-which is also the surest route to adoption. Getting these *provably* right is
-the classic "not lazy about correctness" case — each formula gets a table of
-worked reference values as its test.
+**Status**: Implemented in `@vitalnet/clinical-core` (`src/calculators.ts`) with comprehensive unit tests (`test/calculators.test.ts`, 21/21 passed) and integrated as an accessible, lazy-loaded tab across `ASHAPanel`, `DoctorPanel`, and `SupervisorPanel` in `apps/web`. Covers: (1) paediatric weight-based dosing with curated essential drug presets, single-dose caps, and 24-hour cumulative caps; (2) WHO diarrhoea Plan A/B/C rehydration schedules; (3) gravity and pump IV drip rates; and (4) Holliday-Segar 4-2-1 fluid maintenance.
 
-**Effort**: Medium (mostly careful, well-tested formula work + a simple UI).
 
 **Implementation**:
 1. **Pure module** `apps/web/src/utils/clinicalCalculators.js` — no React, no
