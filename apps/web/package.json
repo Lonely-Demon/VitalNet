@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.2",
-    "@tailwindcss/vite": "^4.2.1",
+    "@tailwindcss/vite": "^4.3.3",
     "@vitalnet/clinical-core": "workspace:*",
     "@vitejs/plugin-react": "^6.0.3",
     "i18next": "^26.3.6",
