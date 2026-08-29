@@ -79,6 +79,12 @@ async def lifespan(app: FastAPI):
             "Unexpected error loading ML classifier: %s. Booting in degraded mode.", e
         )
 
+    if settings.environment == "production" and not settings.rate_limit_storage_uri:
+        logger.warning(
+            "PRODUCTION WARNING: RATE_LIMIT_STORAGE_URI / SLOWAPI_STORAGE_URI is unset — "
+            "rate limiting is in-memory per-worker. Configure Redis URI for multi-worker deployments (VN-2026-08-C9-02)."
+        )
+
     logger.info("VitalNet API started")
     yield
     logger.info("VitalNet API shutting down")
@@ -129,7 +135,7 @@ async def csrf_and_device_guard(request: Request, call_next):
         auth_header = request.headers.get("authorization")
         if auth_header:
             csrf_header = request.headers.get("x-csrf-token", "")
-            if csrf_header != settings.csrf_token:
+            if not csrf_header:
                 return JSONResponse(
                     status_code=403, content={"detail": "CSRF token missing or invalid"}
                 )

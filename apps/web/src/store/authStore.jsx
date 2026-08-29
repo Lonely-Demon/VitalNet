@@ -15,13 +15,29 @@ const AuthContext = createContext(null)
 // wiping it would break the offline-first guarantee that a queued case
 // survives until it can sync. vn_device_id is a browser-stable anti-replay
 // identifier (not user data) and is intentionally left in place.
-async function clearSharedDeviceState() {
+// Shared-device teardown on logout. The PHC tablets are handed between ASHA
+// workers, so ending a session must not leave the previous worker's data
+// readable by the next one:
+//   - form-drafts: in-progress (unsubmitted) intake forms belonging to the signing-out user (VN-2026-08-C4-04).
+//   - vn_facility_phone / vn_outbox_key: cleared from sessionStorage (VN-2026-08-C4-02, C4-03).
+// vn_device_id is a browser-stable anti-replay identifier and is intentionally left in place.
+async function clearSharedDeviceState(userId) {
   try {
-    localStorage.removeItem('vn_facility_phone')
-  } catch { /* localStorage unavailable — nothing to clear */ }
+    sessionStorage.removeItem('vn_facility_phone')
+    sessionStorage.removeItem('vn_outbox_key')
+  } catch { /* sessionStorage unavailable */ }
   try {
     const db = await getOfflineDB()
-    await db.clear('form-drafts')
+    const tx = db.transaction('form-drafts', 'readwrite')
+    const store = tx.objectStore('form-drafts')
+    const allKeys = await store.getAllKeys()
+    for (const key of allKeys) {
+      const draft = await store.get(key)
+      if (!draft || !draft.owner_id || draft.owner_id === userId) {
+        await store.delete(key)
+      }
+    }
+    await tx.done
   } catch (e) {
     console.warn('[VitalNet] Could not clear local drafts on logout', e)
   }
@@ -58,12 +74,10 @@ export function AuthProvider({ children }) {
         .single()
       if (data) {
         setProfile(data)
-        // Cached to localStorage (not just React state) so the facility
-        // contact number survives an offline reload — the offline-emergency
-        // SMS alert (IntakeForm.jsx) needs it precisely when there's no
-        // network to re-fetch it.
+        // Cached to sessionStorage so the facility contact number survives
+        // offline page refresh during the session without persisting across logins (VN-2026-08-C4-02).
         const phone = data.facilities?.phone
-        if (phone) localStorage.setItem('vn_facility_phone', phone)
+        if (phone) sessionStorage.setItem('vn_facility_phone', phone)
       }
     } catch {
       // Offline or network error — keep existing profile (don't blank the page)
@@ -74,15 +88,14 @@ export function AuthProvider({ children }) {
   const value = {
     session,
     profile,
-    role:      session?.user?.app_metadata?.role ?? profile?.role ?? null,
+    // Database profile is the single source of truth for user role (VN-2026-08-C4-01).
+    role:      profile?.role ?? null,
     isLoading: session === undefined,
     signIn:    (email, password) =>
                  supabase.auth.signInWithPassword({ email, password }),
     signOut:   async () => {
-      // Tear down device-local PHI before ending the session (see
-      // clearSharedDeviceState). Teardown never blocks sign-out: even if the
-      // local clear fails, the session must still end.
-      await clearSharedDeviceState()
+      // Tear down device-local PHI for the signing-out user before ending session.
+      await clearSharedDeviceState(session?.user?.id)
       return supabase.auth.signOut()
     },
   }

@@ -21,6 +21,8 @@ from typing import Any, Optional
 
 from fastapi import Request
 
+from app.core.config import settings
+
 audit_logger = logging.getLogger("vitalnet.audit")
 logger = logging.getLogger("vitalnet")
 
@@ -118,13 +120,25 @@ def log_phi_access(
 
 
 def get_client_ip(request: Request) -> str:
-    """Extract the client IP, preferring proxy headers (Railway/most PaaS sit behind a proxy)."""
+    """Extract the client IP, parsing X-Forwarded-For securely when behind trusted proxies (VN-2026-08-C9-01)."""
+    trusted = set(filter(None, (p.strip() for p in settings.trusted_proxy_ips.split(","))))
+    direct_ip = request.client.host if request.client else "unknown"
+
+    # If no trusted proxies configured or direct client is not a trusted proxy,
+    # do NOT blindly trust X-Forwarded-For to prevent IP spoofing in audit logs.
+    if not trusted or direct_ip not in trusted:
+        return direct_ip
+
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        parts = [p.strip() for p in forwarded.split(",")]
+        # Scan from right to left, returning the rightmost IP not in trusted_proxy_ips
+        for part in reversed(parts):
+            if part not in trusted:
+                return part
+
     real_ip = request.headers.get("x-real-ip")
     if real_ip:
-        return real_ip
-    if request.client:
-        return request.client.host
-    return "unknown"
+        return real_ip.strip()
+
+    return direct_ip

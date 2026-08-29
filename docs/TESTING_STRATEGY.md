@@ -52,8 +52,8 @@ cd backend && pytest tests/ --ignore=tests/test_e2e.py -v
 
 | File | What it guarantees |
 |---|---|
-| `test_classifier_safety.py` | Property tests: no extreme-vital combination is ever non-EMERGENCY; the NEWS2 floor never yields ROUTINE on a concerning single vital; `low_confidence` is present and boolean on every prediction. |
-| `test_admin_authz.py` | Walks every route registered in `admin_routes.py` and asserts it carries `require_role('admin')` — the *only* access boundary on the RLS-bypassing service-role client (`docs/DECISIONS.md` §7). A new admin route added without the guard fails this test, not silently ships a hole. |
+| `test_classifier_safety.py` | Property tests: no extreme-vital combination is ever non-EMERGENCY; PALS-aligned age-banded vital thresholds; the NEWS2 floor never yields ROUTINE on a concerning single vital; `low_confidence` is present and boolean on every prediction. |
+| `test_admin_authz.py` | Walks every route registered in `admin_routes.py`, `dsr_routes.py`, and `metrics_routes.py` and asserts it carries `require_role('admin')` — the *only* access boundary on the RLS-bypassing service-role client (`docs/DECISIONS.md` §7, §44). Validates PHC admin permission boundaries against privilege escalation. |
 | `test_feature_parity.py` | Replays `tests/fixtures/golden_feature_vectors.json` through `ClinicalFeatureEngineer` and asserts an exact (1e-6 tolerance) match — half of the online/offline guarantee (see Frontend layer below for the other half). Freezes the clock (`docs/DECISIONS.md` §12). |
 | `test_bulk_user_import.py` | Row-isolation for CSV bulk onboarding — one bad row (weak password, missing facility) must not fail the batch, and a profile-provisioning failure must roll back the orphaned auth user. |
 | `test_sms_parser.py` | Unit tests for the Tier-3 SMS-fallback scaffolding's fixed-format parser — pure logic, no mocking needed. |

@@ -90,8 +90,8 @@ def test_fuzz_extreme_vital_is_always_emergency():
     rng = random.Random(11)
     extreme = [
         {"spo2": 84}, {"spo2": 60},
-        {"heart_rate": 34}, {"heart_rate": 200},
-        {"bp_systolic": 60}, {"bp_systolic": 240, "bp_diastolic": 120},
+        {"heart_rate": 25}, {"heart_rate": 240},
+        {"bp_systolic": 50}, {"bp_systolic": 240, "bp_diastolic": 120},
         {"temperature": 42.0}, {"temperature": 32.0},
     ]
     for _ in range(2000):

@@ -39,6 +39,21 @@ interface CaseRecord {
   [key: string]: unknown;
 }
 
+function authorizeDsrAccess(user: AuthedUser, caseRecord: CaseRecord): void {
+  // Super-admin or cross-facility supervisor can access any facility's case
+  if (user.resolvedRole === "super_admin" || user.resolvedRole === "supervisor") {
+    return;
+  }
+  // PHC admin can ONLY access cases belonging to their own facility (VN-2026-08-VER-01)
+  if (user.resolvedRole === "admin") {
+    if (!user.resolvedFacilityId || caseRecord.facility_id !== user.resolvedFacilityId) {
+      throw new HttpError(403, "Forbidden: Case does not belong to your facility");
+    }
+    return;
+  }
+  throw new HttpError(403, `Role '${user.resolvedRole}' is not permitted for DSR operations`);
+}
+
 async function fetchCaseOr404(caseUuid: string): Promise<CaseRecord> {
   const { data, error } = await getSupabaseAdmin()
     .from("case_records")
@@ -56,6 +71,7 @@ dsr.get("/api/admin/cases/:case_id/export", rateLimit(10, 60), requireRole("admi
   const admin = getSupabaseAdmin();
 
   const caseRecord = await fetchCaseOr404(caseUuid);
+  authorizeDsrAccess(user, caseRecord);
 
   const [outcomes, attachments, referrals] = await Promise.all([
     admin.from("case_outcomes").select("*").eq("case_id", caseUuid),
@@ -120,6 +136,7 @@ dsr.post("/api/admin/cases/:case_id/erase", rateLimit(10, 60), requireRole("admi
   const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
 
   const caseRecord = await fetchCaseOr404(caseUuid);
+  authorizeDsrAccess(user, caseRecord);
   await eraseCaseRow(caseUuid, caseRecord);
 
   await logPhiAccess({
@@ -146,11 +163,17 @@ dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin"
 
   const threshold = new Date(Date.now() - config.dataRetentionDays * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: candidates, error } = await getSupabaseAdmin()
+  let query = getSupabaseAdmin()
     .from("case_records")
     .select("id, facility_id, deleted_at")
     .lt("created_at", threshold)
     .neq("patient_name", REDACTED);
+
+  if (user.resolvedRole === "admin" && user.resolvedFacilityId) {
+    query = query.eq("facility_id", user.resolvedFacilityId);
+  }
+
+  const { data: candidates, error } = await query;
   if (error) throw error;
 
   const purged: string[] = [];

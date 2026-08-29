@@ -29,11 +29,14 @@ combined query) into resolved_role / resolved_facility_id. require_role()
 and every route's authorization checks must read those, not user_metadata.
 """
 import logging
+import threading
 import time
+from collections import OrderedDict
 from typing import Dict, Optional, Tuple
 
+import httpx
 from fastapi import Depends, Header, HTTPException, status
-from jose import jwt, JWTError
+from jose import jwk, jwt, JWTError
 
 from app.core.config import settings
 from app.core.database import supabase_anon, get_supabase_for_user, extract_bearer_token
@@ -44,8 +47,38 @@ logger = logging.getLogger(__name__)
 
 # In-process cache: user_id -> (checked_at_epoch_seconds, is_active, role, facility_id).
 # Per-worker; each uvicorn worker maintains its own and re-checks within the TTL.
+# Bounded to _PROFILE_CACHE_MAX entries to prevent memory exhaustion (VN-2026-08-C2-01).
 _ProfileCacheEntry = Tuple[float, bool, str, Optional[str]]
-_profile_cache: Dict[str, _ProfileCacheEntry] = {}
+_PROFILE_CACHE_MAX = 10_000
+_profile_cache: OrderedDict[str, _ProfileCacheEntry] = OrderedDict()
+
+# In-process JWKS cache for asymmetric JWT verification in rate limiting (VN-2026-08-VER-04)
+_jwks_cache: Optional[dict] = None
+_jwks_lock = threading.Lock()
+_jwks_fetched_at: float = 0
+_JWKS_TTL = 3600  # 1 hour
+
+
+def _get_jwks() -> Optional[dict]:
+    """Fetch and cache the Supabase project's JWKS for asymmetric verification."""
+    global _jwks_cache, _jwks_fetched_at
+    now = time.time()
+    if _jwks_cache and (now - _jwks_fetched_at) < _JWKS_TTL:
+        return _jwks_cache
+    url = settings.supabase_url
+    if not url:
+        return None
+    with _jwks_lock:
+        if _jwks_cache and (time.time() - _jwks_fetched_at) < _JWKS_TTL:
+            return _jwks_cache
+        try:
+            resp = httpx.get(f"{url}/auth/v1/.well-known/jwks.json", timeout=5)
+            resp.raise_for_status()
+            _jwks_cache = resp.json()
+            _jwks_fetched_at = time.time()
+            return _jwks_cache
+        except Exception:
+            return _jwks_cache
 
 
 def _decode_local(token: str) -> Optional[dict]:
@@ -133,20 +166,25 @@ def _resolve_profile(user_id: str, token: str) -> Tuple[bool, str, Optional[str]
         )
         profile = res.data if res else None
     except Exception:
-        # Transient failure — do not cache; fall back to last known state.
+        # Transient failure — do not cache; fall back to last known state if available,
+        # otherwise fail CLOSED (VN-2026-08-VER-05).
         if cached:
             return cached[1], cached[2], cached[3]
-        return True, "", None
+        return False, "", None
 
     if profile is None:
         # Confirmed: no profile row for this authenticated user. Fail closed.
         _profile_cache[user_id] = (now, False, "", None)
+        if len(_profile_cache) > _PROFILE_CACHE_MAX:
+            _profile_cache.popitem(last=False)
         return False, "", None
 
     is_active = bool(profile.get("is_active", True))
     role = profile.get("role") or ""
     facility_id = profile.get("facility_id")
     _profile_cache[user_id] = (now, is_active, role, facility_id)
+    if len(_profile_cache) > _PROFILE_CACHE_MAX:
+        _profile_cache.popitem(last=False)
     return is_active, role, facility_id
 
 
@@ -208,10 +246,35 @@ def require_role(*roles: str):
 def verify_sub_for_rate_limit(token: str) -> str | None:
     """
     Best-effort extraction of a VERIFIED user id for rate-limiting keys.
-    Returns the sub only if the token signature verifies locally (HS256);
-    returns None otherwise so the caller falls back to IP-based limiting.
+    Returns the sub only if the token signature verifies locally (HS256)
+    or via cached JWKS (RS256/ES256); returns None otherwise so the caller
+    falls back to IP-based limiting (VN-2026-08-VER-04).
     This prevents an attacker from forging a token with a victim's sub to
     consume the victim's rate-limit budget.
     """
-    payload = _decode_local(token)
-    return payload.get("sub") if payload else None
+    # Fast path: local HS256
+    claims = _decode_local(token)
+    if claims:
+        return claims.get("sub")
+
+    # Slow path: cached remote JWKS (asymmetric keys)
+    jwks_data = _get_jwks()
+    if not jwks_data:
+        return None
+    try:
+        header = jwt.get_unverified_header(token)
+        kid = header.get("kid")
+        for key_data in jwks_data.get("keys", []):
+            if key_data.get("kid") == kid or kid is None:
+                public_key = jwk.construct(key_data)
+                verified_claims = jwt.decode(
+                    token,
+                    public_key,
+                    algorithms=["RS256", "ES256"],
+                    audience=AUDIENCE,
+                    options={"verify_aud": True, "verify_exp": True},
+                )
+                return verified_claims.get("sub")
+    except (JWTError, Exception):
+        pass
+    return None
