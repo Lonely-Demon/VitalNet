@@ -162,7 +162,7 @@ export default function ASHAPanel() {
 
         {activeTab === 'calculators' && (
           <Suspense fallback={<TabLoadingFallback />}>
-            <ClinicalCalculators />
+            <ClinicalCalculators scope="asha" />
           </Suspense>
         )}
 

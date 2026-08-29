@@ -17,6 +17,7 @@ import {
   calculateIvDripRate,
   calculateMaintenanceFluid,
   PEDIATRIC_DRUG_PRESETS,
+  ASHA_SCOPE_DRUG_IDS,
   FREQUENCY_METADATA,
   DURATION_METADATA,
 } from '@vitalnet/clinical-core'
@@ -28,9 +29,16 @@ const TABS = [
   { id: 'fluid', label: 'Maintenance Fluids', icon: Calculator },
 ]
 
-export default function ClinicalCalculators() {
+export default function ClinicalCalculators({ scope = 'all' }) {
   const { t } = useTranslation()
   const [activeTab, setActiveTab] = useState('dose')
+
+  const availableTabs = useMemo(() => {
+    if (scope === 'asha') {
+      return TABS.filter((t) => t.id === 'dose' || t.id === 'ors')
+    }
+    return TABS
+  }, [scope])
 
   return (
     <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-6">
@@ -53,9 +61,17 @@ export default function ClinicalCalculators() {
           </div>
         </div>
 
+        {/* ASHA Scope Notice */}
+        {scope === 'asha' && (
+          <div className="mt-3 bg-leaf/20 border border-leaf/40 rounded-lg px-3 py-2 text-xs text-forest font-medium flex items-center gap-2">
+            <Info size={14} className="shrink-0 text-forest" />
+            <span>ASHA Scope of Practice: Showing essential medications and oral rehydration protocols authorized under NHM ASHA guidelines.</span>
+          </div>
+        )}
+
         {/* Sub-Tabs */}
         <div className="flex flex-wrap gap-2 mt-5 pt-4 border-t border-leaf/30">
-          {TABS.map((tab) => {
+          {availableTabs.map((tab) => {
             const Icon = tab.icon
             const isActive = activeTab === tab.id
             return (
@@ -78,10 +94,10 @@ export default function ClinicalCalculators() {
 
       {/* Active Calculator Body */}
       <div className="animate-fade-up">
-        {activeTab === 'dose' && <DoseCalculator />}
+        {activeTab === 'dose' && <DoseCalculator scope={scope} />}
         {activeTab === 'ors' && <OrsCalculator />}
-        {activeTab === 'iv' && <IvDripCalculator />}
-        {activeTab === 'fluid' && <MaintenanceFluidCalculator />}
+        {activeTab === 'iv' && scope !== 'asha' && <IvDripCalculator />}
+        {activeTab === 'fluid' && scope !== 'asha' && <MaintenanceFluidCalculator />}
       </div>
 
       {/* Clinical Disclaimer */}
@@ -105,7 +121,7 @@ export default function ClinicalCalculators() {
 
 // ── 1. Dose by Weight Calculator Component ──────────────────────────────────
 
-function DoseCalculator() {
+function DoseCalculator({ scope = 'all' }) {
   const [selectedPresetId, setSelectedPresetId] = useState('paracetamol')
   const [weightKg, setWeightKg] = useState('12')
   const [mgPerKg, setMgPerKg] = useState('15')
@@ -117,14 +133,21 @@ function DoseCalculator() {
   const [duration, setDuration] = useState('UNTIL_RESOLVED')
   const [showSteps, setShowSteps] = useState(false)
 
+  const availablePresets = useMemo(() => {
+    if (scope === 'asha') {
+      return PEDIATRIC_DRUG_PRESETS.filter((p) => ASHA_SCOPE_DRUG_IDS.includes(p.id))
+    }
+    return PEDIATRIC_DRUG_PRESETS
+  }, [scope])
+
   const selectedPreset = useMemo(
-    () => PEDIATRIC_DRUG_PRESETS.find((p) => p.id === selectedPresetId) || null,
-    [selectedPresetId],
+    () => availablePresets.find((p) => p.id === selectedPresetId) || availablePresets[0] || null,
+    [availablePresets, selectedPresetId],
   )
 
   function handlePresetChange(presetId) {
     setSelectedPresetId(presetId)
-    const preset = PEDIATRIC_DRUG_PRESETS.find((p) => p.id === presetId)
+    const preset = availablePresets.find((p) => p.id === presetId)
     if (preset) {
       setMgPerKg(preset.mgPerKg.toString())
       setMaxMgPerDose(preset.maxMgPerDose.toString())
@@ -179,7 +202,9 @@ function DoseCalculator() {
           Paediatric Dose by Weight
         </h2>
         <p className="text-xs text-text2 mt-0.5">
-          Select a standard essential paediatric drug preset or customize dosing parameters.
+          {scope === 'asha'
+            ? 'Essential paediatric medications in the authorized NHM ASHA community kit.'
+            : 'Select a standard essential paediatric drug preset or customize dosing parameters.'}
         </p>
       </div>
 
@@ -195,12 +220,12 @@ function DoseCalculator() {
             onChange={(e) => handlePresetChange(e.target.value)}
             className="w-full bg-surface2 border border-leaf/40 rounded-lg px-3 py-2 text-sm text-text font-medium focus:outline-none focus:ring-2 focus:ring-forest/30"
           >
-            {PEDIATRIC_DRUG_PRESETS.map((p) => (
+            {availablePresets.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.drugName} ({p.indication})
               </option>
             ))}
-            <option value="custom">Custom Protocol / Other Drug</option>
+            {scope !== 'asha' && <option value="custom">Custom Protocol / Other Drug</option>}
           </select>
         </div>
 

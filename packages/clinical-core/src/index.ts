@@ -67,6 +67,7 @@ export {
   calculateIvDripRate,
   calculateMaintenanceFluid,
   PEDIATRIC_DRUG_PRESETS,
+  ASHA_SCOPE_DRUG_IDS,
   FREQUENCY_METADATA,
   DURATION_METADATA,
   type DoseFrequency,

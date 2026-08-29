@@ -258,10 +258,24 @@ export const PEDIATRIC_DRUG_PRESETS: readonly PediatricDrugPreset[] = [
     ],
     minAgeMonths: 2,
     minWeightKg: 3.5,
-    notes: "0.15 mg/kg per dose every 8 hours. Max single dose 2 mg (<6 yrs) or 4 mg (6-12 yrs). Inhaled/nebulized route preferred when available.",
-    citation: "WHO Model Formulary for Children (2010)",
+    notes: "Modern practice: inhaled salbutamol (MDI + spacer or nebulized) is strongly preferred for acute wheeze due to faster onset and fewer systemic side effects. Oral salbutamol is presented as a secondary alternative strictly for resource-constrained primary care settings where inhaler devices/spacers are unavailable. 0.15 mg/kg per dose every 8 hours. Max single dose 2 mg (<6 yrs) or 4 mg (6-12 yrs).",
+    citation: "WHO Model Formulary for Children (2010), GINA Paediatric Guidelines",
   },
 ];
+
+/**
+ * Standard essential medications in the official Indian National Health Mission
+ * (NHM) ASHA drug kit. Restricts the calculator preset list when rendered for
+ * frontline community health workers (scope="asha").
+ * Source: Ministry of Health and Family Welfare (MoHFW) ASHA Drug Kit Guidelines.
+ */
+export const ASHA_SCOPE_DRUG_IDS: readonly string[] = [
+  "paracetamol",
+  "zinc_sulfate_under_6m",
+  "zinc_sulfate_over_6m",
+  "cotrimoxazole",
+];
+
 
 // ── 1. Weight-Based Dose Calculator ─────────────────────────────────────────
 

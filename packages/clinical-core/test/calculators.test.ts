@@ -107,10 +107,31 @@ describe("Pediatric Dose Calculator (calculateWeightBasedDose)", () => {
     expect(result.steps.some((s) => s.includes("Fixed dose protocol"))).toBe(true);
   });
 
-  it("refuses weights below 1.0 kg (neonatal guard) and above 100.0 kg", () => {
+  it("accepts exact boundary weights (1.0 kg and 100.0 kg)", () => {
+    const minResult = calculateWeightBasedDose({
+      weightKg: 1.0,
+      mgPerKg: 15,
+      maxMgPerDose: 1000,
+    });
+    expect(minResult.weightKg).toBe(1.0);
+    expect(minResult.rawDoseMg).toBe(15);
+    expect(minResult.doseMg).toBe(15);
+
+    const maxResult = calculateWeightBasedDose({
+      weightKg: 100.0,
+      mgPerKg: 15,
+      maxMgPerDose: 1000,
+    });
+    expect(maxResult.weightKg).toBe(100.0);
+    expect(maxResult.rawDoseMg).toBe(1500);
+    expect(maxResult.doseMg).toBe(1000); // Capped at 1000 mg
+    expect(maxResult.isCappedSingleDose).toBe(true);
+  });
+
+  it("strictly refuses off-boundary weights (0.99 kg and 100.01 kg)", () => {
     expect(() =>
       calculateWeightBasedDose({
-        weightKg: 0.8,
+        weightKg: 0.99,
         mgPerKg: 15,
         maxMgPerDose: 1000,
       })
@@ -118,11 +139,24 @@ describe("Pediatric Dose Calculator (calculateWeightBasedDose)", () => {
 
     expect(() =>
       calculateWeightBasedDose({
-        weightKg: 105,
+        weightKg: 100.01,
         mgPerKg: 15,
         maxMgPerDose: 1000,
       })
     ).toThrow(/exceeds paediatric parameters/);
+  });
+
+  it("caps High-Dose Amoxicillin when a 30 kg child exceeds max single dose limit", () => {
+    // 30 kg * 45 mg/kg = 1350 mg -> capped at 1000 mg/dose
+    const result = calculateWeightBasedDose({
+      weightKg: 30,
+      mgPerKg: 45,
+      maxMgPerDose: 1000,
+      frequency: "Q12H",
+    });
+    expect(result.rawDoseMg).toBe(1350);
+    expect(result.doseMg).toBe(1000);
+    expect(result.isCappedSingleDose).toBe(true);
   });
 
   it("attaches low weight cautionary warning for neonates under 3 kg", () => {

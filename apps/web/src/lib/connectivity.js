@@ -46,7 +46,10 @@ export async function isServerReachable() {
     const primaryOk = await probeUrl(primaryBase, controller.signal)
     if (primaryOk) return true
 
-    // Fallback: If primary target (e.g. edge) failed, probe legacy backend if distinct
+    // Fallback: If primary target (e.g. edge) failed, probe legacy backend if distinct.
+    // Note: When VITE_EDGE_API_BASE_URL is unset in local/dev environments,
+    // apiBase('health') already evaluates to LEGACY_BASE, so primaryBase === LEGACY_BASE.
+    // In that configuration, this fallback check is cleanly skipped (no redundant second probe).
     if (LEGACY_BASE && LEGACY_BASE !== primaryBase && !controller.signal.aborted) {
       const fallbackOk = await probeUrl(LEGACY_BASE, controller.signal)
       if (fallbackOk) return true
