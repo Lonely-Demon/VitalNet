@@ -7,13 +7,15 @@ import { PushPrompt } from '../components/PushPrompt'
 const ReferralsPanel = lazy(() => import('../components/ReferralsPanel'))
 const OutbreakSignals = lazy(() => import('../components/OutbreakSignals'))
 const ProtocolAssistant = lazy(() => import('../components/ProtocolAssistant'))
+const ClinicalCalculators = lazy(() => import('../components/ClinicalCalculators'))
 
 const TABS = [
-  { id: 'pending',   label: 'Pending Review' },
-  { id: 'all',       label: 'All Cases' },
-  { id: 'referrals', label: 'Referrals' },
-  { id: 'outbreak',  label: 'Outbreak Signals' },
-  { id: 'protocol',  label: 'Protocol Assistant' },
+  { id: 'pending',     label: 'Pending Review' },
+  { id: 'all',         label: 'All Cases' },
+  { id: 'referrals',   label: 'Referrals' },
+  { id: 'outbreak',    label: 'Outbreak Signals' },
+  { id: 'calculators', label: 'Calculators' },
+  { id: 'protocol',    label: 'Protocol Assistant' },
 ]
 
 export default function DoctorPanel() {
@@ -30,6 +32,10 @@ export default function DoctorPanel() {
         ) : activeTab === 'outbreak' ? (
           <div className="max-w-2xl mx-auto p-4 mt-6">
             <OutbreakSignals />
+          </div>
+        ) : activeTab === 'calculators' ? (
+          <div className="max-w-4xl mx-auto p-4 mt-6">
+            <ClinicalCalculators />
           </div>
         ) : activeTab === 'protocol' ? (
           <div className="max-w-2xl mx-auto p-4 mt-6">

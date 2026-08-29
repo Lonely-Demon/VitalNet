@@ -2023,6 +2023,7 @@ The paediatric advisory may not be activated from engineering evidence alone. An
    - Eliminated stored prompt-injection surface in `generate_patient_summary` by removing free-text briefing concatenation and substituting curated `_TIER_PHRASING` and `_TIER_ACTIONS`.
    - Added `.pkl.sha256` content-hash verification and HMAC deploy signature checking (`VITALNET_MODEL_SIGNING_KEY`) before unpickling `triage_classifier.pkl`.
    - Bounded SHAP feature explanation computation with a `ThreadPoolExecutor` timeout (100ms).
+
 5. **Shared-Device Frontend Isolation & Edge Function Hardening (Phase 5)**:
    - Resolved user role strictly from database `profiles` rather than `app_metadata`.
    - Stored facility contact phone and ephemeral AES-256-GCM outbox encryption keys in `sessionStorage` (cleared on logout).
@@ -2032,3 +2033,24 @@ The paediatric advisory may not be activated from engineering evidence alone. An
    - Pinned `pnpm/action-setup` to verified commit SHAs across all GitHub workflows.
    - Created `.github/workflows/deno-deps-audit.yml` for recurring automated edge function dependency audits.
    - Updated `db-schema-drift.yml` to compute dynamic replay fingerprints and output policy diff diagnostics via `fn_list_policies()`.
+
+### 35. Strangler-Fig Tranche A Edge Cutover & Offline Clinical Calculators (Roadmap §4.3)
+
+**Context**:
+1. Strangler-fig backend migration (DECISIONS §33): routing initial safe endpoints to the Deno/Hono edge function (`apps/api`) while preserving Python legacy backend observability and complex RPCs.
+2. Clinical decision-support tools: field health workers frequently need exact arithmetic under pressure for paediatric dosing by weight, WHO dehydration/ORS rehydration, IV drip rates, and maintenance fluids.
+
+**Decisions**:
+1. **Strangler-Fig Tranche A Cutover (`apps/web/src/api/base.js`)**:
+   - Flipped non-PHI, safe read-only/status endpoints (`health`, `outbreak.signals`, `referrals.listFacilities`) to `'edge'` when `VITE_EDGE_API_BASE_URL` is set.
+   - Retained `metrics` on `'legacy'` to ensure direct Prometheus scraping preserves Python in-process ML triage counters and LLM telemetry without data loss.
+   - Retained `supervisor.teamMetrics` on `'legacy'` pending dedicated edge RPC contract conformance verification for `fn_team_metrics`.
+   - Updated `connectivity.js` with resilient dual-probe reachability (primary probe with automatic legacy fallback before concluding offline state).
+2. **Deterministic Offline Clinical Calculators (`packages/clinical-core/src/calculators.ts`)**:
+   - Single source of clinical truth in `@vitalnet/clinical-core`: pure-JS/TS deterministic arithmetic, zero PHI, zero network dependency, precached for complete offline availability.
+   - Paediatric dosing: curated essential drug presets (WHO Model Formulary for Children / INF), strict weight boundaries (1.0 kg – 100.0 kg), neonate <1.0 kg referral refusal, single-dose ceiling caps, 24-hour cumulative dose caps (`maxMgPerDay` & `maxMgPerKgPerDay`), and PRN minimum interval time guards.
+   - WHO diarrhoea rehydration: Plan A (home maintenance / 10 mL/kg), Plan B (4-hour 75 mL/kg ORS with hourly rates), and Plan C (100 mL/kg IV Ringer's Lactate infant/child time-split resuscitation).
+   - IV drip rate: Macrodrip (10, 15, 20 gtt/mL) and Microdrip (60 gtt/mL) calculation for drops/min and volumetric pump mL/hr.
+   - Holliday-Segar fluid: 4-2-1 maintenance rule with visual tier breakdown and adult protocol advisory for patients >14 years or >50 kg.
+   - Integrated as a first-class, lazy-loaded `'calculators'` tab across `ASHAPanel`, `DoctorPanel`, and `SupervisorPanel`.
+
