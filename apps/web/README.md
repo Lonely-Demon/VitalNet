@@ -6,12 +6,10 @@ For full project context, start at the repo root
 
 ## Quick start
 
-From the repository root, install this package and its workspace dependencies:
-
 ```bash
-pnpm install --filter @vitalnet/web...
-cp apps/web/.env.example apps/web/.env.local  # fill in Supabase URL/anon key + backend API URL
-pnpm --filter @vitalnet/web dev
+npm install
+cp .env.example .env.local      # fill in Supabase URL/anon key + backend API URL
+npm run dev
 ```
 Visit http://localhost:5173.
 
@@ -51,15 +49,11 @@ Full file-by-file detail: [../CODEBASE_MAP.md](../CODEBASE_MAP.md) §4.
 ## Common commands
 
 ```bash
-pnpm --filter @vitalnet/web dev
-pnpm --filter @vitalnet/web run build          # production build and import regression check
-pnpm --filter @vitalnet/web preview             # preview a production build locally
-cd apps/web && pnpm exec playwright test       # full browser suite
+npm run dev                  # dev server
+npm run build                # production build — also the main regression check
+npm run preview               # preview a production build locally
+npx playwright test tests/offline.spec.js   # offline-flow E2E (needs a running dev server)
 ```
-
-The browser suite’s offline-flow tests use the repository’s deterministic
-synthetic mock backend. A live Supabase run is a separate preproduction
-operation and must be explicitly authorized; never use real patient data.
 
 ## Triage logic lives in one place
 
@@ -121,10 +115,5 @@ surfaces dead letters with retry/discard actions.
 
 ## Deployment
 
-The repository-root `vercel.json` contains the monorepo build/output settings,
-while `apps/web/vercel.json` contains the SPA rewrite used when the Vercel
-project Root Directory is `apps/web`. For the separate `vital-net` Vercel
-project, Root Directory must be `apps/web`; its project-level Build Command
-must build `@vitalnet/clinical-core` before this package. See
-`../docs/REPOSITORY_STATUS.md` and the root README for the exact command and
-for the distinction between Preview/Pre-Production and Production.
+Includes `vercel.json` for SPA routing. See the root README's Deployment
+section for required environment variables.

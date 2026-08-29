@@ -340,6 +340,22 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
                     f"feature(s): {readable} — possible preeclampsia with severe features"
                 )
 
+    if form_data.get("is_pregnant"):
+        bp_dia = form_data.get("bp_diastolic")
+        if bp_sys is not None and bp_dia is not None:
+            if bp_sys >= 160 or bp_dia >= 110:
+                return (
+                    f"Severe hypertension in pregnancy (BP {bp_sys}/{bp_dia} mmHg) "
+                    f"— possible severe preeclampsia"
+                )
+            preeclampsia_hit = symptoms & PREECLAMPSIA_SEVERE_SYMPTOMS
+            if (bp_sys >= 140 or bp_dia >= 90) and preeclampsia_hit:
+                readable = _readable(preeclampsia_hit)
+                return (
+                    f"Hypertension in pregnancy (BP {bp_sys}/{bp_dia} mmHg) with severe "
+                    f"feature(s): {readable} — possible preeclampsia with severe features"
+                )
+
     return None
 
 

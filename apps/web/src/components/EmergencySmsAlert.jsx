@@ -11,7 +11,7 @@ import { useTranslation } from 'react-i18next'
 
 export function EmergencySmsAlert() {
   const { t } = useTranslation()
-  const facilityPhone = (typeof window !== 'undefined' && (sessionStorage.getItem('vn_facility_phone') || localStorage.getItem('vn_facility_phone'))) || ''
+  const facilityPhone = (typeof window !== 'undefined' && localStorage.getItem('vn_facility_phone')) || ''
   const body = encodeURIComponent(t('intakeForm.result.emergencySmsBody'))
   const smsHref = `sms:${facilityPhone}?body=${body}`
 

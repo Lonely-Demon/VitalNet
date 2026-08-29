@@ -52,143 +52,99 @@ function readable(codes: Iterable<string>): string {
     .join(", ");
 }
 
-/** Heart rate extreme emergency thresholds (WHO / PALS bradycardia & severe tachycardia) */
-function hrEmergencyThreshold(ageYears: number): { low: number; high: number } {
-  if (ageYears < 0.25) return { low: 30, high: 220 };  // Neonate (<3 mo)
-  if (ageYears < 1)    return { low: 30, high: 200 };  // Infant (3-12 mo)
-  if (ageYears < 3)    return { low: 30, high: 180 };  // Toddler (1-3 yr)
-  if (ageYears < 5)    return { low: 30, high: 170 };  // Preschool (3-5 yr)
-  if (ageYears < 12)   return { low: 30, high: 160 };  // School age (5-12 yr)
-  if (ageYears < 18)   return { low: 35, high: 150 };  // Adolescent (12-18 yr)
-  return { low: 35, high: 170 };                       // Adult (>18 yr)
-}
-
-/** Systolic BP extreme emergency thresholds (PALS 5th percentile hypotension / crisis) */
-function bpEmergencyThreshold(ageYears: number): { low: number; high: number } {
-  if (ageYears < 0.08) return { low: 60, high: 220 };  // Neonate (<1 mo)
-  if (ageYears < 1)    return { low: 70, high: 220 };  // Infant (1-12 mo)
-  if (ageYears < 5)    return { low: 75, high: 220 };  // Toddler/Preschool (1-5 yr)
-  if (ageYears < 10)   return { low: 80, high: 220 };  // Child (5-10 yr)
-  if (ageYears < 18)   return { low: 85, high: 220 };  // Adolescent (10-18 yr)
-  return { low: 90, high: 220 };                       // Adult (>18 yr)
-}
-
-/** Body temperature extreme emergency thresholds */
-function tempEmergencyThreshold(ageYears: number): { low: number; high: number } {
-  if (ageYears < 5) return { low: 33.0, high: 41.0 };
-  return { low: 33.0, high: 41.5 };
-}
-
 /**
  * Extreme-presentation safety-net overrides. Returns a FiredRule (→ always
- * EMERGENCY) or null if none fired. Evaluates all override rules to maintain
- * complete audit fidelity (VN-2026-08-C6-02).
+ * EMERGENCY) or null if none fired. Checked in order; the first match wins
+ * (matches classifier.py::_safety_net_check exactly).
  */
 export function checkOverrides(form: OverrideInput): FiredRule | null {
-  const allFired: FiredRule[] = [];
   const symptoms = new Set(form.symptoms);
   const hits = [...symptoms].filter((s) => CRITICAL_SYMPTOMS_OVERRIDE.has(s as Symptom));
   if (hits.length) {
-    allFired.push({
+    return {
       id: "critical_symptom_override",
       citation: "NEWS2 'any red parameter' principle extended to symptoms with no safe vital-sign proxy",
       detail: `Critical symptom present: ${readable(hits)}`,
-    });
+    };
   }
 
   const { patient_age: age, temperature: temp } = form;
   if (age < 0.25 && temp !== null && temp >= 38.0) {
-    allFired.push({
+    return {
       id: "neonatal_fever",
       citation: "Neonatal fever (<3 months, temp >=38.0C) is a medical emergency regardless of other signs",
       detail: `Neonatal fever (age ${Math.round(age * 12)} months, temperature ${temp}C)`,
-    });
+    };
   }
 
   const { spo2, heart_rate: hr, bp_systolic: bpSys } = form;
   if (spo2 !== null && spo2 < 85) {
-    allFired.push({
+    return {
       id: "extreme_spo2",
       citation: "NEWS2 scale 1: SpO2 <91 is red-flag territory; <85 is unambiguous critical hypoxia",
       detail: `Critically low oxygen saturation (${spo2}%)`,
-    });
+    };
   }
 
-  if (hr !== null) {
-    const hrBounds = hrEmergencyThreshold(age);
-    if (hr < hrBounds.low || hr > hrBounds.high) {
-      allFired.push({
-        id: "extreme_hr",
-        citation: "Age-stratified extreme heart rate per WHO/PALS guidelines",
-        detail: `Extreme heart rate for age ${age.toFixed(1)}yr (${hr} bpm, normal bounds ${hrBounds.low}-${hrBounds.high})`,
-      });
-    }
+  if (hr !== null && (hr < 35 || hr > 170)) {
+    return {
+      id: "extreme_hr",
+      citation: "Extreme bradycardia/tachycardia outside any physiologically stable range at any age",
+      detail: `Extreme heart rate (${hr} bpm)`,
+    };
   }
 
-  if (bpSys !== null) {
-    const bpBounds = bpEmergencyThreshold(age);
-    if (bpSys < bpBounds.low || bpSys > bpBounds.high) {
-      allFired.push({
-        id: "extreme_bp",
-        citation: "Age-stratified systolic BP outside physiologically stable range (PALS 5th percentile / crisis)",
-        detail: `Extreme systolic blood pressure for age ${age.toFixed(1)}yr (${bpSys} mmHg, bounds ${bpBounds.low}-${bpBounds.high})`,
-      });
-    }
+  if (bpSys !== null && (bpSys < 70 || bpSys > 220)) {
+    return {
+      id: "extreme_bp",
+      citation: "Systolic BP outside any physiologically stable range — profound shock or hypertensive crisis",
+      detail: `Extreme systolic blood pressure (${bpSys} mmHg)`,
+    };
   }
 
   if (bpSys !== null && bpSys >= 180) {
     const neuro = [...symptoms].filter((s) => HYPERTENSIVE_NEURO.has(s as Symptom));
     if (neuro.length) {
-      allFired.push({
+      return {
         id: "hypertensive_neuro_emergency",
         citation: "Hypertensive crisis (SBP >=180) + neurological symptom(s) — possible hypertensive encephalopathy/stroke",
         detail: `Hypertensive crisis (systolic BP ${bpSys} mmHg) with neurological symptom(s): ${readable(neuro)} — possible hypertensive encephalopathy/stroke`,
-      });
+      };
     }
   }
 
-  if (temp !== null) {
-    const tempBounds = tempEmergencyThreshold(age);
-    if (temp < tempBounds.low || temp > tempBounds.high) {
-      allFired.push({
-        id: "extreme_temp",
-        citation: "Extreme hyper/hypothermia outside physiologically stable range",
-        detail: `Extreme body temperature (${temp}C)`,
-      });
-    }
+  if (temp !== null && (temp > 41.5 || temp < 33.0)) {
+    return {
+      id: "extreme_temp",
+      citation: "Extreme hyper/hypothermia outside any physiologically stable range",
+      detail: `Extreme body temperature (${temp}C)`,
+    };
   }
 
   if (form.is_pregnant) {
     const bpDia = form.bp_diastolic;
     if (bpSys !== null && bpDia !== null) {
       if (bpSys >= 160 || bpDia >= 110) {
-        allFired.push({
+        return {
           id: "preeclampsia_severe_bp",
           citation: "ACOG Practice Bulletin 222: severe hypertension in pregnancy (BP >=160/110) is a severe feature on its own",
           detail: `Severe hypertension in pregnancy (BP ${bpSys}/${bpDia} mmHg) - possible severe preeclampsia`,
-        });
+        };
       }
       if (bpSys >= 140 || bpDia >= 90) {
         const hit = [...symptoms].filter((s) => PREECLAMPSIA_SEVERE_SYMPTOMS.has(s as Symptom));
         if (hit.length) {
-          allFired.push({
+          return {
             id: "preeclampsia_with_severe_feature",
             citation: "ACOG Practice Bulletin 222: BP >=140/90 with a severe feature (severe headache, epigastric pain) meets severe preeclampsia criteria",
             detail: `Hypertension in pregnancy (BP ${bpSys}/${bpDia} mmHg) with severe feature(s): ${readable(hit)} - possible preeclampsia with severe features`,
-          });
+          };
         }
       }
     }
   }
 
-  if (allFired.length === 0) return null;
-  if (allFired.length === 1) return allFired[0]!;
-
-  return {
-    id: allFired.map((r) => r.id).join("+"),
-    citation: allFired[0]!.citation,
-    detail: allFired.map((r) => r.detail).join("; "),
-  };
+  return null;
 }
 
 /**

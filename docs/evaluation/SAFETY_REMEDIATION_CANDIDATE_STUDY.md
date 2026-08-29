@@ -187,45 +187,7 @@ To maintain rigorous statistical and clinical separation:
 
 ---
 
-## 7. Reference-Label Protocol & Canonical Ground-Truth Invariance
-
-To cleanly isolate the effect of clinical context missingness from ground-truth determination, the study enforces a strict two-stage generation and label-freezing protocol:
-
-```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                        TWO-STAGE CANONICAL REFERENCE-LABEL PROTOCOL                    │
-├────────────────────────────────────────────────────────────────────────────────────────┤
-│ 1. Canonical Generation (`generate_synthetic_canonical_cohort`)                        │
-│    • Generates full-context synthetic encounters with 100% complete canonical vitals   │
-│      (temperature, heart_rate, bp_systolic, bp_diastolic, spo2), full underlying      │
-│      symptom representation, demographics, and neutral non-indicative complaint text.  │
-├────────────────────────────────────────────────────────────────────────────────────────┤
-│ 2. Ground-Truth Freezing (`assign_triage_labels`)                                      │
-│    • Reference triage labels are computed EXACTLY ONCE directly from the unmasked      │
-│      canonical representation via `@vitalnet/clinical-core` rules engine (cli.mjs).    │
-│    • Freezing occurs BEFORE any missingness, masking, or arm transformation.           │
-├────────────────────────────────────────────────────────────────────────────────────────┤
-│ 3. Masking Derivation (`derive_masked_study_cohort`)                                   │
-│    • Missingness transformations (omitted vitals, symptom screening states) are        │
-│      applied to deep copies of the canonical cohort, leaving canonical records         │
-│      100% unmutated.                                                                   │
-├────────────────────────────────────────────────────────────────────────────────────────┤
-│ 4. Paired Multi-Arm Evaluation                                                         │
-│    • All three arms (`frozen_baseline_v3.1.0`, `candidate_remediation_v1`,             │
-│      `vital_only_partial_stress`) are evaluated against the IDENTICAL frozen canonical │
-│      reference label vector.                                                           │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-```
-
-> [!IMPORTANT]
-> **Canonical Label Invariants**:
-> 1. **Zero Masked Label Contamination**: Reference labels are never computed from masked or sparse records; ground truth reflects the patient's underlying physiological and clinical reality.
-> 2. **Engineering Diagnostics Only**: The resulting metrics quantify pipeline sensitivity under synthetic degradation and do not constitute clinical validation or real-world safety certification.
-> 3. **Zero Patient-Level Data Emission**: Reports contain strictly aggregate-only metrics; no patient-level records, form data, or individual predictions are output.
-
----
-
-## 8. Clinical Governance & Acceptance Mandate
+## 7. Clinical Governance & Acceptance Mandate
 
 > [!IMPORTANT]
 > **Prohibition on Invented Engineering Pass Thresholds**:
@@ -233,7 +195,7 @@ To cleanly isolate the effect of clinical context missingness from ground-truth 
 
 ---
 
-## 9. Explicit Limitations & Clinical Non-Claims
+## 8. Explicit Limitations & Clinical Non-Claims
 
 1. **No Clinical Validation Claim**: This candidate study is an investigational simulation and does not constitute clinical validation or medical safety certification.
 2. **No Regulatory Clearance**: VitalNet has not received Software as a Medical Device (SaMD) clearance from CDSCO, US FDA, or CE mark.

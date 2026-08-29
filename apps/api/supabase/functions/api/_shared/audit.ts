@@ -83,14 +83,8 @@ export async function logPhiAccess(input: LogPhiAccessInput): Promise<void> {
   }
 }
 
-/**
- * Extract a client IP only when the deployment explicitly trusts its proxy.
- * Forwarding headers are client-controlled on direct/public requests, so the
- * safe default is `unknown`. Set TRUST_PROXY_HEADERS=true only when the Edge
- * ingress is documented to overwrite these headers before they reach Hono.
- */
+/** Extract the client IP, preferring proxy headers. */
 export function getClientIp(c: Context): string {
-  if (Deno.env.get("TRUST_PROXY_HEADERS") !== "true") return "unknown";
   const forwarded = c.req.header("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0]!.trim();
   const realIp = c.req.header("x-real-ip");

@@ -6,28 +6,6 @@ For the ML model's own detailed version history, see
 `backend/CLASSIFIER_CHANGELOG.md`. For the *why* behind major entries, see
 `docs/DECISIONS.md`.
 
-> Historical entries below preserve the paths and architecture names recorded
-> at the time. For the current repository layout and status, use
-> `CODEBASE_MAP.md` and `docs/REPOSITORY_STATUS.md`.
-
-## [Unreleased] — Repository hygiene and dev/test closeout
-
-### Changed
-
-- Reconciled the current documentation with the `apps/web` + `packages/clinical-core`
-  workspace layout and documented the deliberate distinction between the live
-  FastAPI backend, the not-yet-live Edge Function backend, and the `hybrid` versus
-  `rules_first` clinical-core modes.
-- Added `docs/REPOSITORY_STATUS.md` and `docs/DEPLOYMENT_RUNBOOK.md` as current
-  operational references for branch boundaries, preproduction promotion,
-  Vercel monorepo configuration, read-only smoke checks, rollback, and data
-  isolation.
-- Corrected the authoritative roadmap, testing strategy, onboarding guide,
-  package guides, and R&D references that still pointed at the retired
-  `frontend/` layout or removed parity scripts.
-- Confirmed the corrected `vital-net` Preview/Pre-Production build path builds
-  `@vitalnet/clinical-core` before `@vitalnet/web`; Production was not redeployed.
-
 ## [Unreleased] — Round 4: independent validation review + pregnancy-hypertension safety-net rule
 
 A user-run, independent AI validation report ("Clinical AI Validation

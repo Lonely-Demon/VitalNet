@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # governance authorizes them. Capture fields are additive and independent.
     paediatric_advisory_enabled: bool = False
 
+    # Paediatric advisory calculations remain disabled until qualified clinical
+    # governance authorizes them. Capture fields are additive and independent.
+    paediatric_advisory_enabled: bool = False
+
     # ── API docs ───────────────────────────────────────────────────────────────
     # Swagger/ReDoc/OpenAPI JSON expose the full request/response schema and
     # every route. Off by default; enable only in dev/staging.
@@ -63,11 +67,6 @@ class Settings(BaseSettings):
     # custom header forces, which only an allowed origin can pass, not from the
     # token being unguessable.
     csrf_token: str = "vitalnet-spa"
-
-    # ── Internal Scheduler Guard ──────────────────────────────────────────────
-    # Shared secret header (X-Internal-Scheduler-Token) required by maintenance
-    # cron endpoints such as /api/push/check-emergency-escalations (VN-2026-08-VER-03).
-    internal_scheduler_token: str = ""
 
     # ── Web Push (FEATURES_ROADMAP §1.4) ──────────────────────────────────────
     # Generate a keypair once with `vapid --gen` (from the py-vapid package,

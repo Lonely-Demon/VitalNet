@@ -31,7 +31,6 @@ export interface TreeJson {
 export interface EvaluationResult {
   classIndex: number;
   probabilities: number[];
-  hasNaN: boolean;
 }
 
 function softmax(scores: readonly number[]): number[] {
@@ -60,18 +59,13 @@ function softmax(scores: readonly number[]): number[] {
 export function evaluateTrees(treeJson: TreeJson, x: readonly number[]): EvaluationResult {
   const nClasses = treeJson.n_classes;
   const scores = treeJson.base_values?.length ? treeJson.base_values.slice() : new Array(nClasses).fill(0);
-  let hasNaN = false;
 
   for (const tree of treeJson.trees) {
     const { feat, thr, left, right, leaf } = tree;
     let node = 0;
     while (feat[node] !== -1) {
       const f = feat[node]!;
-      const rawVal = x[f]!;
-      if (Number.isNaN(rawVal)) {
-        hasNaN = true;
-      }
-      node = Math.fround(rawVal) <= Math.fround(thr[node]!) ? left[node]! : right[node]!;
+      node = Math.fround(x[f]!) <= Math.fround(thr[node]!) ? left[node]! : right[node]!;
     }
     const contribs = leaf[node];
     if (contribs) {
@@ -86,7 +80,7 @@ export function evaluateTrees(treeJson: TreeJson, x: readonly number[]): Evaluat
   for (let i = 1; i < probabilities.length; i++) {
     if (probabilities[i]! > probabilities[classIndex]!) classIndex = i;
   }
-  return { classIndex, probabilities, hasNaN };
+  return { classIndex, probabilities };
 }
 
 export interface FeatureAttribution {

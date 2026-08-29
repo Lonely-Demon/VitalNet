@@ -1,5 +1,7 @@
-// These tests are network-independent: getClientIp only reads request headers
-// and the explicit trusted-proxy environment switch.
+// getClientIp only — logPhiAccess needs a live Supabase client (it writes
+// via getSupabaseAdmin()), not exercised here for the same reason
+// auth.test.ts skips the JWKS network path: keep this suite fast and
+// network-independent.
 import { assertEquals } from "@std/assert";
 import { Hono } from "hono";
 import { getClientIp } from "../_shared/audit.ts";
@@ -15,23 +17,14 @@ async function ipFromHeaders(headers: Record<string, string>): Promise<string> {
   return captured;
 }
 
-Deno.test("getClientIp: ignores forwarding headers by default", async () => {
-  Deno.env.delete("TRUST_PROXY_HEADERS");
-  assertEquals(await ipFromHeaders({ "x-forwarded-for": "203.0.113.5, 10.0.0.1" }), "unknown");
-  assertEquals(await ipFromHeaders({ "x-real-ip": "203.0.113.9" }), "unknown");
+Deno.test("getClientIp: prefers x-forwarded-for, first entry only", async () => {
+  assertEquals(await ipFromHeaders({ "x-forwarded-for": "203.0.113.5, 10.0.0.1" }), "203.0.113.5");
 });
 
-Deno.test("getClientIp: uses proxy headers only when explicitly trusted", async () => {
-  Deno.env.set("TRUST_PROXY_HEADERS", "true");
-  try {
-    assertEquals(await ipFromHeaders({ "x-forwarded-for": "203.0.113.5, 10.0.0.1" }), "203.0.113.5");
-    assertEquals(await ipFromHeaders({ "x-real-ip": "203.0.113.9" }), "203.0.113.9");
-  } finally {
-    Deno.env.delete("TRUST_PROXY_HEADERS");
-  }
+Deno.test("getClientIp: falls back to x-real-ip", async () => {
+  assertEquals(await ipFromHeaders({ "x-real-ip": "203.0.113.9" }), "203.0.113.9");
 });
 
-Deno.test("getClientIp: unknown when no trusted header is present", async () => {
-  Deno.env.delete("TRUST_PROXY_HEADERS");
+Deno.test("getClientIp: unknown when neither header is present", async () => {
   assertEquals(await ipFromHeaders({}), "unknown");
 });

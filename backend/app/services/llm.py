@@ -353,27 +353,11 @@ def _fallback_briefing(triage_result: dict) -> dict:
 
 PATIENT_SUMMARY_LANGUAGE_NAMES = {"en": "English", "hi": "Hindi", "ta": "Tamil"}
 
-# Curated tier phrasings and immediate actions (VN-2026-08-VER-08).
-# Briefing free-text fields (primary_risk_driver, recommended_immediate_actions)
-# are deliberately NOT concatenated into the LLM prompt to eliminate stored
-# prompt-injection vectors while ensuring clinically sound, bounded guidance.
-_TIER_PHRASING = {
-    "EMERGENCY": "This patient needs urgent emergency care right away.",
-    "URGENT": "This patient should be evaluated by a medical doctor within 24 hours.",
-    "ROUTINE": "This patient does not require emergency care and can be seen during standard clinic hours.",
-}
-
-_TIER_ACTIONS = {
-    "EMERGENCY": "Stay calm, do not give food or drink if surgery may be required, and arrange immediate transport to the nearest emergency medical facility.",
-    "URGENT": "Avoid strenuous activity, take prescribed medications as directed, monitor symptoms closely, and visit the clinic promptly.",
-    "ROUTINE": "Continue normal daily activities, stay hydrated, and consult a doctor if symptoms worsen.",
-}
-
 _PATIENT_SUMMARY_SYSTEM_PROMPT = (
-    "You restate an already-decided clinical triage assessment in short, warm, "
+    "You restate an already-decided clinical triage result in short, warm, "
     "plain language for a patient or their family, to be read aloud by a "
     "community health worker. Use everyday words, no medical jargon, no "
-    "new medical claims — only explain the provided assessment and action. Never change "
+    "new medical claims — only restate what you are given. Never change "
     "the urgency level. Keep it under 120 words. End with one short "
     "sentence noting this is not a final diagnosis and a doctor should "
     "confirm. Respond in plain text only, no markdown, no JSON."
@@ -408,19 +392,16 @@ async def generate_patient_summary(briefing: dict, triage_result: dict, language
     already-complete case, not a step in the core submission flow.
     """
     language_name = PATIENT_SUMMARY_LANGUAGE_NAMES.get(language, "English")
-    tier = triage_result.get("triage_level", "ROUTINE")
-
-    tier_phrasing = _TIER_PHRASING.get(tier, _TIER_PHRASING["ROUTINE"])
-    tier_actions = _TIER_ACTIONS.get(tier, _TIER_ACTIONS["ROUTINE"])
 
     if not _groq_client:
         return {"summary": _fallback_patient_summary(triage_result), "generated": False}
 
+    actions = "; ".join(briefing.get("recommended_immediate_actions") or []) or "See a doctor for further guidance."
     prompt = (
-        f"Explain this triage level in {language_name}.\n\n"
-        f"Urgency Level: {tier}\n"
-        f"Assessment: {tier_phrasing}\n"
-        f"Recommended Action: {tier_actions}"
+        f"Write the explanation in {language_name}.\n\n"
+        f"Triage level: {triage_result['triage_level']}\n"
+        f"What this means: {briefing.get('primary_risk_driver', '')}\n"
+        f"What should happen next: {actions}"
     )
 
     try:
@@ -545,7 +526,11 @@ async def generate_protocol_answer(question_text: str, language: str = "en") -> 
                 model = genai.GenerativeModel(
                     model_name=model_name,
                     system_instruction=_PROTOCOL_SYSTEM_PROMPT,
-                    generation_config=_make_gemini_generation_config(genai, 400),
+                    generation_config=genai.GenerationConfig(
+                        response_mime_type="application/json",
+                        temperature=0.1,
+                        max_output_tokens=400,
+                    ),
                 )
                 response = await model.generate_content_async(user_content)
                 parsed = _parse_llm_json(response.text)

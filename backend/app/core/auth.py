@@ -28,8 +28,6 @@ values from the profiles table (same short-TTL cache as is_active, one
 combined query) into resolved_role / resolved_facility_id. require_role()
 and every route's authorization checks must read those, not user_metadata.
 """
-import logging
-import threading
 import time
 from collections import OrderedDict
 from typing import Dict, Optional, Tuple
@@ -57,28 +55,6 @@ _jwks_cache: Optional[dict] = None
 _jwks_lock = threading.Lock()
 _jwks_fetched_at: float = 0
 _JWKS_TTL = 3600  # 1 hour
-
-
-def _get_jwks() -> Optional[dict]:
-    """Fetch and cache the Supabase project's JWKS for asymmetric verification."""
-    global _jwks_cache, _jwks_fetched_at
-    now = time.time()
-    if _jwks_cache and (now - _jwks_fetched_at) < _JWKS_TTL:
-        return _jwks_cache
-    url = settings.supabase_url
-    if not url:
-        return None
-    with _jwks_lock:
-        if _jwks_cache and (time.time() - _jwks_fetched_at) < _JWKS_TTL:
-            return _jwks_cache
-        try:
-            resp = httpx.get(f"{url}/auth/v1/.well-known/jwks.json", timeout=5)
-            resp.raise_for_status()
-            _jwks_cache = resp.json()
-            _jwks_fetched_at = time.time()
-            return _jwks_cache
-        except Exception:
-            return _jwks_cache
 
 
 def _decode_local(token: str) -> Optional[dict]:
@@ -252,29 +228,5 @@ def verify_sub_for_rate_limit(token: str) -> str | None:
     This prevents an attacker from forging a token with a victim's sub to
     consume the victim's rate-limit budget.
     """
-    # Fast path: local HS256
-    claims = _decode_local(token)
-    if claims:
-        return claims.get("sub")
-
-    # Slow path: cached remote JWKS (asymmetric keys)
-    jwks_data = _get_jwks()
-    if not jwks_data:
-        return None
-    try:
-        header = jwt.get_unverified_header(token)
-        kid = header.get("kid")
-        for key_data in jwks_data.get("keys", []):
-            if key_data.get("kid") == kid or kid is None:
-                public_key = jwk.construct(key_data)
-                verified_claims = jwt.decode(
-                    token,
-                    public_key,
-                    algorithms=["RS256", "ES256"],
-                    audience=AUDIENCE,
-                    options={"verify_aud": True, "verify_exp": True},
-                )
-                return verified_claims.get("sub")
-    except (JWTError, Exception):
-        pass
-    return None
+    payload = _decode_local(token)
+    return payload.get("sub") if payload else None

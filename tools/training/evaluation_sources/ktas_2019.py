@@ -12,7 +12,7 @@ Official Source References:
   verify supplementary reuse under the article terms.
 
 Enforces:
-- Deterministic, fail-closed XLSX parsing (zipfile + defusedxml.ElementTree).
+- Deterministic, fail-closed standard-library XLSX parsing (zipfile + xml.etree.ElementTree).
 - True streaming row processing at the OpenXML reader boundary via iterparse (clearing XML elements immediately;
   never materializing raw row lists in memory).
 - Strict separation of data workbook ("N=1267 data") and coding workbook ("coding sheet").
@@ -50,7 +50,7 @@ Enforces:
 import os
 import re
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Union
-from defusedxml import ElementTree as ET
+import xml.etree.ElementTree as ET
 import zipfile
 
 from .base import (

@@ -1,54 +1,47 @@
 name: Backend Keep-Alive
 
-# Render Free web services spin down after 15 minutes without inbound traffic.
-# This workflow keeps ONLY the preproduction backend warm. Production Render is
-# intentionally excluded from this workflow by product decision.
+# Free tiers on hosts like Render spin the backend down after ~10-15 minutes
+# of no incoming requests, causing a slow cold-start on the next real
+# request. This pings GET /api/health (public, unauthenticated, cheap) every
+# 10 minutes to keep the instance warm.
 #
-# This is still best-effort because GitHub schedule triggers can be delayed.
-# It must not be treated as a contractual uptime monitor or a substitute for
-# a paid always-on service. The target is a public, unauthenticated health
-# endpoint and no patient payload is sent or retained.
+# HONEST LIMITATION (docs/DECISIONS.md §28): GitHub's schedule trigger is
+# best-effort — delays of 5-30+ minutes under load are common and
+# documented, so this is NOT a reliable substitute for a dedicated uptime
+# monitor (UptimeRobot, cron-job.org, Better Uptime, etc., all of which
+# offer free 5-minute checks with far tighter timing guarantees). Use this
+# as a free, versioned first line of defense, not the final answer, if
+# cold-starts are a real problem in practice.
 #
-# GitHub scheduled workflows run from the default branch. Keep this file on the
-# default branch as well as dev when the preproduction keep-alive is activated.
+# Requires a repository VARIABLE (Settings > Secrets and variables > Actions
+# > Variables) named BACKEND_HEALTH_URL, e.g. https://your-app.onrender.com.
+# No value is secret here (it's a public health check URL), so it's a
+# variable, not a secret. No-ops until it's set.
 
 on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch: {}
 
-concurrency:
-  group: backend-preproduction-keepalive
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
 jobs:
-  ping-preproduction:
+  ping:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Ping preproduction /api/health
+      - name: Ping /api/health
         env:
-          PREPROD_BACKEND_HEALTH_URL: https://vitalnet-preprod-api.onrender.com
+          BACKEND_HEALTH_URL: ${{ vars.BACKEND_HEALTH_URL }}
         run: |
-          set -eu
-          for attempt in 1 2 3; do
-            status=$(curl -sS -o /dev/null -w "%{http_code}" \
-              --connect-timeout 10 --max-time 30 \
-              "$PREPROD_BACKEND_HEALTH_URL/api/health") || status="000"
-            echo "Preproduction backend /api/health attempt $attempt responded HTTP $status"
-
-            # Any HTTP response below 500 proves the service is reachable.
-            if [ "$status" -ge 200 ] && [ "$status" -lt 400 ]; then
-              exit 0
-            fi
-
-            if [ "$attempt" -lt 3 ]; then
-              sleep 5
-            fi
-          done
-
-          echo "::error::Preproduction backend health check failed after 3 attempts (last HTTP $status)"
-          exit 1
+          if [ -z "$BACKEND_HEALTH_URL" ]; then
+            echo "BACKEND_HEALTH_URL repo variable not set — skipping (no deployed backend to keep warm yet)."
+            exit 0
+          fi
+          status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$BACKEND_HEALTH_URL/api/health")
+          echo "Backend /api/health responded HTTP $status"
+          if [ "$status" -ge 500 ] || [ "$status" = "000" ]; then
+            echo "::error::Backend health check failed (HTTP $status)"
+            exit 1
+          fi

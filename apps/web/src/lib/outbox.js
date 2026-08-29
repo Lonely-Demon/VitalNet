@@ -24,66 +24,18 @@ import { getOfflineDB } from './offlineDB'
 
 const STORE_NAME = 'outbox'
 const MAX_PENDING = 50
-const RECOVERY_STATUS = 'recovery_required'
-export const OUTBOX_STALE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
-
 
 function notifyOutboxChange() {
   window.dispatchEvent(new CustomEvent('offline-queue-changed'))
 }
 
-// ── Outbox payload encryption for shared-tablet PHI isolation (VN-2026-08-C4-03) ──
-// Generates an ephemeral AES-256-GCM session key on login stored in sessionStorage.
-// When Worker A logs out, sessionStorage is wiped. Worker B inspecting IndexedDB
-// directly only sees encrypted ciphertext blobs { _encrypted: true, iv, ct }.
-
-async function getSessionOutboxKey() {
-  const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('vn_outbox_key') : null
-  if (stored) {
-    const raw = Uint8Array.from(atob(stored), (c) => c.charCodeAt(0))
-    return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
-  }
-  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'])
-  const exported = await crypto.subtle.exportKey('raw', key)
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(exported)))
-  if (typeof sessionStorage !== 'undefined') {
-    sessionStorage.setItem('vn_outbox_key', b64)
-  }
-  return key
-}
-
-export async function encryptOutboxPayload(payload) {
-  try {
-    const key = await getSessionOutboxKey()
-    const iv = crypto.getRandomValues(new Uint8Array(12))
-    const encoded = new TextEncoder().encode(JSON.stringify(payload))
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded)
-    return { _encrypted: true, iv: Array.from(iv), ct: Array.from(new Uint8Array(ct)) }
-  } catch (err) {
-    console.warn('[VitalNet] Outbox encryption fallback to plaintext', err)
-    return payload
-  }
-}
-
-export async function decryptOutboxPayload(payload) {
-  if (!payload || !payload._encrypted) return payload
-  try {
-    const key = await getSessionOutboxKey()
-    const iv = new Uint8Array(payload.iv)
-    const ct = new Uint8Array(payload.ct)
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct)
-    return JSON.parse(new TextDecoder().decode(decrypted))
-  } catch (err) {
-    console.warn('[VitalNet] Outbox payload decryption failed (different session/worker key)', err)
-    return null
-  }
-}
-
 /**
  * Queue an event for later sync. No token stored — fresh token fetched at
  * sync time. ownerId is the queuing worker's auth user id; it gates who may
- * later drain or view this row (see module header). Payload is encrypted
- * at rest with the worker's session key (VN-2026-08-C4-03).
+ * later drain or view this row (see module header). Throws if the PENDING
+ * (not dead-lettered) count is already at capacity — dead letters never
+ * block new submissions; they're a separate, user-visible surface
+ * (getDeadLetters) the worker clears explicitly.
  */
 export async function enqueue(eventId, type, payload, ownerId) {
   const pendingCount = await getPendingCount()
@@ -92,13 +44,12 @@ export async function enqueue(eventId, type, payload, ownerId) {
     throw new Error(`Offline queue is full (${MAX_PENDING} items). Please sync before submitting more cases.`)
   }
 
-  const encryptedPayload = await encryptOutboxPayload(payload)
   const db = await getOfflineDB()
   await db.put(STORE_NAME, {
     event_id: eventId,
     owner_id: ownerId ?? null,
     type,
-    payload: encryptedPayload,
+    payload,
     created_at: new Date().toISOString(),
     attempts: 0,
     status: 'pending',
@@ -118,21 +69,13 @@ export async function dequeue(eventId) {
  * processQueue() uses. Scoped by owner so a worker never drains (submits
  * under their own JWT) a case another worker queued on the same device.
  * Returns [] when ownerId is falsy: with no known identity there is nothing
- * safe to submit. Decrypts payloads using the active session key.
+ * safe to submit.
  */
 export async function getPendingEvents(ownerId) {
   if (!ownerId) return []
   const db = await getOfflineDB()
   const all = await db.getAllFromIndex(STORE_NAME, 'created_at')
-  const owned = all.filter((e) => e.status === 'pending' && e.owner_id === ownerId)
-  const decrypted = []
-  for (const item of owned) {
-    const plain = await decryptOutboxPayload(item.payload)
-    if (plain) {
-      decrypted.push({ ...item, payload: plain })
-    }
-  }
-  return decrypted
+  return all.filter((e) => e.status === 'pending' && e.owner_id === ownerId)
 }
 
 /**
@@ -143,68 +86,6 @@ export async function getPendingEvents(ownerId) {
 export async function getPendingCount() {
   const db = await getOfflineDB()
   return db.countFromIndex(STORE_NAME, 'status', 'pending')
-}
-
-/**
- * Count legacy rows that cannot be safely attributed to a worker. This is an
- * aggregate-only signal: callers must not receive the payload or identifiers.
- */
-export async function getRecoveryRequiredCount() {
-  const db = await getOfflineDB()
-  return db.countFromIndex(STORE_NAME, 'status', RECOVERY_STATUS)
-}
-
-/**
- * Aggregate count of this worker's pending rows older than the documented
- * review window. The payload is never returned to the caller.
- */
-export async function getStalePendingCount(ownerId, now = Date.now()) {
-  if (!ownerId) return 0
-  const db = await getOfflineDB()
-  const all = await db.getAllFromIndex(STORE_NAME, 'status', 'pending')
-  return all.filter((row) => (
-    row.owner_id === ownerId
-    && Number.isFinite(Date.parse(row.created_at))
-    && now - Date.parse(row.created_at) >= OUTBOX_STALE_RETENTION_MS
-  )).length
-}
-
-/**
- * Explicitly purge only this worker's stale pending rows after user review.
- * This is never called automatically and cannot affect another worker's rows.
- */
-export async function purgeStalePending(ownerId, now = Date.now()) {
-  if (!ownerId) return 0
-  const db = await getOfflineDB()
-  const all = await db.getAllFromIndex(STORE_NAME, 'status', 'pending')
-  let removed = 0
-  for (const row of all) {
-    if (
-      row.owner_id === ownerId
-      && Number.isFinite(Date.parse(row.created_at))
-      && now - Date.parse(row.created_at) >= OUTBOX_STALE_RETENTION_MS
-    ) {
-      await db.delete(STORE_NAME, row.event_id)
-      removed += 1
-    }
-  }
-  if (removed > 0) notifyOutboxChange()
-  return removed
-}
-
-/**
- * Permanently purge ownerless legacy recovery records after an explicit
- * device-level confirmation. This never touches pending, dead-lettered, or
- * currently owned rows.
- */
-export async function purgeRecoveryRequired() {
-  const db = await getOfflineDB()
-  const rows = await db.getAllFromIndex(STORE_NAME, 'status', RECOVERY_STATUS)
-  for (const row of rows) {
-    await db.delete(STORE_NAME, row.event_id)
-  }
-  if (rows.length > 0) notifyOutboxChange()
-  return rows.length
 }
 
 /**
@@ -245,16 +126,7 @@ export async function getDeadLetters(ownerId) {
   if (!ownerId) return []
   const db = await getOfflineDB()
   const all = await db.getAllFromIndex(STORE_NAME, 'status', 'dead')
-  const owned = all.filter((e) => e.owner_id === ownerId)
-  const decrypted = []
-  for (const item of owned) {
-    const plain = await decryptOutboxPayload(item.payload)
-    decrypted.push({
-      ...item,
-      payload: plain || { patient_name: '[Encrypted from prior session]', chief_complaint: 'Offline submission' },
-    })
-  }
-  return decrypted
+  return all.filter((e) => e.owner_id === ownerId)
 }
 
 export async function getDeadLetterCount(ownerId) {

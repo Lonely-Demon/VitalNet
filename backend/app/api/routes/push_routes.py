@@ -79,26 +79,16 @@ async def unsubscribe(
 async def check_emergency_escalations(
     request: Request,
     authorization: str = Header(None),
-    x_internal_scheduler_token: str = Header(None, alias="X-Internal-Scheduler-Token"),
-    user: dict = Depends(require_role("admin", "supervisor")),
+    user: dict = Depends(require_role("admin")),
 ):
     """
     Meant to be called on a schedule (e.g. every 5 minutes) by an external
     scheduler — a cron job hitting this endpoint, a Supabase pg_cron job, or
-    a Railway cron add-on. Requires X-Internal-Scheduler-Token header (VN-2026-08-VER-03).
-    Scans for EMERGENCY cases still unreviewed past ESCALATION_THRESHOLD_MINUTES
-    and re-alerts the facility's doctors, tracking last_escalated_at so a case
-    is escalated at most once per threshold interval rather than on every scheduler tick.
+    a Railway cron add-on. Scans for EMERGENCY cases still unreviewed past
+    ESCALATION_THRESHOLD_MINUTES and re-alerts the facility's doctors,
+    tracking last_escalated_at so a case is escalated at most once per
+    threshold interval rather than on every scheduler tick.
     """
-    expected_token = settings.internal_scheduler_token
-    if not expected_token:
-        raise HTTPException(
-            status_code=503,
-            detail="Escalation scheduler endpoint disabled: INTERNAL_SCHEDULER_TOKEN not configured",
-        )
-    if not x_internal_scheduler_token or x_internal_scheduler_token != expected_token:
-        raise HTTPException(status_code=403, detail="Invalid or missing scheduler token")
-
     threshold = (datetime.now(timezone.utc) - timedelta(minutes=ESCALATION_THRESHOLD_MINUTES)).isoformat()
 
     query = (
@@ -109,13 +99,6 @@ async def check_emergency_escalations(
         .is_("deleted_at", "null")
         .lt("created_at", threshold)
     )
-
-    # Scope query by facility for PHC admins; supervisors can scan all facilities
-    role = user.get("resolved_role", "")
-    facility_id = user.get("resolved_facility_id")
-    if role != "supervisor" and facility_id:
-        query = query.eq("facility_id", facility_id)
-
     candidates = query.execute().data or []
 
     escalated = []

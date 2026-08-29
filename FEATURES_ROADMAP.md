@@ -82,17 +82,33 @@ identical to production.
 
 ---
 
-### 1.2 Shared clinical-core parity and golden vectors (CI-enforced) — ✅ DONE
+### 1.2 Golden-vector Python/JS feature-engineering parity test (CI-enforced) — ✅ DONE
 
-**Status**: Implemented and superseded by the shared TypeScript migration.
-`packages/clinical-core` is now the single source of schema, feature-engineering,
-tree-evaluation, and deterministic-rules logic consumed by `apps/web` and the
-not-yet-live `apps/api`. `tools/training/export_golden_vectors.py` and the
-training CLI provide deterministic synthetic fixtures, while the package’s
-Vitest suite covers golden vectors, tree evaluation, the CLI contract, fuzz
-invariants, and hybrid conformance. The backend’s committed model artifact and
-the browser’s compact tree artifact remain generated from the same frozen
-training contract.
+**Status**: Implemented. `tools/training/export_golden_vectors.py` generates
+240 synthetic patients across all four severities and writes
+`tests/fixtures/golden_feature_vectors.json` (mirrored into
+`frontend/tests/fixtures/`); `backend/tests/test_feature_parity.py` and
+`frontend/tests/featureParity.test.mjs` both replay it, wired into
+`.github/workflows/ci.yml`'s PR and push frontend jobs alongside the existing
+tree-parity check. This immediately caught a real bug (see
+`backend/app/ml/README.md`): `buildFeatureMap()` was clamping a real age of 0
+(a newborn) up to a 40-year-old default before several age-banded risk
+checks, so newborns received adult-cardiac/obstetric scoring instead of
+pediatric-fever scoring in the offline path only — fixed by introducing a
+second age variable (`ageOrDefault`) that only substitutes on a truly-missing
+age, matching `clinical_features.py`'s own `.get('patient_age', 40)` pattern.
+
+**Why (original)**: `backend/app/ml/clinical_features.py::ClinicalFeatureEngineer` is
+hand-ported into `frontend/src/utils/triageClassifier.js::buildFeatureMap()`.
+If a future change to one is not mirrored in the other, the offline
+(browser) triage classification silently diverges from the online (server)
+classification for the same patient data — a real clinical-safety risk
+that would produce no error, no warning, just a different EMERGENCY/URGENT/
+ROUTINE result depending on whether the ASHA worker happened to be online
+or offline at submission time. This is exactly the class of bug the recent
+audit fixed once already (the previous two-model architecture had this
+problem structurally); a parity test prevents it from being reintroduced
+one feature at a time.
 
 **Why (original)**: The earlier Python/JavaScript hand-mirror could silently
 diverge when a feature changed on one side. The shared package removes that
@@ -100,16 +116,32 @@ structural duplication. The current web runtime uses the package in `hybrid`
 mode to match the live FastAPI model-primary contract; the Edge Function uses
 the same package in `rules_first` mode, but has not been cut over to production.
 
-**Current implementation**:
-1. Change clinical schema, features, rules, or tree evaluation only in
-   `packages/clinical-core/src/`.
-2. Run `pnpm --filter @vitalnet/clinical-core test`; this is the parity and
-   safety gate for the shared implementation.
-3. Build the package before consumers that import its ignored `dist/` output:
-   `pnpm --filter @vitalnet/clinical-core build`.
-4. The Python training pipeline in `tools/training/` calls `packages/clinical-core/cli.mjs`
-   for labels and engineered features. Do not create a second production
-   labeler in Python or in the web app.
+**Implementation**:
+1. Create `tools/training/export_golden_vectors.py`: generates ~200
+   diverse synthetic patients (reuse `generate_patient()` from
+   `train_classifier.py`), runs each through
+   `ClinicalFeatureEngineer.engineer_features()`, and writes
+   `backend/tests/fixtures/golden_feature_vectors.json` — a list of
+   `{ "input": {...raw patient dict...}, "features": {...45 named values...} }`.
+2. Add `backend/tests/test_feature_parity.py`: loads the golden fixture,
+   re-runs `ClinicalFeatureEngineer.engineer_features()` on each `input`,
+   and asserts the output matches the recorded `features` exactly (this
+   catches accidental Python-side regressions too, not just JS drift).
+3. Add a small Node-side test harness: `frontend/tests/featureParity.test.js`
+   (or reuse Playwright's component-testing if already configured) that
+   imports `buildFeatureMap` from `triageClassifier.js`, loads the same
+   `golden_feature_vectors.json` fixture (copy or symlink it into
+   `frontend/tests/fixtures/`), and asserts each computed feature map
+   matches the recorded Python output within a small floating-point
+   tolerance (`Math.abs(a - b) < 1e-6`).
+4. Wire both into `.github/workflows/ci.yml` as required jobs. Because
+   `buildFeatureMap` has no external dependencies (pure computation), this
+   test needs no Supabase secrets and can run fast on every PR.
+5. Document in `backend/app/ml/README.md`: "Before merging any change to
+   `clinical_features.py`, regenerate the golden fixture
+   (`python scripts/export_golden_vectors.py`) and port the equivalent
+   change to `triageClassifier.js::buildFeatureMap()` — CI will fail
+   otherwise."
 
 **Acceptance check**: A deliberate change to shared feature/rules behavior
 must fail the package’s golden, conformance, or safety tests before it can be
@@ -226,11 +258,11 @@ and deletes a subscription on a `410 Gone` response (expired subscription).
 `cases.py::submit_case` fires `push_emergency_alert` via FastAPI
 `BackgroundTasks` after a successful EMERGENCY-tier submission, so the push
 send never adds latency to the ASHA worker's response. Frontend:
-`apps/web/src/lib/push.js` (permission request + `pushManager.subscribe()` +
-POST to the backend), `apps/web/src/components/PushPrompt.jsx` (a dismissible
+`frontend/src/lib/push.js` (permission request + `pushManager.subscribe()` +
+POST to the backend), `frontend/src/components/PushPrompt.jsx` (a dismissible
 bottom-left prompt, shown once per browser via `localStorage`, mounted from
 `DoctorPanel.jsx` — never forced, since Realtime-while-open remains the
-primary channel), and `apps/web/public/sw-push.js` (the `push` /
+primary channel), and `frontend/public/sw-push.js` (the `push` /
 `notificationclick` handlers, injected into the Workbox-generated service
 worker via `workbox.importScripts` in `vite.config.js` — no `injectManifest`
 mode needed for this one script). New env vars: `VAPID_PUBLIC_KEY` /
@@ -391,8 +423,8 @@ submits the exact same wire payload (English symptom IDs) as English mode.
 ### 2.2 Voice-to-text intake assist — ✅ DONE (browser-native path)
 
 **Status**: Implemented exactly per the "ship first" browser-native path.
-`apps/web/src/hooks/useVoiceInput.js` wraps `SpeechRecognition`/
-`webkitSpeechRecognition`; `apps/web/src/components/VoiceInputButton.jsx` is
+`frontend/src/hooks/useVoiceInput.js` wraps `SpeechRecognition`/
+`webkitSpeechRecognition`; `frontend/src/components/VoiceInputButton.jsx` is
 a mic button rendering nothing on unsupported browsers (Firefox) rather than
 a dead button. Availability is gated on both feature support AND
 `navigator.onLine` (Chrome's engine calls a Google speech API and silently
@@ -611,7 +643,7 @@ triage-logic problem), and an SMS reply carrying the triage result.
 whichever backend gets chosen, `content_type`, `size_bytes`, `created_at`)
 with RLS mirroring `case_outcomes`: visible to admin/the case's facility
 doctor/the submitting ASHA worker, insert-only by the same set, immutable
-by omission (no update/delete policies). `apps/web/src/utils/
+by omission (no update/delete policies). `frontend/src/utils/
 imageCompression.js` is a real, working, vendor-independent client-side
 utility (canvas-based resize to 1024px max dimension + JPEG re-encode at
 quality 0.6) that runs before an image would ever touch IndexedDB.
@@ -973,14 +1005,14 @@ worked reference values as its test.
 **Effort**: Medium (mostly careful, well-tested formula work + a simple UI).
 
 **Implementation**:
-1. **Pure module** `apps/web/src/utils/clinicalCalculators.js` — no React, no
+1. **Pure module** `frontend/src/utils/clinicalCalculators.js` — no React, no
    network. Functions: `weightBasedDose({ mgPerKg, weightKg, maxMg })`,
    `orsVolume({ weightKg, dehydration })` (WHO Plan A/B/C), `ivDripRate(
    { volumeMl, durationMin, dropFactor })`, `pediatricMaintenanceFluid(
    weightKg)` (Holliday-Segar 4-2-1). Each returns a value **and** the
    worked steps (for transparency — a health worker should see the arithmetic,
    not just trust a black box).
-2. **A curated drug table** `apps/web/src/data/pediatricDoses.json` — a
+2. **A curated drug table** `frontend/src/data/pediatricDoses.json` — a
    *small, explicitly-scoped* list of common essential-medicine paediatric
    doses (paracetamol, ORS, zinc, amoxicillin, ...), each with a source
    citation and hard max. **Not** a general prescribing database — a

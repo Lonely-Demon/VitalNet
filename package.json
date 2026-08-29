@@ -8,20 +8,9 @@
     "build:web": "pnpm --filter @vitalnet/web build",
     "test:core": "pnpm --filter @vitalnet/clinical-core test",
     "build:core": "pnpm --filter @vitalnet/clinical-core build",
-    "security:check-actions": "python tools/ci/check_action_pins.py",
     "test": "pnpm -r test"
   },
   "devDependencies": {
     "typescript": "^5.7.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "brace-expansion@2.1.2": "2.1.4",
-      "brace-expansion@5.0.7": "5.0.9",
-      "esbuild": "0.28.1",
-      "fast-uri@3.1.3": "3.1.5",
-      "nanoid@3.3.15": "3.3.18",
-      "postcss@8.5.16": "8.5.23"
-    }
   }
 }

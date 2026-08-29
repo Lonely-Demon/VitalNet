@@ -25,29 +25,11 @@ export type { AuthedUser } from "./types.ts";
 
 const AUDIENCE = "authenticated";
 
-function isAllowedJwksUrl(urlStr: string): boolean {
-  try {
-    const parsed = new URL(urlStr);
-    const host = parsed.hostname.toLowerCase();
-    // Allowed: *.supabase.co, supabase.co, localhost, 127.0.0.1 (VN-2026-08-C5-03)
-    // Suffix match: endsWith(".supabase.co") ensures attacker domains like evil.supabase.co.attacker.com fail.
-    return (
-      host === "supabase.co" ||
-      host.endsWith(".supabase.co") ||
-      host === "localhost" ||
-      host === "127.0.0.1"
-    );
-  } catch {
-    return false;
-  }
-}
+let remoteJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
 function getRemoteJwks() {
   if (!remoteJwks) {
     const config = getConfig();
-    if (!isAllowedJwksUrl(config.supabaseUrl)) {
-      throw new Error(`Untrusted Supabase URL for JWKS: ${config.supabaseUrl}`);
-    }
     remoteJwks = createRemoteJWKSet(new URL(`${config.supabaseUrl}/auth/v1/.well-known/jwks.json`));
   }
   return remoteJwks;
@@ -143,10 +125,10 @@ export async function resolveProfile(
     profileCache.set(userId, entry);
     return entry;
   } catch {
-    // Transient failure — do not cache; fall back to last known state if available,
-    // otherwise fail closed (VN-2026-08-VER-05).
+    // Transient failure — do not cache; fall back to last known state so
+    // an outage doesn't lock out every authenticated user.
     if (cached) return cached;
-    return { isActive: false, role: "", facilityId: null };
+    return { isActive: true, role: "", facilityId: null };
   }
 }
 

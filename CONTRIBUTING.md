@@ -20,12 +20,6 @@ already shipped:
 `docs/DECISIONS.md` §9 for the full rationale and the exact recovery
 procedure if `main` and `dev` have drifted.
 
-`dev`, `test`, and `main` are long-lived environment branches. Changes to
-`dev` and `test` should normally arrive through a short-lived branch and a
-squash PR; do not force-push an environment branch or use a promotion PR to
-silently overwrite test-specific history. `main` is production and requires
-an explicitly reviewed release promotion.
-
 Both `main` and `dev` reject plain merge commits at the GitHub level —
 PRs merge via **squash or rebase only**. GitHub auto-deletes feature
 branches on merge; don't bother deleting them yourself.
@@ -49,8 +43,7 @@ independently verified — never a silent merge).
    `docs/TESTING_STRATEGY.md` for the full list) — at minimum:
    ```bash
    cd backend && ruff check . && pytest tests/ --ignore=tests/test_e2e.py -v
-   pnpm --filter @vitalnet/clinical-core test
-   pnpm --filter @vitalnet/web run build
+   cd frontend && npm run build && npm run test:parity && npm run test:feature-parity
    ```
 4. Update documentation in the same PR if your change makes any of it wrong
    — see AGENTS.md's "Keeping documentation current" section. A PR that
@@ -92,7 +85,7 @@ before pushing if you iterated a lot.
   (`tests/ --ignore=tests/test_e2e.py`) must pass. This includes the ML
   safety-property tests, admin-route authorization sweep, and the
   online/offline feature-parity check.
-- **`build-frontend-pr`** — the clinical-core build/tests and `pnpm --filter @vitalnet/web run build` must succeed.
+- **`build-frontend-pr`** — `npm run build` must succeed.
 - **CodeQL** (`Analyze (python)`, `Analyze (javascript-typescript)`,
   `Analyze (actions)`) — flags new security findings introduced by the
   diff. If you get a finding on code you're confident is safe/intentional
@@ -127,12 +120,11 @@ base branch is actually up to date before assuming something regressed.
 ## Retraining the ML model
 
 See the "Regenerating the ML classifier" section in `README.md` and
-`backend/app/ml/README.md`. The short version: build
-`@vitalnet/clinical-core` first, then run the training pipeline from
-`tools/training/`. The pipeline regenerates the frozen backend `.pkl`, the
-web `triage_trees.json`/`features_config.json`, and the golden-vector
+`backend/app/ml/README.md`. The short version: one command
+(`python scripts/train_classifier.py`) regenerates the backend `.pkl`, the
+frontend `triage_trees.json`/`features_config.json`, and the golden-vector
 fixtures together — never regenerate one without the others, and never
-hand-edit any generated artifact.
+hand-edit any of the generated artifacts.
 
 ## Questions
 

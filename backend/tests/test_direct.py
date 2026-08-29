@@ -85,9 +85,12 @@ def test_classifier_direct():
     for test_case in test_cases:
         try:
             result = predict_triage(test_case["data"])
-            # Never print the result object — evaluate the tier assertion
-            # silently to avoid CodeQL py/clear-text-logging-sensitive-data.
+
+
+            # Keep test output free of classifier results: the result object is
+            # intentionally evaluated only for its expected-tier assertion.
             if result["triage_level"] != test_case["expected"]:
+                print("FAILED: classifier result did not match the test expectation")
                 failures += 1
         except Exception:
             failures += 1

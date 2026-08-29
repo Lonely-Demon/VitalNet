@@ -40,27 +40,28 @@ graph LR
 
 ## Authentication and authorization
 
-- **Hybrid JWT verification** (`app/core/auth.py` and `apps/api/_shared/auth.ts`) — signature/`exp`/`aud`
-  verified locally on the hot path (no per-request Supabase network call).
-  Supports both legacy `HS256` shared secrets and asymmetric `RS256`/`ES256` JWKS
-  (fetched and cached in-process from Supabase JWKS endpoints with strict hostname validation).
-  Prevents network fallback overhead and rate-limit IP collisions.
+- **Hybrid JWT verification** (`app/core/auth.py`) — signature/`exp`/`aud`
+  verified locally on the hot path (no per-request Supabase network call),
+  with a network fallback for asymmetric-key projects. See
+  `docs/DECISIONS.md` §1 for the full rationale and CODEBASE_MAP.md §6 for
+  the flow diagram. **Operational note** (`docs/DECISIONS.md` §29): a
+  project using Supabase's newer ES256 JWT Signing Keys (rather than the
+  legacy HS256 shared secret) falls through to the network fallback on
+  *every* request — check which signing scheme your project uses before
+  assuming the local-verification latency win is actually being realized.
 - **Role and facility scope are never trusted from the JWT's own
   `user_metadata`** — they're re-resolved from the `profiles` table on
-  every request (cached per-user in a bounded LRU cache with short TTL).
-  A deactivated user or changed role fails closed within that window.
+  every request (cached per-user for a short TTL). A deactivated user or a
+  changed role takes effect within that window, not the full token
+  lifetime.
 - **`require_role(*roles)`** gates every authenticated route. For
   `/api/admin/*`, this is the *only* access boundary (the service-role
   client bypasses RLS entirely) — `tests/test_admin_authz.py` mechanically
   asserts every admin route carries it (`docs/DECISIONS.md` §7).
 - **Row-level authorization** on top of role checks: a `doctor` is scoped
   to their own `facility_id`, an `asha_worker` to their own submissions.
-  Enforced both in application code (`_authorize_case_row_access()`, `_authorize_dsr_access()`)
-  and by Postgres RLS — two independent layers, not one.
-- **Shared-device session isolation** (`apps/web`): offline outbox payloads are encrypted
-  at rest using an ephemeral AES-256-GCM session key stored in `sessionStorage`.
-  On logout, `sessionStorage` is cleared, preventing subsequent workers from inspecting
-  un-synced PHI in IndexedDB.
+  Enforced both in application code (`_authorize_case_row_access()`) and by
+  Postgres RLS — two independent layers, not one.
 
 ## Data protection
 
@@ -68,15 +69,12 @@ graph LR
   Policies are version-controlled in `backend/supabase/migrations/` — never
   edit them via the Supabase dashboard UI without immediately committing an
   equivalent migration.
-- **Submitter column protection** (`protect_case_records_clinical_columns` trigger) prevents
-  an ASHA worker or client from mutating clinical, vital, or patient identity fields after initial creation.
-- **Append-only audit and review trails**: `case_reviews` is protected by database triggers
-  rejecting `UPDATE` and `DELETE` operations.
 - **PHI audit logging** (`app/core/audit.py::log_phi_access`) records every
   create/read/update/export of patient data (event type, user, role,
-  resource, facility, IP parsed safely via `trusted_proxy_ips`, correlation id)
-  to both a structured logger and the `phi_audit_log` table — visible to admins at `GET /api/admin/audit-log`.
-  Patient free-text and vitals are never themselves logged — only coarse identifiers.
+  resource, facility, IP, correlation id) to both a structured logger and
+  the `phi_audit_log` table — visible to admins at `GET /api/admin/audit-log`.
+  Patient free-text and vitals are never themselves logged — only coarse
+  identifiers.
 - **Consent capture** (`IntakeForm.consent_captured`) is enforced
   server-side, not just as a UI gate — a submission without explicit
   consent is rejected regardless of what the client sends.
@@ -93,10 +91,7 @@ graph LR
 - Free-text fields are control-character-stripped server-side
   (`schemas.py`'s validators) and again before reaching the LLM prompt
   (`app/services/llm.py::_sanitize_field`) — resists both storage-layer
-  smuggling and prompt injection.
-- LLM patient summaries (`generate_patient_summary`) strictly interpolate curated
-  tier-specific phrasings and pre-approved action items rather than concatenating
-  untrusted free-text briefing fields (`docs/DECISIONS.md` §44).
+  smuggling and prompt injection into the briefing generator.
 - Validation errors are scrubbed before logging or returning to the client
   (`main.py::_scrub_validation_errors`) — Pydantic v2's error objects
   include the offending `input` value, which for this API is often patient
@@ -124,35 +119,37 @@ graph LR
   `Content-Security-Policy`, and `Strict-Transport-Security` outside local
   development.
 - **Rate limiting** (`slowapi`) is keyed on the cryptographically *verified*
-  JWT `sub` (via local HS256 or remote JWKS), not forgeable headers.
-  Client IP extraction utilizes right-to-left `X-Forwarded-For` traversal with
-  `trusted_proxy_ips` allowlisting. Storage is in-memory per-process by default;
-  set `RATE_LIMIT_STORAGE_URI` (Redis) for horizontally-scaled deployments.
+  JWT `sub`, not client IP or a forgeable claim — see `docs/DECISIONS.md`
+  §8 for why. Storage is in-memory per-process by default; set
+  `RATE_LIMIT_STORAGE_URI` (Redis) for horizontally-scaled deployments,
+  otherwise the limit isn't shared across instances.
 - **Response compression** (GZip) and **HSTS** are applied at the
   middleware layer; HSTS is skipped in local development so it doesn't
   break `http://localhost` workflows.
 
 ## Dependency management
 
-- Every remote GitHub Action in `.github/workflows/` is pinned to a full commit SHA. The `action-pins` pull-request job runs `tools/ci/check_action_pins.py` and fails if a mutable tag, branch, or short SHA is introduced.
-- The root `package.json` contains narrowly scoped pnpm overrides for the audited transitive versions of `brace-expansion`, `esbuild`, `fast-uri`, `nanoid`, and `postcss`; the committed lockfile is regenerated with the same pnpm major version used by CI. A fresh `pnpm audit` must report zero known npm advisories for the locked graph.
 - `.github/dependabot.yml` opens daily update PRs for pip/npm/GitHub
   Actions dependencies, targeting `dev`. The npm entry points at the repo
   root, so the single `pnpm-lock.yaml` there covers both `apps/web` and
-  `packages/clinical-core`.
-- `apps/api` (Deno/Hono) is monitored and audited weekly via `.github/workflows/deno-deps-audit.yml`.
-- All third-party GitHub Actions are pinned to exact verified commit SHAs (`pnpm/action-setup`, `actions/checkout`, etc.).
+  `packages/clinical-core`. **Known gap:** `apps/api` (Deno/Hono) is not
+  covered — Deno is not a supported Dependabot ecosystem, so its
+  dependencies (`deno.lock`) need a manual review cadence or a Renovate
+  config. Its `deno.json` pins jsr/npm specifiers with caret ranges and
+  `deno.lock` records integrity hashes, so an unexpected version change is at
+  least detectable at install time.
 - `scikit-learn` and `shap` are pinned to **exact** versions (not `>=`) —
   bumping either requires retraining and committing new model artifacts in
-  the same change (see `AGENTS.md` and `backend/app/ml/README.md`).
-- ML model loading performs SHA-256 content verification and optional HMAC deploy signature verification (`VITALNET_MODEL_SIGNING_KEY`).
+  the same change (see `AGENTS.md` and `backend/app/ml/README.md`). This is
+  a correctness constraint (unpickling compatibility), not a security one,
+  but it means dependency bumps to those two packages can't be
+  auto-merged blindly.
 - CodeQL (GitHub Advanced Security) runs on every PR across Python,
   JS/TypeScript, and GitHub Actions workflows. Suppress a reviewed/accepted
   finding with an inline `# codeql[query-id]` comment on the exact flagged
   line, with a rationale comment — see `docs/DECISIONS.md` §13 for the
   correct (current) suppression syntax; the legacy `lgtm[query-id]` syntax
   is silently ignored by GitHub's current default CodeQL setup.
-- The frontend CycloneDX CLI used by the SBOM job is pinned to an exact package version rather than `latest`. The SBOM is retained as a build artifact and is not treated as clinical evidence.
 - **Software Bill of Materials (SBOM):** the `sbom` CI job (push-only)
   generates a CycloneDX SBOM for both the backend (`cyclonedx-py
   requirements backend/requirements.txt`) and frontend
@@ -160,13 +157,6 @@ graph LR
   chain transparency and a machine-readable dependency inventory for
   correlating against a future CVE disclosure. It's a diagnostic artifact,
   not a merge gate: it only fails if the SBOM tooling itself breaks.
-
-## Data and artifact safety controls
-
-- Offline queue migration is fail-closed for legacy rows without an owner identity. Such rows become aggregate-only `recovery_required` records and can never be submitted under a later worker's session.
-- The web client exposes only aggregate counts for ownerless recovery rows. Authenticated workers receive explicit cleanup actions for legacy recovery rows and for their own pending rows older than seven days; neither cleanup runs automatically, and newer or other-worker rows are preserved.
-- Candidate retraining verifies the SHA-256 of the frozen production model before comparing it with a candidate. A mismatch aborts the comparison, and candidate output is written to a separate artifact path.
-- Externally sourced KTAS XLSX workbooks are parsed with `defusedxml` at the OpenXML boundary. This is evaluation-only tooling and is intentionally excluded from the production API dependency set.
 
 ## Known limitations (accepted, not oversights)
 
@@ -191,10 +181,6 @@ graph LR
 
 `docs/security-audits/` contains a historical red-team audit trail (dated
 folders) — a read-only historical record. Findings there reflect the state
-of the code *at the time of that audit*.
-- **2026-08 Recursive Security Audit** (`docs/security-audits/2026-08-recursive-audit/`):
-  Comprehensive audit that identified 33 valid security, authorization, clinical safety,
-  and supply chain findings. All 33 findings were systematically remediated across
-  7 phases (`phase42`–`phase47` database migrations, PALS clinical safety overhaul,
-  outbox AES-GCM encryption, JWKS verification, and GitHub Action SHA pinning).
-  See `docs/DECISIONS.md` §44 for full architectural details.
+of the code *at the time of that audit*; cross-check against current code
+and `docs/DECISIONS.md` before assuming a historical finding still applies
+or still needs the originally-recommended fix.

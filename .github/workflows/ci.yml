@@ -103,9 +103,9 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
         with:
-          version: '9'
+          version: '10'
       - name: Install workspace deps (no install scripts)
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: clinical-core tests
@@ -142,9 +142,9 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
         with:
-          version: '9'
+          version: '10'
       - name: Install workspace deps (no install scripts)
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Build clinical-core (workspace dependency, not auto-built by --ignore-scripts)
@@ -213,9 +213,9 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
         with:
-          version: '9'
+          version: '10'
       - name: Install workspace deps (no install scripts)
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: clinical-core tests
@@ -246,9 +246,9 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '20'
-      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+      - uses: pnpm/action-setup@v4  # TODO: pin to a verified commit SHA to match this repo's other actions (see docs/SECURITY.md "Dependency management")
         with:
-          version: '9'
+          version: '10'
       - name: Generate backend SBOM (CycloneDX)
         run: |
           python -m pip install --upgrade pip
@@ -257,7 +257,7 @@ jobs:
       - name: Install workspace deps (needed for an accurate SBOM)
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Generate frontend SBOM (CycloneDX)
-        run: npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --output-file ../../frontend-sbom.json --ignore-npm-errors
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file ../../frontend-sbom.json --ignore-npm-errors
         working-directory: apps/web
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:

@@ -99,7 +99,8 @@ model → NEWS2 floor) and the LLM briefing generator, then upserts.
   - `consent_captured` (bool, **must be true or the request is rejected**),
     `consent_captured_at`.
   - `patient_key` (optional, format `XXXX-XXXX`, unambiguous alphabet
-    excluding 0/O/1/I/L) — opaque patient continuity key, generated client-side (`apps/web/src/utils/patientKey.js`); see `GET
+    excluding 0/O/1/I/L) — opaque patient continuity key, generated
+    client-side (`frontend/src/utils/patientKey.js`); see `GET
     /api/cases/by-patient-key/{key}` below.
 - **Response `200`**: the created/existing `case_records` row (includes
   `triage_level`, `triage_confidence`, `risk_driver`, `id`, `created_at`,
@@ -397,11 +398,9 @@ primary channel regardless.
 ### `POST /check-emergency-escalations` — 6/min — `admin`
 Idempotent, meant to be invoked on a schedule by an **external** scheduler
 (cron / Supabase `pg_cron` / a Railway cron add-on — there is no in-process
-scheduler in this backend). Requires `X-Internal-Scheduler-Token` header matching
-`INTERNAL_SCHEDULER_TOKEN` (`503` if token is unconfigured, `403` if invalid).
-Scoped strictly to the caller's facility (or global for super_admin).
-Re-alerts a facility's doctors for any EMERGENCY case still unreviewed past 15 minutes,
-tracking `last_escalated_at` so a case is escalated at most once per threshold window.
+scheduler in this backend). Re-alerts a facility's doctors for any EMERGENCY
+case still unreviewed past 15 minutes, tracking `last_escalated_at` so a
+case is escalated at most once per threshold window.
 **Response**: `{ checked, escalated }`.
 
 ---
@@ -454,33 +453,30 @@ DPDP Act 2023 data-principal rights (`docs/COMPLIANCE_DPDP.md`). Admin-only
 and scoped to a single `case_id` — VitalNet has no cross-visit patient
 identifier (`docs/DECISIONS.md` §6), so locating every case for one
 real-world patient is a manual admin-search step, not something these
-endpoints automate. Scoped strictly to cases belonging to the admin's own
-facility (`403` Forbidden on cross-tenant IDOR attempts, `docs/DECISIONS.md` §44).
+endpoints automate.
 
 ### `GET /{case_id}/export` — 10/min — `admin`
-Right to access. Requires the target case to belong to caller's facility.
-Returns `{ case_id, exported_at, case, outcomes, attachments, referrals }`
-— every row across `case_records`, `case_outcomes`, `case_attachments`,
-and `referrals` tied to that case. Not filtered on `deleted_at` — applies
-regardless of soft-delete state. Audit-logged as `PHI_EXPORT`.
+Right to access. Returns `{ case_id, exported_at, case, outcomes,
+attachments, referrals }` — every row across `case_records`,
+`case_outcomes`, `case_attachments`, and `referrals` tied to that case.
+Not filtered on `deleted_at` — applies regardless of soft-delete state.
+Audit-logged as `PHI_EXPORT`.
 
 ### `POST /{case_id}/erase` — 10/min — `admin`
-Right to erasure. Requires the target case to belong to caller's facility.
-Redacts `case_records`' identifying free-text fields (`patient_name`,
-`patient_location`, `chief_complaint`, `observations`, `known_conditions`,
-`current_medications`) and `referrals.reason` to a fixed marker, and soft-deletes
-the case if not already. Vitals, symptoms, triage output, and timestamps are
-preserved (de-identified clinical signal). `case_outcomes` is never touched —
-it's immutable-by-design and carries no direct identifier.
-**Response**: `{ status: "erased", case_id, redacted_fields }`.
-Audit-logged as `PHI_ERASURE`.
+Right to erasure. Redacts `case_records`' identifying free-text fields
+(`patient_name`, `patient_location`, `chief_complaint`, `observations`,
+`known_conditions`, `current_medications`) and `referrals.reason` to a
+fixed marker, and soft-deletes the case if not already. Vitals, symptoms,
+triage output, and timestamps are preserved (de-identified clinical
+signal). `case_outcomes` is never touched — it's immutable-by-design and
+carries no direct identifier. **Response**: `{ status: "erased", case_id,
+redacted_fields }`. Audit-logged as `PHI_ERASURE`.
 
 ### `POST /purge-expired` — 6/min — `admin`
 Retention-policy sweep, meant to be invoked on a schedule by an external
 scheduler — same pattern as `POST /api/push/check-emergency-escalations`.
-When called by a PHC admin, only purges expired cases belonging to the caller's
-facility. Applies the same redaction as `/erase` to every not-yet-redacted case
-older than `settings.data_retention_days`. No-op (`{ enabled: false, purged: 0 }`)
+Applies the same redaction as `/erase` to every not-yet-redacted case older
+than `settings.data_retention_days`. No-op (`{ enabled: false, purged: 0 }`)
 when `data_retention_days` is `0`, the default. **Response**: `{ enabled,
 checked, purged }`.
 

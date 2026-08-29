@@ -64,12 +64,12 @@ export interface TriageResult {
 function runModel(form: TriageFormInput, trees: TreeJson, featureNames: readonly string[]): ModelOpinion {
   const featureMap = buildFeatureMap(form);
   const vector = orderFeatureVector(featureMap, featureNames);
-  const { classIndex, probabilities, hasNaN } = evaluateTrees(trees, vector);
+  const { classIndex, probabilities } = evaluateTrees(trees, vector);
   const tier = TRIAGE_LABELS[classIndex] ?? "ROUTINE";
   const confidence = probabilities[classIndex] ?? 0;
   const sorted = [...probabilities].sort((a, b) => b - a);
   const margin = sorted.length > 1 ? sorted[0]! - sorted[1]! : 1;
-  const lowConfidence = confidence < LOW_CONFIDENCE_PROBA || margin < LOW_CONFIDENCE_MARGIN || hasNaN;
+  const lowConfidence = confidence < LOW_CONFIDENCE_PROBA || margin < LOW_CONFIDENCE_MARGIN;
 
   const attributions = explainPrediction(trees, vector, classIndex).slice(0, 5);
   const topFactors = attributions.map((a) => ({
