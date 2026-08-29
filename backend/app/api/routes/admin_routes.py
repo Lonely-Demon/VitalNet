@@ -122,10 +122,16 @@ async def list_users(
         .execute()
     )
     profile_rows = profiles_result.data or []
-    profiles_by_id = {p['id']: p for p in profile_rows}
+    profiles_by_id = {str(p['id']): p for p in profile_rows}
 
-    auth_users = supabase_admin.auth.admin.list_users(page=page, per_page=limit)
-    auth_users = [au for au in auth_users if str(au.id) in profiles_by_id]
+    auth_users = []
+    for pid in profiles_by_id.keys():
+        try:
+            res = supabase_admin.auth.admin.get_user_by_id(pid)
+            if res and getattr(res, 'user', None):
+                auth_users.append(res.user)
+        except Exception:
+            pass  # User may have been removed from auth while profile row remains
 
     result = []
     for au in auth_users:

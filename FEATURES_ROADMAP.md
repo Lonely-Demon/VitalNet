@@ -110,7 +110,11 @@ audit fixed once already (the previous two-model architecture had this
 problem structurally); a parity test prevents it from being reintroduced
 one feature at a time.
 
-**Effort**: Small.
+**Why (original)**: The earlier Python/JavaScript hand-mirror could silently
+diverge when a feature changed on one side. The shared package removes that
+structural duplication. The current web runtime uses the package in `hybrid`
+mode to match the live FastAPI model-primary contract; the Edge Function uses
+the same package in `rules_first` mode, but has not been cut over to production.
 
 **Implementation**:
 1. Create `tools/training/export_golden_vectors.py`: generates ~200
@@ -139,9 +143,10 @@ one feature at a time.
    change to `triageClassifier.js::buildFeatureMap()` — CI will fail
    otherwise."
 
-**Acceptance check**: Deliberately introduce a one-line discrepancy between
-the Python and JS feature engineering in a scratch branch; confirm CI fails
-on it.
+**Acceptance check**: A deliberate change to shared feature/rules behavior
+must fail the package’s golden, conformance, or safety tests before it can be
+merged. Clinical-rule changes also require the review gates in
+`docs/CLINICAL_REVIEW.md`.
 
 ---
 
@@ -200,7 +205,7 @@ periodic — not real-time — retraining job).
    shown only after a case is marked reviewed. A small form (severity
    dropdown pre-filled with the ML's original triage_level as the default,
    disposition dropdown, notes textarea) posting to the new endpoint via a
-   new `recordCaseOutcome()` wrapper in `frontend/src/api/cases.js`.
+   new `recordCaseOutcome()` wrapper in `apps/web/src/api/cases.js`.
 4. **Retraining pipeline** (NOT real-time, NOT automatic — a human-gated
    periodic job, given the safety stakes): a new script
    `tools/training/retrain_from_outcomes.py` that:
@@ -293,7 +298,7 @@ the service worker infrastructure to hang this off of).
    null) using `pywebpush`. Do this as an `asyncio` background task
    (`BackgroundTasks` from FastAPI) so it never adds latency to the
    ASHA worker's submission response.
-4. **Frontend**: add a `frontend/src/lib/push.js` helper: requests
+4. **Frontend**: add a `apps/web/src/lib/push.js` helper: requests
    Notification permission, subscribes via
    `registration.pushManager.subscribe({ userVisibleOnly: true,
    applicationServerKey: VITE_VAPID_PUBLIC_KEY })`, posts the subscription
@@ -390,10 +395,10 @@ triage context.
 **Effort**: Medium (mechanical but touches every form/panel).
 
 **Implementation**:
-1. Add `react-i18next` + `i18next` to `frontend/package.json`.
+1. Add `react-i18next` + `i18next` to `apps/web/package.json`.
 2. Extract all user-facing strings from `IntakeForm.jsx`, `Dashboard.jsx`,
    `panels/*.jsx`, `components/*.jsx` into
-   `frontend/src/locales/en.json`, then produce `hi.json` (Hindi),
+   `apps/web/src/locales/en.json`, then produce `hi.json` (Hindi),
    `ta.json` (Tamil) as the first two targets given the Tamil Nadu default
    — professionally reviewed translations for clinical terminology are
    important here; do not machine-translate symptom/complaint labels

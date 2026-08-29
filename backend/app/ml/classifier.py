@@ -20,8 +20,12 @@ attributions for the model's own predictions, translated into clinically
 readable language. The safety-net path reports its own deterministic
 reason instead (SHAP does not apply — it did not run).
 """
+import hashlib
+import hmac
 import logging
+import os
 import pickle
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -32,14 +36,21 @@ from app.ml.contraindications import check_contraindications
 logger = logging.getLogger("vitalnet")
 
 PKL_PATH = Path(__file__).parent / "models" / "triage_classifier.pkl"
+_PKL_HASH_PATH = PKL_PATH.with_suffix(".pkl.sha256")
 
 # Global classifier state — populated once at startup by load_classifier()
 _classifier = None
 _explainer = None
 _feature_names: list[str] = []
 _label_map: Dict[int, str] = {}
-_model_version: str = ""
+_model_version: str = "unknown"
 _performance_metrics: Dict[str, Any] = {}
+
+# Thread pool for bounded SHAP computation (VN-2026-08-C7-02).
+# Best-effort timeout: SHAP's C extensions may hold the GIL during heavy
+# tree traversal, in which case the timeout fires when the GIL is next released.
+_shap_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shap")
+SHAP_TIMEOUT_S = 0.1  # 100ms
 
 # Feature engineer singleton — built once, reused for every prediction
 # (constructing it per request was pure allocation churn on the triage hot path).
@@ -138,6 +149,44 @@ FEATURE_LABELS = {
 }
 
 
+def _verify_model_integrity() -> None:
+    """
+    Two-layer integrity check (VN-2026-08-C7-01):
+      1. Content hash (tamper-evidence): sha256(pkl) must match committed .sha256 file
+      2. Signature (authenticity): HMAC(signing_key, content_hash) must match
+         — only verifiable when VITALNET_MODEL_SIGNING_KEY is set (deploy env)
+    """
+    if not _PKL_HASH_PATH.exists():
+        logger.warning("Model hash file not found at %s — skipping integrity verification", _PKL_HASH_PATH)
+        return
+    expected_hash = _PKL_HASH_PATH.read_text().strip().split()[0]
+    sha256 = hashlib.sha256()
+    with open(PKL_PATH, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    actual_hash = sha256.hexdigest()
+    if not hmac.compare_digest(actual_hash, expected_hash):
+        raise RuntimeError(
+            f"Model content hash mismatch: expected {expected_hash[:16]}..., "
+            f"got {actual_hash[:16]}... — model file may be tampered."
+        )
+
+    signing_key = os.environ.get("VITALNET_MODEL_SIGNING_KEY")
+    if signing_key:
+        sig_path = PKL_PATH.with_suffix(".pkl.sig")
+        if not sig_path.exists():
+            raise RuntimeError(f"Model signature file not found at {sig_path}")
+        expected_sig = sig_path.read_text().strip()
+        actual_sig = hmac.new(
+            signing_key.encode(), actual_hash.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(actual_sig, expected_sig):
+            raise RuntimeError("Model signature verification failed — signing key mismatch")
+        logger.info("Model integrity verified (content hash + deploy signature)")
+    else:
+        logger.info("Model content hash verified (%s...)", actual_hash[:12])
+
+
 def load_classifier() -> bool:
     """
     Load the unified triage classifier bundle (classifier + SHAP explainer).
@@ -151,6 +200,8 @@ def load_classifier() -> bool:
             f"Triage classifier not found at {PKL_PATH}. "
             "Run tools/training/train_classifier.py to generate it."
         )
+
+    _verify_model_integrity()
 
     try:
         with open(PKL_PATH, "rb") as f:
@@ -183,11 +234,51 @@ def load_classifier() -> bool:
         ) from e
 
 
+def _hr_emergency_bounds(age_years: Optional[float]) -> tuple[int, int]:
+    if age_years is None:
+        return (35, 170)
+    if age_years < 0.25:
+        return (30, 220)
+    if age_years < 1:
+        return (30, 200)
+    if age_years < 3:
+        return (30, 180)
+    if age_years < 5:
+        return (30, 170)
+    if age_years < 12:
+        return (30, 160)
+    if age_years < 18:
+        return (35, 150)
+    return (35, 170)
+
+
+def _bp_emergency_bounds(age_years: Optional[float]) -> tuple[int, int]:
+    if age_years is None:
+        return (90, 220)
+    if age_years < 0.08:
+        return (60, 220)
+    if age_years < 1:
+        return (70, 220)
+    if age_years < 5:
+        return (75, 220)
+    if age_years < 10:
+        return (80, 220)
+    if age_years < 18:
+        return (85, 220)
+    return (90, 220)
+
+
+def _temp_emergency_bounds(age_years: Optional[float]) -> tuple[float, float]:
+    if age_years is not None and age_years < 5:
+        return (33.0, 41.0)
+    return (33.0, 41.5)
+
+
 def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
     """
     Deterministic escalation for unambiguous, extreme presentations.
-    Mirrors the label-generation override in train_classifier.py so
-    training-time and inference-time safety guarantees stay aligned.
+    Mirrors the label-generation override in packages/clinical-core
+    so training-time and inference-time safety guarantees stay aligned (VN-2026-08-C6-01).
     Returns a human-readable reason string if triggered, else None.
     """
     symptoms = set(form_data.get("symptoms") or [])
@@ -206,12 +297,16 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
         return f"Critically low oxygen saturation ({spo2}%)"
 
     hr = form_data.get("heart_rate")
-    if hr is not None and (hr < 35 or hr > 170):
-        return f"Extreme heart rate ({hr} bpm)"
+    if hr is not None:
+        hr_low, hr_high = _hr_emergency_bounds(age)
+        if hr < hr_low or hr > hr_high:
+            return f"Extreme heart rate ({hr} bpm)"
 
     bp_sys = form_data.get("bp_systolic")
-    if bp_sys is not None and (bp_sys < 70 or bp_sys > 220):
-        return f"Extreme systolic blood pressure ({bp_sys} mmHg)"
+    if bp_sys is not None:
+        bp_low, bp_high = _bp_emergency_bounds(age)
+        if bp_sys < bp_low or bp_sys > bp_high:
+            return f"Extreme systolic blood pressure ({bp_sys} mmHg)"
 
     if bp_sys is not None and bp_sys >= 180:
         neuro_hit = symptoms & {
@@ -224,8 +319,26 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
                 f"symptom(s): {readable} — possible hypertensive encephalopathy/stroke"
             )
 
-    if temp is not None and (temp > 41.5 or temp < 33.0):
-        return f"Extreme body temperature ({temp}°C)"
+    if temp is not None:
+        temp_low, temp_high = _temp_emergency_bounds(age)
+        if temp < temp_low or temp > temp_high:
+            return f"Extreme body temperature ({temp}°C)"
+
+    if form_data.get("is_pregnant"):
+        bp_dia = form_data.get("bp_diastolic")
+        if bp_sys is not None and bp_dia is not None:
+            if bp_sys >= 160 or bp_dia >= 110:
+                return (
+                    f"Severe hypertension in pregnancy (BP {bp_sys}/{bp_dia} mmHg) "
+                    f"— possible severe preeclampsia"
+                )
+            preeclampsia_hit = symptoms & PREECLAMPSIA_SEVERE_SYMPTOMS
+            if (bp_sys >= 140 or bp_dia >= 90) and preeclampsia_hit:
+                readable = _readable(preeclampsia_hit)
+                return (
+                    f"Hypertension in pregnancy (BP {bp_sys}/{bp_dia} mmHg) with severe "
+                    f"feature(s): {readable} — possible preeclampsia with severe features"
+                )
 
     if form_data.get("is_pregnant"):
         bp_dia = form_data.get("bp_diastolic")
@@ -328,6 +441,19 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _compute_shap_with_timeout(feature_vector: np.ndarray) -> Optional[np.ndarray]:
+    """Run SHAP in bounded thread (VN-2026-08-C7-02). Best-effort on GIL-holding C extensions."""
+    try:
+        future = _shap_executor.submit(_explainer.shap_values, feature_vector)
+        return future.result(timeout=SHAP_TIMEOUT_S)
+    except FuturesTimeout:
+        logger.warning("SHAP computation timed out after %sms", int(SHAP_TIMEOUT_S * 1000))
+        return None
+    except Exception as e:
+        logger.warning("SHAP computation failed: %s", e)
+        return None
+
+
 def _generate_shap_explanation(
     feature_vector: np.ndarray, predicted_class: int, triage_level: str, form_data: Dict[str, Any]
 ) -> str:
@@ -338,7 +464,10 @@ def _generate_shap_explanation(
     quality must never block a triage result from being returned.
     """
     try:
-        shap_values = _explainer.shap_values(feature_vector)  # shape: (1, n_features, n_classes)
+        shap_values = _compute_shap_with_timeout(feature_vector)
+        if shap_values is None:
+            return f"Clinical analysis classified this case as {triage_level}."
+
         contributions = shap_values[0, :, predicted_class]
 
         ranked = sorted(

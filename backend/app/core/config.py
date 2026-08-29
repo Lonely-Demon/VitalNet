@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # add an allowed origin via env without a code change.
     cors_allowed_origins: str = ""
 
-    environment: Literal["development", "staging", "production"] = "development"
+    environment: Literal["development", "staging", "production"] = "production"
 
     # ── Auth (hybrid verification) ────────────────────────────────────────────
     # When True, verify the JWT signature/exp/aud LOCALLY (HS256) on the request
@@ -37,12 +37,20 @@ class Settings(BaseSettings):
     # (~1h). Set low for tighter revocation, higher for less DB load.
     revocation_recheck_seconds: int = 300
 
-    # ── Rate limiting ─────────────────────────────────────────────────────────
+    # ── Rate limiting & Proxies ───────────────────────────────────────────────
     # slowapi storage backend. Empty = in-memory (per-process, resets on restart,
     # NOT shared across horizontally-scaled instances). Set to a shared store
     # (e.g. "redis://host:6379") in production multi-instance deployments so the
     # limit is enforced globally. See CODEBASE_MAP.md.
     rate_limit_storage_uri: str = ""
+    # Comma-separated list of trusted reverse proxy IP addresses (e.g. "127.0.0.1,10.0.0.1").
+    # When set, get_client_ip() parses X-Forwarded-For right-to-left, ignoring hops downstream
+    # of trusted proxies to prevent IP spoofing in audit logs (VN-2026-08-C9-01).
+    trusted_proxy_ips: str = ""
+
+    # Paediatric advisory calculations remain disabled until qualified clinical
+    # governance authorizes them. Capture fields are additive and independent.
+    paediatric_advisory_enabled: bool = False
 
     # Paediatric advisory calculations remain disabled until qualified clinical
     # governance authorizes them. Capture fields are additive and independent.
