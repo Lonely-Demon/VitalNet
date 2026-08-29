@@ -34,10 +34,21 @@ jobs:
           PREPROD_BACKEND_HEALTH_URL: https://vitalnet-preprod-api.onrender.com
         run: |
           set -eu
-          status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 90 \
-            "$PREPROD_BACKEND_HEALTH_URL/api/health")
-          echo "Preproduction backend /api/health responded HTTP $status"
-          if [ "$status" -lt 200 ] || [ "$status" -ge 400 ]; then
-            echo "::error::Preproduction backend health check failed (HTTP $status)"
-            exit 1
-          fi
+          for attempt in 1 2 3; do
+            status=$(curl -sS -o /dev/null -w "%{http_code}" \
+              --connect-timeout 10 --max-time 30 \
+              "$PREPROD_BACKEND_HEALTH_URL/api/health") || status="000"
+            echo "Preproduction backend /api/health attempt $attempt responded HTTP $status"
+
+            # Any HTTP response below 500 proves the service is reachable.
+            if [ "$status" -ge 200 ] && [ "$status" -lt 400 ]; then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              sleep 5
+            fi
+          done
+
+          echo "::error::Preproduction backend health check failed after 3 attempts (last HTTP $status)"
+          exit 1
