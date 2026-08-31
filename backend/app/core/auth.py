@@ -32,7 +32,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import httpx
 from fastapi import Depends, Header, HTTPException, status
