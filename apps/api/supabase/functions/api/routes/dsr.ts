@@ -7,7 +7,7 @@
 // this is a legitimate admin-only exception, not a narrow-aggregate one
 // (see _shared/database.ts's header).
 import { Hono } from "hono";
-import { requireRole, type AuthedUser } from "../_shared/auth.ts";
+import { type AuthedUser, requireRole } from "../_shared/auth.ts";
 import { rateLimit } from "../_shared/rateLimit.ts";
 import { getSupabaseAdmin, HttpError } from "../_shared/database.ts";
 import { getConfig } from "../_shared/config.ts";
