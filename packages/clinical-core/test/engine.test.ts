@@ -158,11 +158,42 @@ describe("hypertensive_neuro_emergency_aggregate is unreachable (redundant with 
     });
   }
 
-  it("BP 185 + altered_consciousness fires the earlier critical-symptom override instead", () => {
+  it("BP 185 + altered_consciousness fires the earlier critical-symptom override (composite rule)", () => {
     const r = assignTier(withCase({ bp_systolic: 185, symptoms: ["altered_consciousness"] }));
     expect(r.tier).toBe("EMERGENCY");
     const firedIds = r.firedRules.map((f) => f.id);
-    expect(firedIds).toContain("critical_symptom_override");
+    expect(firedIds.some((id) => id.includes("critical_symptom_override"))).toBe(true);
     expect(firedIds).not.toContain("hypertensive_neuro_emergency_aggregate");
+  });
+
+  it("multiple overrides fire together with composite ID (VN-2026-08-C6-02)", () => {
+    const r = assignTier(withCase({ heart_rate: 190, bp_systolic: 230, symptoms: ["altered_consciousness"] }));
+    expect(r.tier).toBe("EMERGENCY");
+    expect(r.firedRules.length).toBe(1);
+    expect(r.firedRules[0]!.id).toBe("critical_symptom_override+extreme_hr+extreme_bp+hypertensive_neuro_emergency");
+  });
+
+  describe("PALS-aligned vital threshold age bands (VN-2026-08-C6-01)", () => {
+    it("infant (0.5yr) with HR 175 is NOT extreme HR override", () => {
+      const r = assignTier(withCase({ patient_age: 0.5, heart_rate: 175 }));
+      expect(r.firedRules.some((f) => f.id.includes("extreme_hr"))).toBe(false);
+    });
+
+    it("toddler (2yr) with HR 185 IS extreme HR override", () => {
+      const r = assignTier(withCase({ patient_age: 2, heart_rate: 185 }));
+      expect(r.tier).toBe("EMERGENCY");
+      expect(r.firedRules.some((f) => f.id.includes("extreme_hr"))).toBe(true);
+    });
+
+    it("10-year-old with SBP 85 is NOT extreme hypotension", () => {
+      const r = assignTier(withCase({ patient_age: 10, bp_systolic: 85 }));
+      expect(r.firedRules.some((f) => f.id.includes("extreme_bp"))).toBe(false);
+    });
+
+    it("10-year-old with SBP 75 IS extreme hypotension (PALS 5th percentile is 80)", () => {
+      const r = assignTier(withCase({ patient_age: 10, bp_systolic: 75 }));
+      expect(r.tier).toBe("EMERGENCY");
+      expect(r.firedRules.some((f) => f.id.includes("extreme_bp"))).toBe(true);
+    });
   });
 });

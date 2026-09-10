@@ -30,10 +30,20 @@ const EDGE_BASE = import.meta.env.VITE_EDGE_API_BASE_URL || ''
 
 // One key per ported endpoint. Flip 'legacy' -> 'edge' to cut over.
 const ENDPOINT_BACKEND = {
-  'health': 'legacy',
-  'outbreak.signals': 'legacy',
+  // ── Tranche A (Read-only / Safe / Diagnostics) ─────────────────────────
+  'health': 'edge',
+  'outbreak.signals': 'edge',
+  // referrals.listFacilities: GET /api/facilities ported to edge (apps/api/supabase/functions/api/routes/referral.ts);
+  // executes fn_open_case_counts via caller's RLS client and merges open_case_count identically to legacy.
+  'referrals.listFacilities': 'edge',
+
+  // Retained on legacy:
+  // - 'metrics': Scraped directly by Prometheus; Python backend in-process counters
+  //   (triage classifications, LLM cost) are preserved without data loss.
+  // - 'supervisor.teamMetrics': Calls fn_team_metrics (SECURITY DEFINER RPC); held on
+  //   legacy pending edge RPC contract conformance verification.
+  // - 'protocol.*': LLM guideline Q&A with curation.
   'supervisor.teamMetrics': 'legacy',
-  'referrals.listFacilities': 'legacy',
   'referrals.list': 'legacy',
   'metrics': 'legacy',
   'protocol.listQuestions': 'legacy',

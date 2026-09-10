@@ -8,6 +8,7 @@
 import type { Context, Next } from "hono";
 import { getSupabaseAnon } from "./database.ts";
 import { verifiedSubForRateLimit } from "./auth.ts";
+import { getClientIp } from "./audit.ts";
 
 async function rateLimitKey(c: Context): Promise<string> {
   const auth = c.req.header("authorization");
@@ -19,9 +20,7 @@ async function rateLimitKey(c: Context): Promise<string> {
       if (sub) return `user:${sub}`;
     }
   }
-  const forwardedFor = c.req.header("x-forwarded-for");
-  const ip = forwardedFor?.split(",")[0]?.trim() || c.req.header("x-real-ip") || "unknown";
-  return `ip:${ip}`;
+  return `ip:${getClientIp(c)}`;
 }
 
 /** Hono middleware factory. Usage: app.get("/api/x", rateLimit(60, 60), handler) */
@@ -36,11 +35,12 @@ export function rateLimit(max: number, windowSeconds: number) {
     });
 
     if (error) {
-      // Fail open on an infra error — a rate-limit-store hiccup should not
-      // 500 the whole API. Logged so a persistent failure is visible.
+      // Fail closed: if the shared rate-limit store is unavailable, continuing
+      // would silently disable abuse protection on every Edge isolate. The
+      // Edge backend is not live yet, so callers can retry after the store is
+      // healthy rather than receiving an unprotected request path.
       console.error("fn_rate_limit call failed", error);
-      await next();
-      return;
+      return c.json({ detail: "Rate limit service unavailable" }, 503);
     }
 
     if (data !== true) {

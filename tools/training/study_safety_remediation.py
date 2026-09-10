@@ -189,12 +189,13 @@ def assert_zero_patient_leakage(obj: Any, path: str = "") -> None:
                 assert_zero_patient_leakage(item, f"{path}[{i}]")
 
 
-# ── Deterministic Synthetic Cohort Generator ─────────────────────────────────
+# ── Deterministic Synthetic Cohort Generators (Canonical & Masked) ────────────
 
-def generate_synthetic_study_cohort(n: int = 1000, seed: int = 42) -> List[Dict[str, Any]]:
+def generate_synthetic_canonical_cohort(n: int = 1000, seed: int = 42) -> List[Dict[str, Any]]:
     """
-    Generates a deterministic synthetic patient cohort with controlled demographic,
-    vital sign, symptom screening status, and missingness properties.
+    Generates a deterministic full-context synthetic patient cohort where every record
+    has all 5 canonical vitals present (non-None valid numbers), the full underlying
+    symptom representation, demographics, neutral complaint text, and research metadata.
     """
     np.random.seed(seed)
     severities = ["healthy", "mild", "moderate", "severe", "critical"]
@@ -214,14 +215,14 @@ def generate_synthetic_study_cohort(n: int = 1000, seed: int = 42) -> List[Dict[
         sex = "female" if np.random.rand() < 0.52 else "male"
         is_preg = bool(sex == "female" and 18 <= age <= 45 and np.random.rand() < 0.15)
 
-        # Baseline vitals generated from train_classifier clinical logic
+        # Baseline vitals generated from train_classifier clinical logic (100% complete)
         v = tc._correlated_vitals(age, sev)
 
         # Symptoms based on severity
         symptom_probs = tc.SEVERITY_SYMPTOM_PROBS[sev]
         candidate_syms = [s for s, p in symptom_probs.items() if np.random.rand() < p]
 
-        # Determine synthetic screening state
+        # Determine synthetic screening state intended for masking
         if candidate_syms:
             # If clinically has symptoms, 85% recorded as positive, 10% unknown/unasked, 5% unavailable
             scr_state = np.random.choice(
@@ -235,61 +236,32 @@ def generate_synthetic_study_cohort(n: int = 1000, seed: int = 42) -> List[Dict[
                 p=[0.60, 0.30, 0.10],
             )
 
-        if scr_state == "positive_symptom":
-            syms = candidate_syms if candidate_syms else ["high_fever"]
-            no_danger_declared = False
-        elif scr_state == "explicit_negative_screen":
-            syms = []
-            no_danger_declared = True
-        else:  # unknown_or_not_asked or declined_or_unavailable
-            syms = []
-            no_danger_declared = False
+        no_danger_declared = (scr_state == "explicit_negative_screen")
 
-        chief_complaint = "Fever and body pain" if syms else ("General wellness evaluation" if scr_state == "explicit_negative_screen" else "")
-
-        # Missingness on vitals (controlled for testing strata)
+        # Missingness on vitals planned for masking derivation
         # 75% complete 5 vitals, 15% 1 vital missing, 7% 2 vitals missing, 3% 3+ vitals missing
-        missing_pattern = np.random.choice([0, 1, 2, 3], p=[0.75, 0.15, 0.07, 0.03])
-        temp_val = v["temp"]
-        hr_val = v["hr"]
-        sbp_val = v["bp_sys"]
-        dbp_val = v["bp_dia"]
-        spo2_val = v["spo2"]
-
+        missing_pattern = int(np.random.choice([0, 1, 2, 3], p=[0.75, 0.15, 0.07, 0.03]))
         if missing_pattern == 1:
-            masked_vital = np.random.choice(FIVE_VITAL_FIELDS)
-            if masked_vital == "temperature": temp_val = None
-            elif masked_vital == "heart_rate": hr_val = None
-            elif masked_vital == "bp_systolic": sbp_val = None
-            elif masked_vital == "bp_diastolic": dbp_val = None
-            elif masked_vital == "spo2": spo2_val = None
+            masked_fields = [str(np.random.choice(FIVE_VITAL_FIELDS))]
         elif missing_pattern == 2:
-            masked_vitals = np.random.choice(FIVE_VITAL_FIELDS, size=2, replace=False)
-            if "temperature" in masked_vitals: temp_val = None
-            if "heart_rate" in masked_vitals: hr_val = None
-            if "bp_systolic" in masked_vitals: sbp_val = None
-            if "bp_diastolic" in masked_vitals: dbp_val = None
-            if "spo2" in masked_vitals: spo2_val = None
+            masked_fields = list(np.random.choice(FIVE_VITAL_FIELDS, size=2, replace=False))
         elif missing_pattern >= 3:
-            masked_vitals = np.random.choice(FIVE_VITAL_FIELDS, size=3, replace=False)
-            if "temperature" in masked_vitals: temp_val = None
-            if "heart_rate" in masked_vitals: hr_val = None
-            if "bp_systolic" in masked_vitals: sbp_val = None
-            if "bp_diastolic" in masked_vitals: dbp_val = None
-            if "spo2" in masked_vitals: spo2_val = None
+            masked_fields = list(np.random.choice(FIVE_VITAL_FIELDS, size=3, replace=False))
+        else:
+            masked_fields = []
 
         patient = {
             "patient_age": age,
             "patient_sex": sex,
-            "temperature": temp_val,
-            "heart_rate": hr_val,
-            "bp_systolic": sbp_val,
-            "bp_diastolic": dbp_val,
-            "spo2": spo2_val,
-            "symptoms": syms,
+            "temperature": float(v["temp"]),
+            "heart_rate": int(v["hr"]),
+            "bp_systolic": int(v["bp_sys"]),
+            "bp_diastolic": int(v["bp_dia"]),
+            "spo2": int(v["spo2"]),
+            "symptoms": list(candidate_syms),
             "is_pregnant": is_preg,
-            "chief_complaint": chief_complaint,
-            "complaint_duration": "2 days" if syms else "",
+            "chief_complaint": "Clinical evaluation" if candidate_syms else "General wellness evaluation",
+            "complaint_duration": "2 days" if candidate_syms else "",
             "location": "Primary Health Centre",
             "known_conditions": "Hypertension" if np.random.rand() < 0.15 else "",
             "current_medications": "Amlodipine" if np.random.rand() < 0.10 else "",
@@ -300,10 +272,64 @@ def generate_synthetic_study_cohort(n: int = 1000, seed: int = 42) -> List[Dict[
             "_research_underlying_severity": sev,
             "_research_reference_vitals": dict(v),
             "_research_reference_symptoms": list(candidate_syms),
+            "_research_missing_vital_pattern": missing_pattern,
+            "_research_masked_vital_fields": masked_fields,
         }
         out.append(patient)
 
     return out
+
+
+def derive_masked_study_cohort(
+    canonical_cohort: List[Dict[str, Any]],
+    seed: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Derives the masked study cohort by applying symptom-screening status and vital-sign
+    missingness transformations to deep copies of the canonical cohort records.
+    The original canonical cohort remains completely unmutated.
+    """
+    masked_out: List[Dict[str, Any]] = []
+
+    for p in canonical_cohort:
+        m = copy.deepcopy(p)
+        scr_state = m.get("_research_symptom_screening_status", "positive_symptom")
+        ref_syms = list(m.get("_research_reference_symptoms", []))
+
+        # 1. Apply symptom context transformation
+        if scr_state == "positive_symptom":
+            m["symptoms"] = ref_syms if ref_syms else ["high_fever"]
+            m["chief_complaint"] = "Fever and body pain"
+            m["_research_no_acute_danger_signs_declared"] = False
+        elif scr_state == "explicit_negative_screen":
+            m["symptoms"] = []
+            m["chief_complaint"] = "General wellness evaluation"
+            m["_research_no_acute_danger_signs_declared"] = True
+        else:  # unknown_or_not_asked or declined_or_unavailable
+            m["symptoms"] = []
+            m["chief_complaint"] = ""
+            m["_research_no_acute_danger_signs_declared"] = False
+
+        m["complaint_duration"] = "2 days" if m["symptoms"] else ""
+
+        # 2. Apply vital sign missingness transformation
+        masked_fields = m.get("_research_masked_vital_fields", [])
+        for vf in masked_fields:
+            if vf in m:
+                m[vf] = None
+
+        masked_out.append(m)
+
+    return masked_out
+
+
+def generate_synthetic_study_cohort(n: int = 1000, seed: int = 42) -> List[Dict[str, Any]]:
+    """
+    Backward-compatible helper generating the masked study cohort by first generating
+    the canonical full-context cohort and then applying deterministic masking.
+    """
+    canonical = generate_synthetic_canonical_cohort(n=n, seed=seed)
+    return derive_masked_study_cohort(canonical)
 
 
 # ── Candidate Policy Evaluator ────────────────────────────────────────────────
@@ -747,13 +773,31 @@ def compute_strata_breakdowns(
 
 def run_safety_remediation_study(n_patients: int = 1000, seed: int = 42) -> Dict[str, Any]:
     """
-    Executes the 3-arm synthetic safety-remediation study, computing reference labels
-    ONCE from the full representation and evaluating each arm deterministically.
+    Executes the 3-arm synthetic safety-remediation study:
+    1. Generates the full canonical unmasked synthetic cohort (with 100% complete vitals & full symptoms).
+    2. Computes and freezes ground-truth reference labels ONCE from that full canonical representation.
+    3. Derives the masked study cohort from copies of the canonical cohort.
+    4. Evaluates all three arms against the identical frozen canonical reference labels.
     """
-    cohort = generate_synthetic_study_cohort(n=n_patients, seed=seed)
+    canonical_cohort = generate_synthetic_canonical_cohort(n=n_patients, seed=seed)
 
-    # Compute reference labels once on the full intended representation
-    frozen_labels = [int(l) for l in tc.assign_triage_labels(cohort)]
+    # Construct the full production-form representation for ground-truth label assignment
+    canonical_form_records = []
+    for p in canonical_cohort:
+        rec = copy.deepcopy(p)
+        rec["temperature"] = p["_research_reference_vitals"]["temp"]
+        rec["heart_rate"] = p["_research_reference_vitals"]["hr"]
+        rec["bp_systolic"] = p["_research_reference_vitals"]["bp_sys"]
+        rec["bp_diastolic"] = p["_research_reference_vitals"]["bp_dia"]
+        rec["spo2"] = p["_research_reference_vitals"]["spo2"]
+        rec["symptoms"] = list(p["_research_reference_symptoms"])
+        canonical_form_records.append(rec)
+
+    # Compute reference labels ONCE on the full unmasked canonical representation
+    frozen_labels = [int(l) for l in tc.assign_triage_labels(canonical_form_records)]
+
+    # Derive the masked study cohort (evaluating missingness under identical frozen labels)
+    masked_cohort = derive_masked_study_cohort(canonical_cohort)
 
     arms = [
         "frozen_baseline_v3.1.0",
@@ -763,7 +807,7 @@ def run_safety_remediation_study(n_patients: int = 1000, seed: int = 42) -> Dict
 
     arm_results: Dict[str, Any] = {}
     for arm in arms:
-        arm_results[arm] = evaluate_study_arm(arm, cohort, frozen_labels)
+        arm_results[arm] = evaluate_study_arm(arm, masked_cohort, frozen_labels)
 
     # Compile comparative synthesis
     baseline_sens = arm_results["frozen_baseline_v3.1.0"]["ordinary_3_tier_safety_metrics"]["emergency_sensitivity"]["point_estimate"]
@@ -776,11 +820,15 @@ def run_safety_remediation_study(n_patients: int = 1000, seed: int = 42) -> Dict
     full_report = {
         "study_metadata": {
             "study_name": "VitalNet Safety-Remediation Candidate Study",
-            "study_version": "v1.0.0-synthetic",
+            "study_version": "v1.1.0-synthetic-canonical-labels",
             "execution_timestamp": datetime.now(timezone.utc).isoformat(),
             "git_commit": _get_git_commit(),
             "random_seed": seed,
             "cohort_size": n_patients,
+            "canonical_cohort_size": n_patients,
+            "masked_cohort_size": len(masked_cohort),
+            "reference_label_source": "full_canonical_unmasked_synthetic_v1",
+            "reference_labels_frozen_before_masking": True,
             "frozen_labels_generator": "packages/clinical-core/src/rules/engine.ts via cli.mjs",
             "reference_tier_distribution": {
                 "ROUTINE": int(sum(1 for l in frozen_labels if l == 0)),
@@ -796,10 +844,11 @@ def run_safety_remediation_study(n_patients: int = 1000, seed: int = 42) -> Dict
             "candidate_indeterminate_escalation_rate": candidate_indet_rate,
             "candidate_operational_retention_or_escalation_rate": candidate_op_diagnostic,
             "finding": (
-                "In this controlled synthetic cohort, the research candidate policy routed encounters with missing "
-                "symptoms or sparse vitals to a non-triage escalation state rather than assigning lower-acuity tiers. "
-                "This is a simulation finding measuring pipeline routing behavior and does not constitute clinical safety "
-                "evidence, proof of emergency recall recovery, or verification of human escalation efficacy."
+                "In this controlled synthetic cohort evaluated against unmasked canonical ground truth labels, "
+                "the research candidate policy routed encounters with missing symptoms or sparse vitals to a "
+                "non-triage escalation state rather than assigning lower-acuity tiers. "
+                "This is a simulation finding measuring pipeline routing behavior and does not constitute clinical "
+                "safety evidence, proof of emergency recall recovery, or verification of human escalation efficacy."
             ),
         },
         "non_claims_and_limitations": STUDY_NON_CLAIMS,

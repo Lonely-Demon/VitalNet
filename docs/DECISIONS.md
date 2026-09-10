@@ -807,38 +807,15 @@ work:
   the impractical latency. A curated answer becomes part of a shared,
   growing facility FAQ inside the assistant UI.
 
-### 28. Two free-tier keep-alive jobs — one solid, one honestly best-effort
+### 28. Selected free-tier keep-alive scope — both Supabase projects, preproduction Render only
 
-**Context**: the project runs on free tiers end to end — Supabase (pauses a
-project after 7 days with no database activity) and, for the backend, a
-host like Render (spins the instance down after ~10-15 minutes idle,
-causing a slow cold-start on the next real request). Both needed a
-keep-alive mechanism; researched rather than assumed.
+**Context**: the user selected database keep-alive activity for both VitalNet Supabase projects and backend keep-alive activity for the preproduction Render service only. Production Render is intentionally excluded. The platform limits were verified against official documentation rather than assumed.
 
-**Supabase**: `.github/workflows/supabase-keepalive.yml`, cron `17 4 */3 * *`
-(roughly every 3 days — 2x safety margin under the 7-day pause threshold,
-including month-boundary drift in the day-of-month step). Confirmed via
-research that Supabase's inactivity timer tracks **database** activity
-specifically, not dashboard visits or auth-only requests — so the job
-issues a real anon-key `SELECT` against `facilities` via PostgREST (a
-200/401/403 all prove the query reached the database; only a network-level
-failure fails the job). This is a solid, durable fix: GitHub's documented
-worst-case scheduling delay (tens of minutes) is negligible against a
-multi-day threshold.
+**Supabase**: `.github/workflows/supabase-keepalive.yml`, cron `17 4 */2 * *` (roughly every 2 days). The workflow runs a read-only anonymous-key `SELECT` against the public `facilities` table for both projects: production uses `SUPABASE_URL` and `SUPABASE_ANON_KEY`; preproduction uses `TEST_SUPABASE_URL` and `TEST_SUPABASE_ANON_KEY`. Response bodies are discarded. No patient table, write operation, auth route, service-role key, or clinical endpoint is used. The two-day cadence provides a substantial margin under Supabase's roughly seven-day low-activity pause window.
 
-**Backend**: `.github/workflows/backend-keepalive.yml`, cron `*/10 * * * *`
-hitting `GET /api/health`, per the user's explicit request. **Honestly
-flagged as best-effort, not a real fix**: GitHub's own schedule trigger is
-non-guaranteed — documented delays of 5-30+ minutes (sometimes worse) under
-platform load are common, which can exceed a 10-15 minute host idle
-timeout outright. The correct fix for this specific problem is a dedicated
-uptime monitor (UptimeRobot, cron-job.org, Better Uptime, etc.) with a real
-5-minute-interval SLA — noted in the workflow's own comments and here so a
-future reader doesn't mistake "the job exists" for "the cold-start problem
-is solved." Both workflows read their target from repo secrets/variables
-(`SUPABASE_URL`/`SUPABASE_ANON_KEY` secrets, `BACKEND_HEALTH_URL` variable)
-and no-op cleanly (exit 0, not a failed run) if unset — the backend one is
-inert until a host is actually chosen and the variable is set.
+**Backend**: `.github/workflows/backend-keepalive.yml`, cron `*/10 * * * *`, targeting only `https://vitalnet-preprod-api.onrender.com/api/health`. This is explicitly **best-effort**, not a guarantee: GitHub schedule triggers can be delayed beyond Render's 15-minute Free-service idle window. Production Render `https://vitalnet.onrender.com` is intentionally not targeted. Render's shared Free instance-hour allowance also makes keeping both services continuously warm unsuitable; a 30-day month would require approximately 1,440 service-hours for two services against a 750-hour workspace allowance.
+
+Both workflows are version-controlled on `dev` and `main`, but GitHub scheduled workflows execute from the repository default branch. Repository secrets must be configured before the Supabase job can perform its checks. The preproduction Render workflow requires no secret because its public health URL is fixed in the dev-only correction. See `docs/KEEPALIVE_OPERATIONS.md` for the operational procedure and limitations.
 
 ### 29. Live E2E verification against the real project — method, two real bugs, and an ES256 finding
 
@@ -1982,10 +1959,6 @@ are green.
    - Test harness uses internal `_synthetic_test_mode=True`, strictly bounded to `tests/fixtures/` and rejected if pointed at any non-fixture path.
 10. **Strict zero patient data leakage assertion**:
     - All JSON reports and console outputs are recursively validated via `assert_zero_patient_leakage()`.
-
-### 43. Public-data evaluation closure and safety-remediation pivot
-**Context**: VitalNet completed its authorized public-data evaluation cycle on the frozen model using Iran ED inspection, NHAMCS 2022 partial-input scoring, a synthetic ASHA input-contract study, and Korean KTAS 2019 Gate 3A scoring. MIMIC-IV-ED credentialing was not completed and no full MIMIC score exists.
-**Decisions**:
 1. **Close the current public-data evaluation cycle** and consolidate the evidence in `docs/evaluation/PUBLIC_DATA_EVALUATION_CLOSURE.md`.
 2. **Record the safety signal without averaging incompatible benchmarks**: NHAMCS emergency sensitivity was 14.4%; KTAS primary emergency sensitivity was 25.2%; KTAS vital-only emergency sensitivity was 17.9%. These are cohort-specific proxy results, not clinical validation.
 3. **Keep the production model frozen**. No retraining, tuning, threshold changes, classifier changes, deployment, or promotion are justified by these results.
@@ -2005,3 +1978,79 @@ are green.
 The paediatric advisory may not be activated from engineering evidence alone. Any activation, tier-floor behavior, or effective-age model wiring requires a qualified clinical-governance decision. Likewise, localization may not be described as pilot-ready until a qualified reviewer has checked the medical terminology and approved the locale. The deterministic SBAR is authoritative; optional LLM polishing is not part of this cycle. The bounded history and routing features are workflow aids, not clinical validation.
 
 **Consequences**: The roadmap can distinguish implemented engineering foundations from external clinical gates. Future work must preserve the model freeze and must not promote these changes to `test`, `main`, pre-production, Render, Vercel, or Supabase without the separately documented release process. The existing public-data evaluation closure and shadow-evaluation protocol remain evaluation/governance artifacts; they do not establish clinical validity.
+
+
+### 45. Repository hygiene and current-state documentation closeout
+
+**Context**: After the refinement cycle and controlled `dev` → `test` promotion, the repository contained current monorepo behavior alongside older documentation that still used the retired `frontend/` layout or described pre-migration parity scripts. Local verification also created ignored build, cache, browser-report, and evaluation artifacts.
+
+**Decisions**:
+1. Treat `CODEBASE_MAP.md` and `docs/REPOSITORY_STATUS.md` as the current orientation and operational-status sources of truth. Treat `docs/DEPLOYMENT_RUNBOOK.md` as the current dev-to-test and preproduction deployment procedure.
+2. Align current setup, testing, onboarding, package, R&D, API-reference, changelog, and roadmap documents with `apps/web`, `packages/clinical-core`, the live legacy FastAPI backend, and the not-yet-live Edge Function backend.
+3. Keep historical rebuild, improvement, and security-audit records intact when their old paths explain the historical state; label them as historical rather than rewriting their evidence.
+4. Keep generated build output, caches, local environment files, Playwright reports, and evaluation outputs out of Git. Real evaluation data may remain local-only when needed, but must never be tracked or emitted into logs, reports, CI, deployments, or chat.
+5. Do not alter the frozen production model, clinical thresholds, production endpoint routing, production branches, or production deployments as part of repository cleanup. Documentation claims of readiness remain separate from clinical validation and qualified governance approval.
+
+**Consequences**: Future structural or workflow changes must update the relevant current-state documentation in the same change. Cleanup PRs must show a clean diff, preserve synthetic-test evidence, and distinguish repository hygiene from clinical or production authorization.
+
+
+### 46. August 2026 Recursive Security Audit Remediation (33 Valid Findings & Multi-Tier Hardening)
+
+**Context**: A comprehensive recursive security audit conducted in August 2026 identified 33 valid security, architectural, and clinical safety findings spanning database RLS policies, backend authentication and rate limiting, clinical rules and vital thresholds, LLM briefing guardrails, frontend session isolation, edge functions, and supply chain configuration. All 33 findings were systematically remediated across seven phases.
+
+**Decisions**:
+1. **Live Database Drift & Policy Isolation (Phase 0 & Phase 2, `phase44`–`phase49`)**:
+   - Dropped all legacy policies and tables referencing `auth.jwt() -> 'user_metadata'` (`doctor_update`, `asha_select_own`, `case_referrals`, `profile_select`).
+   - Replaced permissive insert policies with facility-checked policies enforcing active profile status and facility matching: `(role IN ('admin', 'super_admin') OR facility_id = case_records.facility_id) AND is_active = true`.
+   - Created PostgreSQL triggers on `case_records` (`protect_case_records_clinical_columns`) preventing submitters from modifying clinical/vital/identity columns post-creation.
+   - Enforced append-only immutability on `case_reviews` and added foreign-key facility integrity checks to `referrals_insert_policy`.
+   - Restricted `fn_schema_fingerprint()` to `service_role` and introduced `fn_list_policies()` for CI drift diagnosis.
+2. **Backend Authentication, Rate Limiting, and Scoping (Phase 1)**:
+   - Configured `ENVIRONMENT=production` as the safe fail-closed default in `config.py`.
+   - Replaced CSRF token static-equality comparison with header-presence verification in `csrf_and_device_guard`.
+   - Bounded `_profile_cache` to 10,000 items with LRU eviction and fail-closed handling on uncached transient errors.
+   - Added asymmetric JWKS signature verification (`RS256`/`ES256`) before IP fallback in rate limiting.
+   - Implemented right-to-left `X-Forwarded-For` traversal with `trusted_proxy_ips` filtering.
+   - Closed multi-tenant DSR IDOR by adding facility ownership checks in `/api/admin/cases/{id}/export` and `/api/admin/cases/{id}/erase`.
+   - Secured `/api/admin/emergency-escalations/check` with fail-closed `X-Internal-Scheduler-Token` validation and facility-scoped querying.
+   - Replaced global `list_users` pagination in admin routes with profile-targeted queries.
+   - Replaced wildcard `SELECT *` in `get_case_detail` with explicit 49-column projection.
+3. **PALS-Aligned Clinical Safety & Tree Traversal (Phase 3)**:
+   - Implemented age-banded vital sign emergency thresholds aligned with PALS 5th-percentile pediatric standards (<1mo, <1yr, <3yr, <5yr, <10yr, <18yr, adult) across both TypeScript (`clinical-core`) and Python (`app.ml.classifier`).
+   - Updated `checkOverrides` to accumulate multiple matching emergency rules into a composite rule ID (`rule1+rule2`) with full audit detail.
+   - Flagged `hasNaN = true` when encountering `NaN` features during offline decision tree traversal, marking predictions as `lowConfidence`.
+4. **LLM Prompt-Injection Guardrail & ML Model Integrity (Phase 4)**:
+   - Eliminated stored prompt-injection surface in `generate_patient_summary` by removing free-text briefing concatenation and substituting curated `_TIER_PHRASING` and `_TIER_ACTIONS`.
+   - Added `.pkl.sha256` content-hash verification and HMAC deploy signature checking (`VITALNET_MODEL_SIGNING_KEY`) before unpickling `triage_classifier.pkl`.
+   - Bounded SHAP feature explanation computation with a `ThreadPoolExecutor` timeout (100ms).
+
+5. **Shared-Device Frontend Isolation & Edge Function Hardening (Phase 5)**:
+   - Resolved user role strictly from database `profiles` rather than `app_metadata`.
+   - Stored facility contact phone and ephemeral AES-256-GCM outbox encryption keys in `sessionStorage` (cleared on logout).
+   - Scoped offline draft clearing and outbox queue retrieval strictly to the authenticated `owner_id`.
+   - Added URL hostname allowlists (`*.supabase.co`, `localhost`) to edge function JWKS fetchers.
+6. **Supply Chain & CI Hardening (Phase 6)**:
+   - Pinned `pnpm/action-setup` to verified commit SHAs across all GitHub workflows.
+   - Created `.github/workflows/deno-deps-audit.yml` for recurring automated edge function dependency audits.
+   - Updated `db-schema-drift.yml` to compute dynamic replay fingerprints and output policy diff diagnostics via `fn_list_policies()`.
+
+### 35. Strangler-Fig Tranche A Edge Cutover & Offline Clinical Calculators (Roadmap §4.3)
+
+**Context**:
+1. Strangler-fig backend migration (DECISIONS §33): routing initial safe endpoints to the Deno/Hono edge function (`apps/api`) while preserving Python legacy backend observability and complex RPCs.
+2. Clinical decision-support tools: field health workers frequently need exact arithmetic under pressure for paediatric dosing by weight, WHO dehydration/ORS rehydration, IV drip rates, and maintenance fluids.
+
+**Decisions**:
+1. **Strangler-Fig Tranche A Cutover (`apps/web/src/api/base.js`)**:
+   - Flipped non-PHI, safe read-only/status endpoints (`health`, `outbreak.signals`, `referrals.listFacilities`) to `'edge'` when `VITE_EDGE_API_BASE_URL` is set.
+   - Retained `metrics` on `'legacy'` to ensure direct Prometheus scraping preserves Python in-process ML triage counters and LLM telemetry without data loss.
+   - Retained `supervisor.teamMetrics` on `'legacy'` pending dedicated edge RPC contract conformance verification for `fn_team_metrics`.
+   - Updated `connectivity.js` with resilient dual-probe reachability (primary probe with automatic legacy fallback before concluding offline state).
+2. **Deterministic Offline Clinical Calculators (`packages/clinical-core/src/calculators.ts`)**:
+   - Single source of clinical truth in `@vitalnet/clinical-core`: pure-JS/TS deterministic arithmetic, zero PHI, zero network dependency, precached for complete offline availability.
+   - Paediatric dosing: curated essential drug presets (WHO Model Formulary for Children / INF), strict weight boundaries (1.0 kg – 100.0 kg), neonate <1.0 kg referral refusal, single-dose ceiling caps, 24-hour cumulative dose caps (`maxMgPerDay` & `maxMgPerKgPerDay`), and PRN minimum interval time guards.
+   - WHO diarrhoea rehydration: Plan A (home maintenance / 10 mL/kg), Plan B (4-hour 75 mL/kg ORS with hourly rates), and Plan C (100 mL/kg IV Ringer's Lactate infant/child time-split resuscitation).
+   - IV drip rate: Macrodrip (10, 15, 20 gtt/mL) and Microdrip (60 gtt/mL) calculation for drops/min and volumetric pump mL/hr.
+   - Holliday-Segar fluid: 4-2-1 maintenance rule with visual tier breakdown and adult protocol advisory for patients >14 years or >50 kg.
+   - Integrated as a first-class, lazy-loaded `'calculators'` tab across `ASHAPanel`, `DoctorPanel`, and `SupervisorPanel`.
+

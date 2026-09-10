@@ -96,10 +96,15 @@ jobs:
       - name: Functional RLS regression check
         run: psql "$DB_URL" -v ON_ERROR_STOP=1 -f backend/supabase/ci_rls_regression_check.sql
 
+      - name: Compute replayed schema fingerprint
+        run: |
+          replay_fp=$(psql "$DB_URL" -t -A -c "SELECT fn_schema_fingerprint();")
+          echo "Replayed migration schema fingerprint: $replay_fp"
+
   live-schema-fingerprint:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 4
     steps:
       - name: Compare live fn_schema_fingerprint() to the last known-good value
         env:
@@ -125,7 +130,14 @@ jobs:
           fi
 
           if [ "$live_fp" != "$EXPECTED_FINGERPRINT" ]; then
-            echo "::error::Live schema fingerprint ($live_fp) does not match the expected value ($EXPECTED_FINGERPRINT) — the database has changed outside a tracked migration. Investigate before assuming any migration is safe to apply."
+            echo "::error::Live schema fingerprint ($live_fp) does not match the expected value ($EXPECTED_FINGERPRINT) — the database has changed outside a tracked migration."
+            echo "Attempting to query live policy list for drift diagnostics..."
+            policies_response=$(curl -s --max-time 20 -X POST \
+              "$SUPABASE_URL/rest/v1/rpc/fn_list_policies" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Content-Type: application/json" || true)
+            echo "Live policy listing: $policies_response"
             exit 1
           fi
           echo "Live fingerprint matches the expected value."

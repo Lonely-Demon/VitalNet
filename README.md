@@ -28,6 +28,8 @@ docs — start with whichever matches what you're trying to do:
 | Doc | Read this for |
 |---|---|
 | **[CODEBASE_MAP.md](./CODEBASE_MAP.md)** | Every directory, what it does, architecture/sequence/ER diagrams — the primary orientation doc |
+| **[docs/REPOSITORY_STATUS.md](./docs/REPOSITORY_STATUS.md)** | Current branch/deployment map, verification baseline, governance gates, and repository-maintenance rules |
+| **[docs/DEPLOYMENT_RUNBOOK.md](./docs/DEPLOYMENT_RUNBOOK.md)** | Dev-to-test promotion, Vercel/Render preproduction checks, rollback boundaries, and deployment hygiene |
 | **[docs/API_REFERENCE.md](./docs/API_REFERENCE.md)** | Every HTTP endpoint: auth, rate limits, request/response shapes |
 | **[docs/DECISIONS.md](./docs/DECISIONS.md)** | *Why* the system is built this way — rejected alternatives, tradeoffs |
 | **[docs/LESSONS_LEARNED.md](./docs/LESSONS_LEARNED.md)** | Living notes for future agents: verification methodology, dead ends, and — importantly — substantive unmerged work sitting on stale branches |
@@ -36,6 +38,7 @@ docs — start with whichever matches what you're trying to do:
 | **[CONTRIBUTING.md](./CONTRIBUTING.md)** | Branch strategy, PR process, commit conventions |
 | **[docs/TESTING_STRATEGY.md](./docs/TESTING_STRATEGY.md)** | What's tested, how, and how to add a test |
 | **[docs/SECURITY.md](./docs/SECURITY.md)** | Security model, threat summary, how to report a vulnerability |
+| **[docs/ENTERPRISE_ENGINEERING_CONTROLS.md](./docs/ENTERPRISE_ENGINEERING_CONTROLS.md)** | Product-wide engineering controls, CI/release gates, artifact integrity, and safety invariants |
 | **[docs/ONBOARDING.md](./docs/ONBOARDING.md)** | New-developer first-day checklist |
 | **[docs/GLOSSARY.md](./docs/GLOSSARY.md)** | Domain terms (ASHA, PHC, NEWS2, triage tiers, etc.) |
 | **[docs/DISASTER_RECOVERY.md](./docs/DISASTER_RECOVERY.md)** | RTO/RPO targets, restore procedures |
@@ -175,6 +178,8 @@ pair that actually serves production traffic today (see the migration note
 above). `apps/api` (the new edge function) is a separate, optional local
 setup — see `apps/api/README.md`.
 
+For current branch, deployment, and maintenance status, see **[docs/REPOSITORY_STATUS.md](./docs/REPOSITORY_STATUS.md)**.
+
 For a fully-narrated first-time walkthrough (including making a trivial
 change and opening your first PR), see **[docs/ONBOARDING.md](./docs/ONBOARDING.md)**.
 The manual, step-by-step version `setup.sh` automates:
@@ -304,8 +309,8 @@ cd apps/api/supabase/functions/api && deno test --allow-net --allow-env
 # apps/web — build (catches import errors, bundle-size regressions)
 pnpm --filter @vitalnet/web run build
 
-# apps/web — Playwright offline-flow E2E (needs a running dev server + seeded users)
-cd apps/web && npx playwright test tests/offline.spec.js
+# apps/web — Playwright browser suite (local synthetic/mock mode or authorized staging only)
+cd apps/web && pnpm exec playwright test
 ```
 
 ---
@@ -317,8 +322,10 @@ cd apps/web && npx playwright test tests/offline.spec.js
 - Set the required env vars (see §2 above) in the Railway dashboard.
 
 ### Vercel (Frontend)
-- `apps/web/vercel.json` for SPA routing.
-- Set the required `VITE_*` env vars (see §3 above) in the Vercel dashboard.
+- The frontend source is `apps/web/`. The repository-root `vercel.json` describes a root-based monorepo build, while `apps/web/vercel.json` supplies the SPA rewrite used when Vercel’s Root Directory is `apps/web`.
+- For the separate `vital-net` Vercel project, keep **Root Directory** set to `apps/web` and build `@vitalnet/clinical-core` before the web bundle with: `cd ../../packages/clinical-core && pnpm run build && cd ../../apps/web && pnpm run build`.
+- Set the required `VITE_*` env vars (see §3 above) in the Vercel dashboard. Preview/Pre-Production testing must use the `test` branch; do not select Production during deployment troubleshooting.
+- The `vitalnet-preprod` project and Render preproduction API are the intended controlled test environment. A successful build or health check is not clinical validation.
 
 ### Supabase Edge Functions (apps/api — new backend, not yet live)
 - `supabase functions deploy api` from `apps/api/`, after `pnpm --filter

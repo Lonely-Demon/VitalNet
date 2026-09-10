@@ -16,7 +16,12 @@ Validates:
 9. The three arms use identical synthetic reference labels (paired analysis).
 10. Denominators, tiered reference emergencies, and 3x3 matrix separation are strictly preserved.
 11. Deterministic repeatability: identical seed produces identical aggregate reports.
-12. Subprocess-isolated real-data import guard and zero-leakage verification.
+12. Canonical generator creates complete, non-None vitals before masking.
+13. Masking transformation preserves the canonical cohort 100% unmutated.
+14. Reference labels are frozen from the full canonical cohort prior to masking.
+15. Label assignment function is invoked exactly once with 100% complete vitals.
+16. Reconstructed canonical records have zero label disagreement with frozen reference labels.
+17. Subprocess-isolated real-data import guard, filesystem guard, command guard, and zero-leakage verification.
 """
 
 import copy
@@ -304,7 +309,18 @@ def test_synthetic_complaints_contain_no_target_tier_labels():
 
 def test_paired_arms_use_identical_labels(synthetic_cohort):
     """Verifies that all three arms evaluate against the exact same frozen reference labels."""
-    labels = [int(l) for l in tc.assign_triage_labels(synthetic_cohort)]
+    canonical_records = []
+    for p in synthetic_cohort:
+        rec = copy.deepcopy(p)
+        rec["temperature"] = p["_research_reference_vitals"]["temp"]
+        rec["heart_rate"] = p["_research_reference_vitals"]["hr"]
+        rec["bp_systolic"] = p["_research_reference_vitals"]["bp_sys"]
+        rec["bp_diastolic"] = p["_research_reference_vitals"]["bp_dia"]
+        rec["spo2"] = p["_research_reference_vitals"]["spo2"]
+        rec["symptoms"] = list(p["_research_reference_symptoms"])
+        canonical_records.append(rec)
+
+    labels = [int(l) for l in tc.assign_triage_labels(canonical_records)]
     assert len(labels) == len(synthetic_cohort)
 
     b_res = sr.evaluate_study_arm("frozen_baseline_v3.1.0", synthetic_cohort, labels)
@@ -329,7 +345,18 @@ def test_denominator_and_matrix_separation_integrity(synthetic_cohort):
     that ordinary_3_tier_safety_metrics reports total and tiered reference emergencies,
     and that confusion matrix sums strictly to tiered_case_count.
     """
-    labels = [int(l) for l in tc.assign_triage_labels(synthetic_cohort)]
+    canonical_records = []
+    for p in synthetic_cohort:
+        rec = copy.deepcopy(p)
+        rec["temperature"] = p["_research_reference_vitals"]["temp"]
+        rec["heart_rate"] = p["_research_reference_vitals"]["hr"]
+        rec["bp_systolic"] = p["_research_reference_vitals"]["bp_sys"]
+        rec["bp_diastolic"] = p["_research_reference_vitals"]["bp_dia"]
+        rec["spo2"] = p["_research_reference_vitals"]["spo2"]
+        rec["symptoms"] = list(p["_research_reference_symptoms"])
+        canonical_records.append(rec)
+
+    labels = [int(l) for l in tc.assign_triage_labels(canonical_records)]
     c_res = sr.evaluate_study_arm("candidate_remediation_v1", synthetic_cohort, labels)
 
     esc_summary = c_res["non_triage_escalation_summary"]
@@ -368,7 +395,134 @@ def test_deterministic_repeatability():
     assert json.dumps(rep1_clean, sort_keys=True) == json.dumps(rep2_clean, sort_keys=True)
 
 
-# ── Test 11: Real-Data Isolation & Zero-Leakage (Subprocess Guard) ─────────────
+# ── Test 11: Canonical Generator Complete Vitals Before Masking ──────────────
+
+def test_canonical_generator_creates_complete_vitals_before_masking():
+    """Verifies that every record in the canonical cohort has 100% complete, non-None vitals."""
+    canonical = sr.generate_synthetic_canonical_cohort(n=100, seed=42)
+    assert len(canonical) == 100
+
+    for p in canonical:
+        for vf in sr.FIVE_VITAL_FIELDS:
+            assert p.get(vf) is not None, f"Canonical record vital '{vf}' is None before masking."
+            assert isinstance(p.get(vf), (int, float)), f"Canonical vital '{vf}' is not numeric."
+        assert isinstance(p.get("symptoms"), list), "Canonical symptoms is not a list."
+        assert p.get("patient_age") is not None
+        assert p.get("patient_sex") in ("male", "female")
+
+
+# ── Test 12: Masking Transformation Preserves Canonical Unmutated ────────────
+
+def test_masking_transformation_preserves_canonical_unmutated():
+    """Verifies that derive_masked_study_cohort produces missingness without mutating canonical records."""
+    canonical = sr.generate_synthetic_canonical_cohort(n=100, seed=42)
+    canonical_snapshot = copy.deepcopy(canonical)
+
+    masked = sr.derive_masked_study_cohort(canonical)
+    assert len(masked) == len(canonical)
+
+    # 1. Canonical cohort is 100% unmutated
+    assert json.dumps(canonical, sort_keys=True) == json.dumps(canonical_snapshot, sort_keys=True)
+
+    # 2. Masked cohort contains missingness according to metadata
+    has_missing_vital = any(any(m.get(vf) is None for vf in sr.FIVE_VITAL_FIELDS) for m in masked)
+    assert has_missing_vital, "Expected some missing vitals in masked cohort."
+
+    for m in masked:
+        scr = m.get("_research_symptom_screening_status")
+        if scr in ("unknown_or_not_asked", "declined_or_unavailable", "explicit_negative_screen"):
+            assert m["symptoms"] == []
+
+
+# ── Test 13: Reference Labels Frozen From Full Canonical Before Masking ──────
+
+def test_reference_labels_frozen_from_full_canonical_before_masking():
+    """Verifies that study metadata records canonical reference label provenance."""
+    report = sr.run_safety_remediation_study(n_patients=50, seed=42)
+    meta = report["study_metadata"]
+
+    assert meta["reference_label_source"] == "full_canonical_unmasked_synthetic_v1"
+    assert meta["reference_labels_frozen_before_masking"] is True
+    assert meta["canonical_cohort_size"] == 50
+    assert meta["masked_cohort_size"] == 50
+
+
+# ── Test 14: Label Function Invoked Exactly Once With Complete Vitals ─────────
+
+def test_label_function_invoked_exactly_once_with_complete_vitals(monkeypatch):
+    """
+    Verifies that tc.assign_triage_labels is invoked EXACTLY ONCE by the study runner,
+    and that all input records passed to it have 100% complete, non-None canonical vitals.
+    """
+    call_records = []
+    original_assign = tc.assign_triage_labels
+
+    def tracked_assign(records):
+        call_records.append(copy.deepcopy(records))
+        return original_assign(records)
+
+    monkeypatch.setattr(tc, "assign_triage_labels", tracked_assign)
+
+    report = sr.run_safety_remediation_study(n_patients=50, seed=42)
+
+    assert len(call_records) == 1, f"Expected assign_triage_labels to be called exactly once, but called {len(call_records)} times."
+
+    input_records = call_records[0]
+    assert len(input_records) == 50
+
+    for i, rec in enumerate(input_records):
+        for vf in sr.FIVE_VITAL_FIELDS:
+            assert rec.get(vf) is not None, f"Record {i} passed to label function has missing vital '{vf}'."
+            assert isinstance(rec.get(vf), (int, float)), f"Record {i} vital '{vf}' is not numeric."
+
+    assert "arms" in report
+    assert len(report["arms"]) == 3
+
+
+# ── Test 15: Reconstructed Canonical Records Zero Disagreement ───────────────
+
+def test_reconstructed_canonical_records_zero_disagreement_with_frozen_labels():
+    """
+    Verifies that reconstructing full canonical records from stored research reference fields
+    yields 100% agreement (0% disagreement) with the frozen reference labels.
+    """
+    canonical = sr.generate_synthetic_canonical_cohort(n=100, seed=42)
+
+    # 1. Labels from canonical form records
+    canonical_form_records = []
+    for p in canonical:
+        rec = copy.deepcopy(p)
+        rec["temperature"] = p["_research_reference_vitals"]["temp"]
+        rec["heart_rate"] = p["_research_reference_vitals"]["hr"]
+        rec["bp_systolic"] = p["_research_reference_vitals"]["bp_sys"]
+        rec["bp_diastolic"] = p["_research_reference_vitals"]["bp_dia"]
+        rec["spo2"] = p["_research_reference_vitals"]["spo2"]
+        rec["symptoms"] = list(p["_research_reference_symptoms"])
+        canonical_form_records.append(rec)
+
+    labels_canonical = [int(l) for l in tc.assign_triage_labels(canonical_form_records)]
+
+    # 2. Labels from masked cohort reconstructed using reference vitals and symptoms
+    masked = sr.derive_masked_study_cohort(canonical)
+    reconstructed_records = []
+    for m in masked:
+        rec = copy.deepcopy(m)
+        rec["temperature"] = m["_research_reference_vitals"]["temp"]
+        rec["heart_rate"] = m["_research_reference_vitals"]["hr"]
+        rec["bp_systolic"] = m["_research_reference_vitals"]["bp_sys"]
+        rec["bp_diastolic"] = m["_research_reference_vitals"]["bp_dia"]
+        rec["spo2"] = m["_research_reference_vitals"]["spo2"]
+        rec["symptoms"] = list(m["_research_reference_symptoms"])
+        reconstructed_records.append(rec)
+
+    labels_reconstructed = [int(l) for l in tc.assign_triage_labels(reconstructed_records)]
+
+    assert len(labels_canonical) == len(labels_reconstructed) == 100
+    disagreements = sum(1 for a, b in zip(labels_canonical, labels_reconstructed) if a != b)
+    assert disagreements == 0, f"Expected 0 label disagreements, found {disagreements}."
+
+
+# ── Test 17: Real-Data Isolation & Zero-Leakage (Subprocess Guard) ─────────────
 
 def test_real_data_isolation_and_zero_leakage_subprocess():
     """

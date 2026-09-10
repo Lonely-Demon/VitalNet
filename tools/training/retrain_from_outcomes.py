@@ -37,6 +37,7 @@ Run (test/CI, against a fixture): python scripts/retrain_from_outcomes.py \
     --outcomes-fixture tests/fixtures/synthetic_outcomes.json --force
 """
 import argparse
+import hashlib
 import json
 import os
 import pickle
@@ -63,6 +64,10 @@ _rng = np.random.default_rng(RANDOM_SEED)
 MIN_OUTCOMES = 500
 MIN_EMERGENCY_DISAGREEMENTS = 50
 CANDIDATE_PATH = os.path.join(MODELS_DIR, "candidate_triage_classifier.pkl")
+# This hash identifies the frozen production artifact on the dev baseline.
+# Retraining creates a separate candidate and must never silently compare
+# against an unexpected or tampered production file.
+FROZEN_PRODUCTION_MODEL_SHA256 = "bf9939010b7d030a6a15eaf88620e5c95703c92d7f3f9d0c80d66623aa45d209"
 
 LABEL_TO_INDEX = {v: k for k, v in LABEL_MAP.items()}
 
@@ -155,9 +160,30 @@ def _agreement_rate(clf, outcomes: list[dict]) -> float:
     return float(accuracy_score(y_true, y_pred))
 
 
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_frozen_production_model(path: str = PKL_PATH) -> None:
+    """Fail closed if the production artifact is missing or not the frozen file."""
+    if not os.path.exists(path):
+        raise RuntimeError(f"Frozen production model is missing: {path}")
+    actual = _sha256_file(path)
+    if actual != FROZEN_PRODUCTION_MODEL_SHA256:
+        raise RuntimeError(
+            "Frozen production model hash mismatch; refusing candidate comparison. "
+            f"expected={FROZEN_PRODUCTION_MODEL_SHA256}, actual={actual}"
+        )
+
+
 def _current_model_agreement_rate(outcomes: list[dict]) -> float | None:
     if not os.path.exists(PKL_PATH):
         return None
+    verify_frozen_production_model()
     with open(PKL_PATH, "rb") as f:
         current = pickle.load(f)["classifier"]
     return _agreement_rate(current, outcomes)

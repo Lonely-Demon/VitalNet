@@ -78,6 +78,27 @@ It is NOT branched from and does not merge into `dev`/`main`/`test` as part
 of routine work; those three stay reserved for building, testing, and
 deploying already-shipped functionality. See `docs/DECISIONS.md` §32.
 
+### PR Hygiene — learned the hard way
+
+These invariants were established through repeated corrections across multiple
+development cycles and are among the most commonly violated rules in this repo's
+agent-interaction history:
+
+- **Verify `origin/dev` HEAD before branching.** Always `git fetch origin` and
+  confirm the merge base matches current `dev` before creating a feature branch.
+  Stale bases have caused document regressions, duplicate PRs, and wasted review
+  cycles (PRs #112, #113, #114).
+- **Never open duplicate PRs** for the same conceptual task. If a PR is stale or
+  flawed, close it with an explanatory comment and open a single clean
+  replacement from the current `dev` HEAD.
+- **Minimal changed-file scope.** PR diffs must be strictly confined to
+  authorized task files. Do not touch unrelated files, canonical source cards, or
+  baseline closure documents. If you ran `ruff format .` and it touched 49 files
+  you didn't write, `git checkout -- <those files>` before committing.
+- **Stop after opening a PR.** Agents must never autonomously merge, deploy,
+  promote, or execute unauthorized real-data reruns. Wait for explicit human
+  review and approval.
+
 ---
 
 ## 🚀 Build, Run, and Lint Commands
@@ -219,3 +240,105 @@ Stale docs are worse than no docs — they actively mislead the next reader (hum
 6. **Self-Correction (Self-Healing)**: If a bash command fails (e.g., a test fails, linting fails), read the exact error output and correct the code immediately. Do not ask the user for help unless you are completely stuck after multiple debugging attempts.
 7. **Clean Commits**: If requested to commit, group related changes logically and write clear, imperative commit messages (e.g., "Add SHAP explanations to DoctorPanel"). See `CONTRIBUTING.md` for the full convention.
 8. **Don't guess at blocked decisions**: some FEATURES_ROADMAP items are explicitly scaffolding-only pending a product/vendor decision (SMS aggregator choice, photo-storage backend/consent policy — see `docs/DECISIONS.md` §11) or pending non-engineering review (clinical translation review — §10). Don't "finish" these by guessing at the blocking decision yourself; extend the scaffolding, flag the open decision, and stop there.
+
+---
+
+## 🏥 Clinical Governance Invariants
+
+These invariants are non-negotiable and reflect hard lessons from clinical
+evaluation, safety-remediation, and security audit work across the project's
+history:
+
+1. **Synthetic diagnostics ≠ clinical validation.** High synthetic sensitivity
+   (e.g. 97.50%–99.38%) measures pipeline routing under simulated conditions,
+   NOT clinical efficacy. Never present synthetic results as clinical safety
+   evidence without explicit human clinical board sign-off
+   (`docs/CLINICAL_REVIEW.md`). Multi-seed variance represents pseudo-random
+   generator reproducibility, not population confidence intervals.
+2. **Engineers cannot invent clinical acceptance thresholds.** All pass/fail
+   criteria must be signed off by a qualified clinical authority. Arbitrary
+   cutoffs (e.g. `max P(tier) < 0.60`) are prohibited — use exploratory
+   threshold grids with explicit governance ownership disclaimers.
+3. **Missing context must never silently default to ROUTINE.** Absence of
+   symptoms or vital signs is not evidence of physiological stability. Missing
+   context must trigger explicit indeterminate handling
+   (`INSUFFICIENT_INFORMATION_FOR_CDS`) and mandatory Medical Officer review.
+   There is a strict clinical distinction between *explicit negative screen*
+   (clinician confirmed "no acute danger signs") and *unknown/not asked*.
+4. **Extreme-vital safety rules are inviolable.** Severe physiological
+   derangement (shock, hypertensive crisis, extreme tachycardia, profound
+   hypoxemia) must ALWAYS trigger deterministically regardless of missing
+   symptoms. Missing symptoms can never downgrade an obvious physiological
+   emergency.
+5. **Pediatric vitals use PALS 5th-percentile tables.** Age-stratified
+   hypotension thresholds: Neonate (<1mo) <60, Infant (<1yr) <70, Toddler
+   (<5yr) <75, Child (<10yr) <80, Adolescent (<18yr) <85, Adult (≥18yr) <90
+   mmHg systolic. Never apply a single adult threshold to pediatric patients.
+6. **Escalation workload is a first-class metric.** Routing ~40% of encounters
+   to human review is a massive operational burden. Report it prominently
+   alongside any headline sensitivity numbers, never hide it.
+
+---
+
+## 🔬 Evaluation & Benchmark Invariants
+
+1. **Two-stage cohort generation.** Generate a canonical cohort (100% complete),
+   assign ground-truth labels once, THEN derive masked/ablated study arms via
+   deep copies. Reference labels are never recomputed after masking — a 3.7%–
+   4.4% label divergence was found when this was violated.
+2. **Default to inspection-only.** Evaluation adapters refuse scoring without
+   explicit CLI authorization flags (`--gate-m4-authorized`,
+   `--gate-3a-scoring-authorized`). Adapters raise `EvaluationRefusedError`
+   (exit code 2) by default.
+3. **Zero patient data leakage.** No patient-level records, form dictionaries,
+   free text, row-level predictions, or patient IDs in Git, CI, logs, or cloud
+   artifacts. Recursive `assert_zero_patient_leakage()` validators must scan all
+   output data structures.
+4. **Five-vital completeness uses all 5 vitals.** The canonical tuple is
+   `("temperature", "heart_rate", "bp_systolic", "bp_diastolic", "spo2")`.
+   Past implementations omitted `bp_diastolic` — this was explicitly corrected.
+5. **Benchmark tasks must NEVER modify production artifacts.** Model weights,
+   feature engineering, Zod schemas, rules engines, API endpoints, and frontend
+   UI are strictly frozen during evaluation work.
+6. **Real-data isolation guards have zero file-extension exceptions.** The
+   `guarded_open` function unconditionally rejects *all* extensions accessing
+   forbidden data paths.
+
+---
+
+## 🖥️ Windows & Platform Invariants
+
+1. **Windows venv**: invoke `backend\venv\Scripts\python.exe` and `pip.exe`
+   explicitly. Never run bare `python` or `pip` globally.
+2. **PowerShell**: use `;` to chain commands, not `&&`.
+3. **`PYTHONPATH`**: set `$env:PYTHONPATH="."` when running standalone backend
+   test scripts outside pytest.
+4. **`signal.alarm()`**: Unix-only. Use `concurrent.futures.ThreadPoolExecutor`
+   for cross-platform inference timeouts.
+5. **Zod optional fields**: serialize empty strings as `undefined`
+   (`val?.trim() || undefined`), never `null`.
+6. **Pure module decoupling**: helpers shared between UI and test runners must be
+   free of `import.meta.env`, Supabase imports, or React/DOM dependencies.
+7. **CORS custom headers**: explicitly list custom headers like `X-Event-Id` in
+   `allow_headers`. Omission causes silent preflight failures.
+
+---
+
+## 🔐 Security Hardening Invariants
+
+1. **Diagnose before dropping DB objects.** Run read-only diagnostic queries
+   (`pg_policies`, `pg_tables`) before any destructive DDL.
+2. **GitHub Actions pinned to 40-char commit SHAs** — enforced by
+   `tools/ci/check_action_pins.py`.
+3. **LLM prompt injection**: use fixed template dictionaries (`_TIER_PHRASING`,
+   `_TIER_ACTIONS`), never string-interpolate untrusted patient text.
+4. **ML model integrity**: SHA-256 corruption check + optional HMAC tamper
+   verification via `VITALNET_MODEL_SIGNING_KEY` before unpickling.
+5. **Shared-tablet outbox encryption**: session-bound `sessionStorage` AES-GCM
+   keys, wiped on logout. Deterministic PBKDF2 keys cause cross-user auth-tag
+   failures.
+6. **Internal scheduler fail-closed**: HTTP 503 if `INTERNAL_SCHEDULER_TOKEN` is
+   unset; HTTP 403 on mismatch. Never fail open.
+7. **CI SQL UUIDs must be valid hexadecimal.** Characters like `s`, `p`, `q`
+   silently abort Postgres before RLS assertions run.
+

@@ -17,9 +17,18 @@ claim. It supersedes an earlier draft written for a hackathon submission;
 that framing (build windows, demo risk, judging criteria) has been removed
 entirely. Everything described below reflects the system as it exists
 today, verified against the current source, not an aspirational roadmap.
-For "what exists where," see `CODEBASE_MAP.md`; for the numbered decision
-log, see `docs/DECISIONS.md`; for regulatory posture, see
+For "what exists where," see `CODEBASE_MAP.md`; for current branches,
+deployments, verification, and maintenance rules, see
+`docs/REPOSITORY_STATUS.md`; for the numbered decision log, see
+`docs/DECISIONS.md`; for regulatory posture, see
 `docs/CLINICAL_GOVERNANCE.md`.
+
+> **Current posture (2026-08-22):** The approved refinement work is merged on
+> `dev` and available on `test` for controlled preproduction testing. The
+> legacy FastAPI backend remains the live runtime authority, the Edge Function
+> remains uncut, and VitalNet remains a prototype rather than clinically
+> validated software. Historical implementation paths in older sections are
+> preserved only where they explain the evolution of the design.
 
 ---
 
@@ -136,7 +145,7 @@ if desired, and the offline inference path was deliberately re-architected
 **Language.** Minimum ASHA-worker education is Class 10 (relaxed to Class 8
 where unavailable); English literacy for medical terminology is not a safe
 assumption. The intake form ships in English, Hindi, and Tamil today
-(`react-i18next`, `frontend/src/locales/`), with the field labels in plain
+(`react-i18next`, `apps/web/src/locales/`), with the field labels in plain
 language rather than clinical terms; more regional languages are an
 infrastructure-ready addition (add a locale file), not an architecture
 change. The doctor-facing briefing renders in English, consistent with PHC
@@ -451,12 +460,12 @@ offline (browser) paths — which meant the same patient could, in
 principle, get a different triage tier depending on connectivity. That was
 a real, identified clinical-safety inconsistency. The fix: **exactly one**
 `sklearn.ensemble.HistGradientBoostingClassifier` is trained once
-(`scripts/train_classifier.py`) and exported to both runtimes from the same
+(`tools/training/train_classifier.py`) and exported to both runtimes from the same
 artifact — the backend loads the `.pkl`, the browser evaluates a compact,
-dependency-free JSON tree representation in pure JavaScript. A golden-vector
-parity test (`npm run test:parity`, CI-enforced) asserts the two produce
-identical classifications on every held-out sample. Online and offline
-triage cannot silently diverge.
+dependency-free JSON tree representation in pure JavaScript. The shared `packages/clinical-core` test suite replays golden vectors and
+exercises the browser tree evaluator and shared feature/rules contracts; it is
+CI-enforced through `pnpm --filter @vitalnet/clinical-core test`. Online and
+offline triage cannot silently diverge without that gate failing.
 
 **Why `HistGradientBoostingClassifier` specifically:**
 
