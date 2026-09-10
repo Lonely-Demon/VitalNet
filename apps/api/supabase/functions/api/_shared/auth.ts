@@ -42,6 +42,8 @@ function isAllowedJwksUrl(urlStr: string): boolean {
   }
 }
 
+let remoteJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+
 function getRemoteJwks() {
   if (!remoteJwks) {
     const config = getConfig();
