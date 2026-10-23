@@ -12,7 +12,7 @@
     "@supabase/supabase-js": "^2.110.2",
     "@tailwindcss/vite": "^4.3.3",
     "@vitalnet/clinical-core": "workspace:*",
-    "@vitejs/plugin-react": "^6.0.3",
+    "@vitejs/plugin-react": "^6.1.1",
     "i18next": "^26.4.0",
     "idb": "^8.0.3",
     "lucide-react": "^1.24.0",
