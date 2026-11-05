@@ -7,7 +7,9 @@
 // Drafts older than 24h are ignored to prevent stale data from silently restoring.
 // Shares the vitalnet_offline DB (v2) with the submission queue — same IndexedDB connection.
 
+import { useCallback } from 'react'
 import { getOfflineDB } from '../lib/offlineDB'
+import { encryptOutboxPayload, decryptOutboxPayload } from '../lib/outbox'
 
 const STORE = 'form-drafts'
 
@@ -20,6 +22,7 @@ const DRAFT_TTL_MS = 24 * 60 * 60 * 1000   // 24 hours
  * and a fixed 'anonymous' key would let two different workers read/write the
  * SAME draft bucket — leaking one worker's in-progress patient data to the
  * next. No stable owner ⇒ no draft persistence, rather than a shared bucket.
+ * Draft payloads are encrypted with the worker's device_keystore AES-GCM key.
  * @param {string|null} ownerId — the authenticated worker's profile id
  */
 export function useDraftSave(ownerId) {
@@ -28,35 +31,48 @@ export function useDraftSave(ownerId) {
   /**
    * Load a saved draft. Returns null if no owner, no draft, or draft is >24h old.
    */
-  async function loadDraft() {
-    if (!key) return null
-    const db = await getOfflineDB()
-    const draft = await db.get(STORE, key)
-    if (draft && Date.now() - draft.savedAt < DRAFT_TTL_MS) {
-      return draft.formData
+  const loadDraft = useCallback(async (overrideOwnerId) => {
+    const effectiveOwner = overrideOwnerId || ownerId
+    const effectiveKey = effectiveOwner ? `draft-${effectiveOwner}` : null
+    if (!effectiveKey) return null
+    try {
+      const db = await getOfflineDB()
+      const draft = await db.get(STORE, effectiveKey)
+      if (draft && Date.now() - draft.savedAt < DRAFT_TTL_MS) {
+        const decrypted = await decryptOutboxPayload(draft.formData, effectiveOwner, effectiveKey)
+        return decrypted
+      }
+    } catch (e) {
+      console.warn('[VitalNet] Failed to load/decrypt draft', e)
     }
     return null
-  }
+  }, [ownerId])
 
   /**
    * Save the current form state. Call on every field change (debounced by caller).
+   * Encrypts the payload with device_keystore non-extractable AES-GCM CryptoKey.
    * @param {object} formData — current form values
    */
-  async function saveDraft(formData) {
-    if (!key) return
-    const db = await getOfflineDB()
-    await db.put(STORE, { formData, savedAt: Date.now() }, key)
-  }
+  const saveDraft = useCallback(async (formData) => {
+    if (!key || !ownerId) return
+    try {
+      const payload = await encryptOutboxPayload(formData, ownerId, key)
+      const db = await getOfflineDB()
+      await db.put(STORE, { owner_id: ownerId, formData: payload, savedAt: Date.now() }, key)
+    } catch (e) {
+      console.warn('[VitalNet] Failed to save encrypted draft', e)
+    }
+  }, [key, ownerId])
 
   /**
    * Clear the draft. Call only after successful queue push or submission —
    * NOT after a failed attempt, so the draft survives transient errors.
    */
-  async function clearDraft() {
+  const clearDraft = useCallback(async () => {
     if (!key) return
     const db = await getOfflineDB()
     await db.delete(STORE, key)
-  }
+  }, [key])
 
   return { loadDraft, saveDraft, clearDraft }
 }

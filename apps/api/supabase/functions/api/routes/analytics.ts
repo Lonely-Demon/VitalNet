@@ -276,6 +276,7 @@ analytics.get("/api/analytics/ml-agreement", rateLimit(60, 60), requireRole("doc
 // ── /export ────────────────────────────────────────────────────────────────────
 
 const EXPORT_MAX_RANGE_DAYS = 366;
+const CHUNK_SIZE = 1000;
 const EXPORT_COLUMNS = [
   "id",
   "created_at",
@@ -319,27 +320,42 @@ analytics.get("/api/analytics/export", rateLimit(10, 60), requireRole("doctor", 
   const db = getSupabaseForUser(user.token);
   const { role, facilityId, scoped } = resolveScope(user);
 
-  const failures: string[] = [];
-  const res = await runQuery(
-    async () => {
-      let q = db.from("case_records").select(EXPORT_COLUMNS.join(",")).is("deleted_at", null).gte(
-        "created_at",
-        parsedFrom.toISOString(),
-      ).lte("created_at", parsedTo.toISOString()).order("created_at", { ascending: true });
-      if (scoped) q = q.eq("facility_id", facilityId);
-      // Same as /summary: supabase-js does NOT throw on PostgREST errors.
-      const res = await q;
-      if (res.error) throw res.error;
-      return res;
-    },
-    "export",
-    failures,
-  );
+  const rows: Array<Record<string, unknown>> = [];
+  let offset = 0;
+  while (true) {
+    const currentStart = offset;
+    const currentEnd = offset + CHUNK_SIZE - 1;
+    const failures: string[] = [];
+    const res = await runQuery(
+      async () => {
+        let q = db
+          .from("case_records")
+          .select(EXPORT_COLUMNS.join(","))
+          .is("deleted_at", null)
+          .gte("created_at", parsedFrom.toISOString())
+          .lte("created_at", parsedTo.toISOString())
+          .order("created_at", { ascending: true })
+          .range(currentStart, currentEnd);
+        if (scoped) q = q.eq("facility_id", facilityId);
+        // Same as /summary: supabase-js does NOT throw on PostgREST errors.
+        const res = await q;
+        if (res.error) throw res.error;
+        return res;
+      },
+      "export",
+      failures,
+    );
 
-  if (failures.length) {
-    throw new HttpError(502, "Export query failed — try a narrower date range");
+    if (failures.length || !res) {
+      throw new HttpError(502, "Export query failed — try a narrower date range");
+    }
+    const chunk = (res?.data ?? []) as unknown as Array<Record<string, unknown>>;
+    rows.push(...chunk);
+    if (chunk.length < CHUNK_SIZE) {
+      break;
+    }
+    offset += CHUNK_SIZE;
   }
-  const rows = (res?.data ?? []) as unknown as Array<Record<string, unknown>>;
 
   const csv = toCsv(EXPORT_COLUMNS, rows);
 

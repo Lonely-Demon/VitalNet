@@ -9,8 +9,26 @@ import { requireRole } from "../_shared/auth.ts";
 import { rateLimit } from "../_shared/rateLimit.ts";
 import { extractBearerToken, getSupabaseAdmin, getSupabaseForUser, HttpError } from "../_shared/database.ts";
 import { getConfig } from "../_shared/config.ts";
-import { pushEmergencyAlert } from "../_shared/webpush.ts";
+import { ALLOWED_PUSH_HOST_SUFFIXES, pushEmergencyAlert, validatePushEndpoint } from "../_shared/webpush.ts";
 import type { AppEnv } from "../_shared/types.ts";
+
+export { ALLOWED_PUSH_HOST_SUFFIXES, validatePushEndpoint };
+
+export function verifySchedulerToken(c: { req: { header: (name: string) => string | undefined } }): void {
+  const config = getConfig();
+  const expectedToken = config.internalSchedulerToken;
+  if (!expectedToken) {
+    throw new HttpError(
+      503,
+      "Escalation scheduler endpoint disabled: INTERNAL_SCHEDULER_TOKEN not configured",
+    );
+  }
+
+  const schedulerToken = c.req.header("x-internal-scheduler-token");
+  if (!schedulerToken || schedulerToken !== expectedToken) {
+    throw new HttpError(403, "Invalid or missing scheduler token");
+  }
+}
 
 export const push = new Hono<AppEnv>();
 
@@ -47,6 +65,9 @@ push.post("/api/push/subscribe", rateLimit(10, 60), requireRole("doctor", "admin
   }
   const body = parsed.data;
 
+  // SSRF defense: endpoint must be HTTPS and host must end with recognized push service suffix
+  validatePushEndpoint(body.endpoint);
+
   const rawToken = extractBearerToken(c.req.header("authorization"));
   const db = getSupabaseForUser(rawToken);
 
@@ -70,6 +91,9 @@ push.delete("/api/push/subscribe", rateLimit(10, 60), requireRole("doctor", "adm
   const endpoint = c.req.query("endpoint");
   if (!endpoint) throw new HttpError(400, "Missing endpoint query parameter");
 
+  // Validate endpoint format on unsubscribe as well
+  validatePushEndpoint(endpoint);
+
   const rawToken = extractBearerToken(c.req.header("authorization"));
   const db = getSupabaseForUser(rawToken);
 
@@ -88,17 +112,27 @@ interface EscalationCandidate {
   last_escalated_at: string | null;
 }
 
-push.post("/api/push/check-emergency-escalations", rateLimit(6, 60), requireRole("admin"), async (c) => {
+push.post("/api/push/check-emergency-escalations", rateLimit(6, 60), requireRole("admin", "supervisor"), async (c) => {
+  const user = c.get("user");
+  verifySchedulerToken(c);
+
   const threshold = new Date(Date.now() - ESCALATION_THRESHOLD_MINUTES * 60 * 1000).toISOString();
   const svc = getSupabaseAdmin();
 
-  const { data, error } = await svc
+  let query = svc
     .from("case_records")
     .select("id, facility_id, chief_complaint, risk_driver, created_at, last_escalated_at")
     .eq("triage_level", "EMERGENCY")
     .is("reviewed_at", null)
     .is("deleted_at", null)
     .lt("created_at", threshold);
+
+  // Scope query by facility for facility-scoped admin; supervisors scan all facilities
+  if (user.resolvedRole !== "supervisor" && user.resolvedFacilityId) {
+    query = query.eq("facility_id", user.resolvedFacilityId);
+  }
+
+  const { data, error } = await query;
   if (error) throw error;
 
   const candidates = (data ?? []) as EscalationCandidate[];
@@ -113,6 +147,7 @@ push.post("/api/push/check-emergency-escalations", rateLimit(6, 60), requireRole
       candidate.facility_id,
       "EMERGENCY case still unreviewed",
       `${candidate.chief_complaint ?? ""} — ${candidate.risk_driver ?? ""}`.slice(0, 150),
+      candidate.id,
     );
 
     const { error: updateError } = await svc

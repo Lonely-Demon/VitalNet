@@ -9,6 +9,8 @@ import {
   purgeRecoveryRequired,
   purgeStalePending,
 } from '../lib/outbox'
+import { getStorageHealth } from '../lib/offlineDB'
+import { processQueue } from '../stores/syncStore'
 import { useAuth } from '../store/authStore'
 
 export default function OfflineBanner() {
@@ -19,6 +21,7 @@ export default function OfflineBanner() {
   const [deadLetters,  setDeadLetters]  = useState([])
   const [recoveryCount, setRecoveryCount] = useState(0)
   const [staleCount, setStaleCount] = useState(0)
+  const [highPressure, setHighPressure] = useState(false)
   const [showDead,     setShowDead]     = useState(false)
 
   useEffect(() => {
@@ -27,16 +30,18 @@ export default function OfflineBanner() {
       // never see another worker's queued patient data (the list renders
       // patient_name/chief_complaint). The pending COUNT is a device-level
       // indicator only (no PHI), so it stays global.
-      const [count, dead, recovery, stale] = await Promise.all([
+      const [count, dead, recovery, stale, health] = await Promise.all([
         getPendingCount(),
         getDeadLetters(ownerId),
         getRecoveryRequiredCount(),
         getStalePendingCount(ownerId),
+        getStorageHealth(),
       ])
       setQueueCount(count)
       setDeadLetters(dead)
       setRecoveryCount(recovery)
       setStaleCount(stale)
+      setHighPressure(health?.highPressure ?? false)
     }
 
     function handleOnline()  { setOnline(true);  updateCounts() }
@@ -56,6 +61,11 @@ export default function OfflineBanner() {
 
   const handleRetry = async (eventId) => {
     await retryDeadLetter(eventId)
+    if (navigator.onLine) {
+      processQueue().catch((err) => {
+        console.warn('[VitalNet] Queue drain on dead-letter retry failed', err)
+      })
+    }
   }
 
   const handleDiscard = async (eventId) => {
@@ -78,10 +88,15 @@ export default function OfflineBanner() {
     if (confirmed) await purgeRecoveryRequired()
   }
 
-  if (online && queueCount === 0 && deadLetters.length === 0 && recoveryCount === 0 && staleCount === 0) return null
+  if (online && queueCount === 0 && deadLetters.length === 0 && recoveryCount === 0 && staleCount === 0 && !highPressure) return null
 
   return (
     <div>
+      {highPressure && (
+        <div role="alert" aria-live="polite" className="bg-urgent/15 border-b border-urgent/40 px-4 py-2 text-center text-sm text-urgent font-medium">
+          Device storage is running low (over 80% used). Please sync pending cases to prevent offline data loss.
+        </div>
+      )}
       {!online && (
         <div role="status" aria-live="polite" className="bg-urgent/10 border-b border-urgent/30 px-4 py-2 text-center text-sm text-urgent">
           You are offline. Submissions will be saved and synced when connected.

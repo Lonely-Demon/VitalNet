@@ -52,7 +52,7 @@ app.use(
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Authorization", "Content-Type", "X-CSRF-Token", "X-Device-Id", "X-Request-ID"],
+    allowHeaders: ["Authorization", "Content-Type", "X-CSRF-Token", "X-Device-Id", "X-Request-ID", "X-Internal-Scheduler-Token"],
   }),
 );
 

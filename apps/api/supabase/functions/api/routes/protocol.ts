@@ -44,7 +44,7 @@ async function readJsonBody(c: { req: { json: () => Promise<unknown> } }): Promi
 protocol.post("/api/protocol/ask", rateLimit(20, 60), requireRole(...ALL_ROLES), async (c) => {
   const user = c.get("user");
   const facilityId = user.resolvedFacilityId;
-  if (!facilityId) {
+  if (!facilityId && user.resolvedRole !== "supervisor") {
     throw new HttpError(400, "Account has no facility assigned");
   }
 
@@ -59,7 +59,7 @@ protocol.post("/api/protocol/ask", rateLimit(20, 60), requireRole(...ALL_ROLES),
 
   const row = {
     asked_by: user.sub,
-    facility_id: facilityId,
+    facility_id: facilityId ?? null,
     question_text: body.question_text,
     language: body.language,
     llm_answer_text: result.answer,

@@ -20,6 +20,7 @@ function baseConfig(overrides: Partial<Config> = {}): Config {
     vapidPrivateKey: "",
     vapidSubject: "mailto:admin@example.com",
     dataRetentionDays: 0,
+    internalSchedulerToken: "",
     ...overrides,
   };
 }

@@ -30,7 +30,7 @@ async function transcribeGroq(
   language: string | null,
 ): Promise<string> {
   const form = new FormData();
-  form.append("file", new Blob([audio.slice()]), filename);
+  form.append("file", new Blob([audio as unknown as BlobPart]), filename);
   form.append("model", GROQ_MODEL);
   if (language) form.append("language", language);
 
@@ -38,6 +38,7 @@ async function transcribeGroq(
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: form,
+    signal: AbortSignal.timeout(20000),
   });
   if (!response.ok) {
     throw new Error(`Groq transcription failed: HTTP ${response.status}`);
@@ -54,7 +55,7 @@ async function transcribeSarvam(
 ): Promise<string> {
   const languageCode = SARVAM_LANGUAGE_CODES[language ?? ""] ?? "hi-IN";
   const form = new FormData();
-  form.append("file", new Blob([audio.slice()]), filename);
+  form.append("file", new Blob([audio as unknown as BlobPart]), filename);
   form.append("model", SARVAM_MODEL);
   form.append("language_code", languageCode);
 
@@ -62,6 +63,7 @@ async function transcribeSarvam(
     method: "POST",
     headers: { "api-subscription-key": apiKey },
     body: form,
+    signal: AbortSignal.timeout(20000),
   });
   if (!response.ok) {
     throw new Error(`Sarvam transcription failed: HTTP ${response.status}`);

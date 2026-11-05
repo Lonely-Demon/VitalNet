@@ -41,6 +41,7 @@ import hmac
 from typing import Optional
 
 from fastapi import HTTPException
+import httpx
 from supabase import Client, create_client
 from supabase.lib.client_options import ClientOptions
 
@@ -52,20 +53,22 @@ supabase_anon: Client = create_client(
     settings.supabase_anon_key,
 )
 
+# Shared persistent HTTP connection pool transport to prevent TCP/TLS socket exhaustion under load
+_shared_transport = httpx.HTTPTransport(retries=3)
+
 
 def get_supabase_for_user(raw_token: str) -> Client:
     """
     Creates a Supabase client scoped to the user's JWT so RLS applies.
     Call this in every endpoint that touches RLS-protected tables.
 
-    Note: constructs a fresh client per call. This is deliberate for
-    correctness — a shared client with a mutated per-request auth token would
-    race across concurrently-served requests. A shared-connection optimization
-    is possible but only safely once the routes are fully async and the
-    auth-set/query pair is provably atomic; see CODEBASE_MAP.md.
+    Shares a persistent HTTP connection pool transport across instances to
+    avoid TLS re-handshakes on every request while maintaining thread/request
+    isolation.
     """
     client = create_client(settings.supabase_url, settings.supabase_anon_key)
     client.postgrest.auth(raw_token)
+    client.postgrest.session._transport = _shared_transport
     return client
 
 

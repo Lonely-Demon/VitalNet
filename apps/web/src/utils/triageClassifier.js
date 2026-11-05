@@ -148,6 +148,7 @@ export async function warmupModel() {
 export async function runTriage(formData) {
   const engineInput = {
     patient_age: formData.patient_age,
+    age_months: formData.age_months ?? null,
     patient_sex: formData.patient_sex || null,
     bp_systolic: formData.bp_systolic ?? null,
     bp_diastolic: formData.bp_diastolic ?? null,

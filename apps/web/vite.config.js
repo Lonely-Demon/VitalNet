@@ -31,21 +31,6 @@ export default defineConfig({
         // Web Push handler (FEATURES_ROADMAP §1.4) — a small standalone
         // script rather than switching to injectManifest mode.
         importScripts: ['sw-push.js'],
-
-        // Background Sync for POST /api/submit (in-flight failure recovery)
-        runtimeCaching: [{
-          urlPattern: ({ url }) => url.pathname === '/api/submit',
-          handler: 'NetworkOnly',
-          method: 'POST',
-          options: {
-            backgroundSync: {
-              name: 'vitalnet_submission_queue',
-              options: {
-                maxRetentionTime: 24 * 60,  // 24 hours in minutes
-              },
-            },
-          },
-        }],
       },
 
       manifest: {

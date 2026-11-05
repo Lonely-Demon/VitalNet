@@ -4,9 +4,23 @@
 // human/spreadsheet-facing export, not a safety-critical artifact — just
 // correct quoting.
 
-function escapeCsvField(value: unknown): string {
+const FORMULA_TRIGGERS = new Set(["=", "+", "-", "@", "\t", "\r"]);
+
+/**
+ * Safely neutralizes CSV formula injection trigger characters (=, +, -, @, \t, \r).
+ * If a value starts with any of these characters, prepends a single quote (').
+ */
+export function sanitizeCsvValue(value: string): string {
+  if (value.length > 0 && FORMULA_TRIGGERS.has(value[0]!)) {
+    return `'${value}`;
+  }
+  return value;
+}
+
+export function escapeCsvField(value: unknown): string {
   if (value === null || value === undefined) return "";
-  const str = typeof value === "object" ? JSON.stringify(value) : String(value);
+  let str = typeof value === "object" ? JSON.stringify(value) : String(value);
+  str = sanitizeCsvValue(str);
   if (/[",\n\r]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`;
   }

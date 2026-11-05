@@ -327,20 +327,32 @@ export function calculateWeightBasedDose(input: WeightDoseInput): WeightDoseResu
     ageMonths,
   } = input;
 
-  if (weightKg < 1.0) {
+  if (!Number.isFinite(weightKg) || weightKg < 1.0) {
     throw new Error("Patient weight < 1.0 kg is out of bounds for standard paediatric dosing protocols. Specialist neonatal care required.");
   }
-  if (weightKg > 100.0) {
+  if (!Number.isFinite(weightKg) || weightKg > 100.0) {
     throw new Error("Patient weight > 100.0 kg exceeds paediatric parameters. Use adult dosing protocols with adult maximum caps.");
   }
-  if (minWeightKg !== undefined && weightKg < minWeightKg) {
+  if (minWeightKg !== undefined && (!Number.isFinite(minWeightKg) || weightKg < minWeightKg)) {
     throw new Error(`Patient weight (${weightKg} kg) is below the minimum threshold (${minWeightKg} kg) for ${drugName || "this medication"}. Specialist paediatric evaluation required.`);
   }
-  if (minAgeMonths !== undefined && ageMonths !== undefined && ageMonths < minAgeMonths) {
+  if (minAgeMonths !== undefined && ageMonths !== undefined && (!Number.isFinite(ageMonths) || ageMonths < minAgeMonths)) {
     throw new Error(`Patient age (${ageMonths} months) is below the minimum threshold (${minAgeMonths} months) for ${drugName || "this medication"}. Specialist paediatric evaluation required.`);
   }
-  if (mgPerKg < 0 || maxMgPerDose <= 0) {
+  if (ageMonths !== undefined && !Number.isFinite(ageMonths)) {
+    throw new Error("Age in months must be a finite number.");
+  }
+  if (!Number.isFinite(mgPerKg) || !Number.isFinite(maxMgPerDose) || mgPerKg < 0 || maxMgPerDose <= 0) {
     throw new Error("mg/kg must be non-negative and max dose must be greater than zero.");
+  }
+  if (concentrationMgPerMl !== undefined && (!Number.isFinite(concentrationMgPerMl) || concentrationMgPerMl <= 0)) {
+    throw new Error("Concentration must be a positive finite number.");
+  }
+  if (maxMgPerDay !== undefined && (!Number.isFinite(maxMgPerDay) || maxMgPerDay <= 0)) {
+    throw new Error("Maximum daily dose must be a positive finite number.");
+  }
+  if (maxMgPerKgPerDay !== undefined && (!Number.isFinite(maxMgPerKgPerDay) || maxMgPerKgPerDay <= 0)) {
+    throw new Error("Maximum daily mg/kg must be a positive finite number.");
   }
 
   const steps: string[] = [];
@@ -451,8 +463,11 @@ export interface OrsPlanResult {
 export function calculateOrsVolume(input: OrsPlanInput): OrsPlanResult {
   const { weightKg, plan, ageMonths } = input;
 
-  if (weightKg < 1.0 || weightKg > 100.0) {
+  if (!Number.isFinite(weightKg) || weightKg < 1.0 || weightKg > 100.0) {
     throw new Error("Weight must be between 1.0 kg and 100.0 kg.");
+  }
+  if (ageMonths !== undefined && !Number.isFinite(ageMonths)) {
+    throw new Error("Age in months must be a finite number.");
   }
 
   const steps: string[] = [];
@@ -573,11 +588,14 @@ export interface IvDripRateResult {
 export function calculateIvDripRate(input: IvDripRateInput): IvDripRateResult {
   const { volumeMl, durationHours = 0, durationMinutes = 0, dropFactor } = input;
 
+  if (!Number.isFinite(volumeMl) || !Number.isFinite(durationHours) || !Number.isFinite(durationMinutes)) {
+    throw new Error("Volume and duration must be finite numbers.");
+  }
   const totalMinutes = durationHours * 60 + durationMinutes;
-  if (volumeMl <= 0 || totalMinutes <= 0) {
+  if (!Number.isFinite(totalMinutes) || volumeMl <= 0 || totalMinutes <= 0) {
     throw new Error("Volume and duration must be greater than zero.");
   }
-  if (![10, 15, 20, 60].includes(dropFactor)) {
+  if (!Number.isFinite(dropFactor) || ![10, 15, 20, 60].includes(dropFactor)) {
     throw new Error("Drop factor must be 10, 15, 20 (Macrodrip) or 60 (Microdrip).");
   }
 
@@ -630,8 +648,11 @@ export interface MaintenanceFluidResult {
 }
 
 export function calculateMaintenanceFluid(weightKg: number, ageYears?: number): MaintenanceFluidResult {
-  if (weightKg < 1.0 || weightKg > 100.0) {
+  if (!Number.isFinite(weightKg) || weightKg < 1.0 || weightKg > 100.0) {
     throw new Error("Weight must be between 1.0 kg and 100.0 kg.");
+  }
+  if (ageYears !== undefined && !Number.isFinite(ageYears)) {
+    throw new Error("Age in years must be a finite number.");
   }
 
   const steps: string[] = [];

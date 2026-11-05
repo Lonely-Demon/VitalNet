@@ -36,7 +36,6 @@ export function useLocalTriage() {
 
   const classify = useCallback(
     async (formData) => {
-      if (!modelReady) return null
       try {
         return await runTriage(formData)
       } catch (err) {
@@ -44,7 +43,7 @@ export function useLocalTriage() {
         return null
       }
     },
-    [modelReady]
+    []
   )
 
   // triggerWarmup is exported so callers can imperatively trigger it

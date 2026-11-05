@@ -1,19 +1,22 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { v4 as uuidv4 } from 'uuid'
-import { TriangleAlert } from 'lucide-react'
+import { TriangleAlert, QrCode } from 'lucide-react'
 import { submitCase } from '../lib/api'
 import { useToast } from '../components/ToastProvider'
 import { useAuth } from '../store/authStore'
 import { useLocalTriage } from '../hooks/useLocalTriage'
 import { useDraftSave } from '../hooks/useDraftSave'
-import { validateIntakeForm, generatePatientKey, normalizePatientKey } from '@vitalnet/clinical-core'
+import { validateIntakeForm, generatePatientKey, normalizePatientKey, encodeEmergencySmsFrame } from '@vitalnet/clinical-core'
 import VoiceInputButton from '../components/VoiceInputButton'
 import { EmergencySmsAlert } from '../components/EmergencySmsAlert'
 import { AmbulanceCallButton } from '../components/AmbulanceCallButton'
 import { PatientKeyCard } from '../components/PatientKeyCard'
 import { getCaseHistoryByPatientKey } from '../api/cases'
 import { serializeIntakePayload } from '../lib/intakePayload'
+import QrScannerModal from '../components/QrScannerModal'
+import VitalCaptureAssist from '../components/VitalCaptureAssist'
+import { cachePatientVisit, getOfflinePatientHistory } from '../lib/patientHistoryCache'
 
 // Stable English identifiers — these are the actual values submitted to the
 // API (chief_complaint is a free-text-ish field, not a coded enum server-
@@ -152,6 +155,7 @@ export default function IntakeForm() {
   const [newPatientKey, setNewPatientKey] = useState(null)
   const [historyLookup, setHistoryLookup] = useState(null)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [qrModalOpen, setQrModalOpen] = useState(false)
 
   const { profile } = useAuth()
   const { showToast } = useToast()
@@ -163,9 +167,13 @@ export default function IntakeForm() {
   // another worker's form before the profile resolves. Null ⇒ no draft
   // persistence until the profile is known (see useDraftSave).
   const { loadDraft, saveDraft, clearDraft } = useDraftSave(profile?.id ?? null)
+  const draftLoadedRef = useRef(false)
+  const profileId = profile?.id ?? null
 
-  // Load draft on mount
+  // Load draft once profile id resolves (fix mount race condition VN-CRITICAL-4d)
   useEffect(() => {
+    if (!profileId || draftLoadedRef.current) return
+    draftLoadedRef.current = true
     let mounted = true
     loadDraft().then(draft => {
       if (mounted && draft) {
@@ -174,8 +182,7 @@ export default function IntakeForm() {
       }
     }).catch(console.error)
     return () => { mounted = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [profileId, loadDraft, showToast])
 
   // Auto-save draft on form change (debounced 1s)
   useEffect(() => {
@@ -218,16 +225,32 @@ export default function IntakeForm() {
     }))
   }
 
-  const handleCheckPatientHistory = async () => {
-    const key = normalizePatientKey(form.patient_key)
+  const handleCheckPatientHistory = async (overrideKey = null) => {
+    const key = normalizePatientKey(overrideKey || form.patient_key)
     if (!key) return
     setHistoryLoading(true)
     setHistoryLookup(null)
     try {
       const data = await getCaseHistoryByPatientKey(key)
-      setHistoryLookup({ cases: data.cases || [] })
+      const cases = data.cases || []
+      setHistoryLookup({ cases, source: 'network' })
+      // Cache fetched visits in IndexedDB patient_history_cache (ADR §49)
+      for (const c of cases) {
+        await cachePatientVisit({ ...c, patient_key: key }, profile?.id).catch(() => {})
+      }
     } catch {
-      setHistoryLookup({ error: true })
+      // Offline fallback: check 14-day local cache & 7-day longitudinal deterioration
+      const offlineHistory = await getOfflinePatientHistory(key, profile?.id).catch(() => null)
+      if (offlineHistory && offlineHistory.found && offlineHistory.cases.length > 0) {
+        setHistoryLookup({
+          cases: offlineHistory.cases,
+          source: 'offline_cache',
+          offlineDeteriorationAlert: offlineHistory.offlineDeteriorationAlert,
+          deteriorationVisitCount: offlineHistory.deteriorationVisitCount,
+        })
+      } else {
+        setHistoryLookup({ error: true })
+      }
     } finally {
       setHistoryLoading(false)
     }
@@ -289,8 +312,38 @@ export default function IntakeForm() {
       if (isNewPatientKey) setNewPatientKey(patientKey)
       setHistoryLookup(null)
 
+      // Cache this visit into IndexedDB patient_history_cache (ADR §49)
+      await cachePatientVisit({
+        ...payload,
+        patient_key: patientKey,
+        triage_level: local?.triageLevel || 'ROUTINE',
+        client_id: data.client_id,
+      }, profile?.id).catch(() => {})
+
       if (data.queued) {
-        setResult({ ...data, localTriage: local })
+        // If offline emergency, encode compact authenticated VN1: SMS frame (ADR §51)
+        let smsFrame = null
+        if (local?.triageLevel === 'EMERGENCY' && typeof encodeEmergencySmsFrame === 'function') {
+          try {
+            smsFrame = encodeEmergencySmsFrame({
+              clientId: data.client_id,
+              age: payload.patient_age != null ? Number(payload.patient_age) : 30,
+              sex: payload.patient_sex || 'other',
+              isPregnant: !!payload.is_pregnant,
+              tier: 'EMERGENCY',
+              symptoms: payload.symptoms || [],
+              bpSystolic: payload.bp_systolic != null ? Number(payload.bp_systolic) : null,
+              bpDiastolic: payload.bp_diastolic != null ? Number(payload.bp_diastolic) : null,
+              spo2: payload.spo2 != null ? Number(payload.spo2) : null,
+              heartRate: payload.heart_rate != null ? Number(payload.heart_rate) : null,
+              temperature: payload.temperature != null ? Number(payload.temperature) : null,
+            })
+          } catch (smsErr) {
+            console.warn('[VitalNet] SMS frame encoding error', smsErr)
+          }
+        }
+
+        setResult({ ...data, localTriage: local, smsFrame })
         showToast('Saved offline — will sync when connected', 'warning')
       } else {
         setResult(data)
@@ -344,7 +397,7 @@ export default function IntakeForm() {
               {offlineTriage?.triageLevel === 'EMERGENCY' && (
                 <>
                   <AmbulanceCallButton />
-                  <EmergencySmsAlert />
+                  <EmergencySmsAlert smsFrame={result.smsFrame} />
                 </>
               )}
               <div className="mb-6">
@@ -480,7 +533,16 @@ export default function IntakeForm() {
               className={`${inputClass} flex-1 font-mono tracking-widest ${fieldErrors.patient_key ? 'border-emergency/50 ring-1 ring-emergency/50' : ''}`} />
             <button
               type="button"
-              onClick={handleCheckPatientHistory}
+              onClick={() => setQrModalOpen(true)}
+              className="px-3 py-3 rounded-md text-sm font-medium bg-surface2 border border-surface3 text-text2 hover:border-sage hover:text-forest cursor-pointer transition-all flex items-center gap-1.5"
+              title="Scan ABDM ABHA or Patient Card QR"
+            >
+              <QrCode size={16} />
+              <span className="hidden sm:inline">Scan QR</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleCheckPatientHistory()}
               disabled={!normalizePatientKey(form.patient_key) || historyLoading}
               className="px-4 py-3 rounded-md text-sm font-medium bg-surface2 border border-surface3 text-text2 hover:border-sage disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-all"
             >
@@ -495,11 +557,33 @@ export default function IntakeForm() {
           ) : historyLookup.cases.length === 0 ? (
             <p className="text-xs text-text3 italic">{t('intakeForm.result.historyNone')}</p>
           ) : (
-            <div className="text-xs bg-surface2 border border-surface3 rounded-lg p-3 space-y-1.5">
-              <p className="font-semibold text-text2">{t('intakeForm.result.historyFound', { count: historyLookup.cases.length })}</p>
+            <div className="text-xs bg-surface2 border border-surface3 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-text2">
+                  {t('intakeForm.result.historyFound', { count: historyLookup.cases.length })}
+                  {historyLookup.source === 'offline_cache' && (
+                    <span className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface3 text-text3 font-normal">
+                      Offline Cache
+                    </span>
+                  )}
+                </p>
+              </div>
+
+              {historyLookup.offlineDeteriorationAlert && (
+                <div className="p-2.5 rounded-md bg-urgent/15 border border-urgent/30 text-urgent-ink flex items-start gap-2 animate-fade-in">
+                  <TriangleAlert size={16} className="text-urgent shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-xs">7-Day Severe Deterioration Alert</p>
+                    <p className="text-[11px] leading-tight mt-0.5">
+                      Patient has {historyLookup.deteriorationVisitCount} URGENT/EMERGENCY visit{historyLookup.deteriorationVisitCount > 1 ? 's' : ''} recorded within trailing 7 days.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <ul className="space-y-1">
                 {historyLookup.cases.slice(0, 5).map(c => (
-                  <li key={c.id} className="flex items-center justify-between text-text3">
+                  <li key={c.id || c.client_id || c.created_at} className="flex items-center justify-between text-text3">
                     <span>{new Date(c.created_at).toLocaleDateString()} — {c.chief_complaint}</span>
                     <span className={`ml-2 px-2 py-0.5 rounded-pill text-[10px] font-bold font-mono ${BADGE_COLORS[c.triage_level] || ''}`}>{c.triage_level}</span>
                   </li>
@@ -550,6 +634,18 @@ export default function IntakeForm() {
 
       {/* Vitals */}
       <Section title={t('intakeForm.sections.vitals')}>
+        <VitalCaptureAssist
+          onApplyVitals={(vitals) => {
+            setForm((prev) => ({
+              ...prev,
+              ...Object.fromEntries(
+                Object.entries(vitals)
+                  .filter(([, v]) => v != null)
+                  .map(([k, v]) => [k, String(v)])
+              ),
+            }))
+          }}
+        />
         <div className="grid grid-cols-2 gap-3">
           <Field label={t('intakeForm.fields.bpSystolic')} error={fieldErrors.bp_systolic} id="bp_systolic">
             <input id="bp_systolic" name="bp_systolic" type="number" value={form.bp_systolic}
@@ -732,6 +828,25 @@ export default function IntakeForm() {
           </div>
         </div>
       )}
+
+      {/* ABDM ABHA & Patient Card Camera Scanner Modal (ADR §49) */}
+      <QrScannerModal
+        isOpen={qrModalOpen}
+        onClose={() => setQrModalOpen(false)}
+        onDetected={(scanned) => {
+          setForm((prev) => {
+            const next = { ...prev }
+            if (scanned.patientKey) next.patient_key = scanned.patientKey
+            if (scanned.patientName && !prev.patient_name) next.patient_name = scanned.patientName
+            if (scanned.patientAge != null && !prev.patient_age) next.patient_age = String(scanned.patientAge)
+            if (scanned.patientSex && !prev.patient_sex) next.patient_sex = scanned.patientSex
+            return next
+          })
+          if (scanned.patientKey) {
+            handleCheckPatientHistory(scanned.patientKey)
+          }
+        }}
+      />
     </form>
   )
 }

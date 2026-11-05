@@ -72,7 +72,10 @@ function runInBackground(promise: Promise<unknown>): void {
 
 const triageOverrideSchema = z.object({
   overridden_triage: z.enum(["ROUTINE", "URGENT", "EMERGENCY"]),
-  override_reason: z.string().min(1).max(500).transform(stripControlChars),
+  override_reason: z
+    .string()
+    .transform(stripControlChars)
+    .pipe(z.string().trim().min(1, "Reason cannot be empty or whitespace-only").max(500, "Reason must be at most 500 characters")),
 });
 
 const caseOutcomeSchema = z.object({
@@ -314,8 +317,14 @@ cases.post(
       // the ASHA worker's submission response; pushEmergencyAlert() itself
       // no-ops safely if VAPID isn't configured.
       if (isNewSubmission && result.tier === "EMERGENCY") {
+        const caseId = typeof response.id === "string" ? response.id : undefined;
         runInBackground(
-          pushEmergencyAlert(facilityId, "EMERGENCY case submitted", `${chiefComplaint} — ${riskDriver}`.slice(0, 150)),
+          pushEmergencyAlert(
+            facilityId,
+            "EMERGENCY case submitted",
+            `${chiefComplaint} — ${riskDriver}`.slice(0, 150),
+            caseId,
+          ),
         );
       }
 

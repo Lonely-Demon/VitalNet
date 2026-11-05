@@ -21,10 +21,13 @@ Deno.test("getClientIp: ignores forwarding headers by default", async () => {
   assertEquals(await ipFromHeaders({ "x-real-ip": "203.0.113.9" }), "unknown");
 });
 
-Deno.test("getClientIp: uses proxy headers only when explicitly trusted", async () => {
+Deno.test("getClientIp: uses rightmost proxy IP when explicitly trusted", async () => {
   Deno.env.set("TRUST_PROXY_HEADERS", "true");
   try {
-    assertEquals(await ipFromHeaders({ "x-forwarded-for": "203.0.113.5, 10.0.0.1" }), "203.0.113.5");
+    // Rightmost hop is extracted, neutralizing attacker-injected leftmost hops
+    assertEquals(await ipFromHeaders({ "x-forwarded-for": "203.0.113.5, 10.0.0.1" }), "10.0.0.1");
+    assertEquals(await ipFromHeaders({ "x-forwarded-for": "attacker.ip, 198.51.100.1, 10.0.0.2" }), "10.0.0.2");
+    assertEquals(await ipFromHeaders({ "x-forwarded-for": "203.0.113.5" }), "203.0.113.5");
     assertEquals(await ipFromHeaders({ "x-real-ip": "203.0.113.9" }), "203.0.113.9");
   } finally {
     Deno.env.delete("TRUST_PROXY_HEADERS");

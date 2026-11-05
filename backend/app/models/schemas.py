@@ -139,7 +139,10 @@ class TriageOverride(BaseModel):
     @field_validator("override_reason")
     @classmethod
     def _strip_control_chars(cls, v: str) -> str:
-        return "".join(ch for ch in v if ch == "\n" or ch == "\t" or ch.isprintable()).strip()
+        s = "".join(ch for ch in v if ch == "\n" or ch == "\t" or ch.isprintable()).strip()
+        if not s:
+            raise ValueError("override_reason cannot be empty or whitespace-only")
+        return s
 
 
 class CaseOutcomeInput(BaseModel):

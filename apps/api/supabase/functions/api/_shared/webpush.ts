@@ -11,7 +11,37 @@
 // over from the FastAPI backend's pywebpush equivalent.
 import webpush from "web-push";
 import { getConfig } from "./config.ts";
-import { getSupabaseAdmin } from "./database.ts";
+import { getSupabaseAdmin, HttpError } from "./database.ts";
+
+export const ALLOWED_PUSH_HOST_SUFFIXES = [
+  ".fcm.googleapis.com",
+  ".push.apple.com",
+  ".notify.windows.com",
+  ".mozilla.com",
+  ".autopush.mozilla.com",
+];
+
+export function validatePushEndpoint(endpoint: string): void {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new HttpError(400, "Invalid push endpoint URL");
+  }
+
+  if (url.protocol !== "https:") {
+    throw new HttpError(400, "Push endpoint must use HTTPS");
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  const allowed = ALLOWED_PUSH_HOST_SUFFIXES.some(
+    (suffix) => hostname.endsWith(suffix) || hostname === suffix.slice(1),
+  );
+
+  if (!allowed) {
+    throw new HttpError(400, `Push endpoint host '${hostname}' is not authorized`);
+  }
+}
 
 interface PushSubscriptionRow {
   id: string;
@@ -21,6 +51,12 @@ interface PushSubscriptionRow {
 }
 
 async function sendOne(subscription: PushSubscriptionRow, payload: string): Promise<void> {
+  try {
+    validatePushEndpoint(subscription.endpoint);
+  } catch (err) {
+    console.warn(`Skipping push send to unauthorized endpoint ${subscription.endpoint}:`, err);
+    return;
+  }
   try {
     await webpush.sendNotification(
       {
@@ -55,7 +91,12 @@ async function sendOne(subscription: PushSubscriptionRow, payload: string): Prom
  * the caller. No-ops silently if VAPID isn't configured (Realtime, where
  * wired, is still the primary channel).
  */
-export async function pushEmergencyAlert(facilityId: string | null, title: string, body: string): Promise<void> {
+export async function pushEmergencyAlert(
+  facilityId: string | null,
+  title: string,
+  body: string,
+  caseId?: string,
+): Promise<void> {
   const config = getConfig();
   if (!config.vapidPublicKey || !config.vapidPrivateKey) return;
 
@@ -73,7 +114,11 @@ export async function pushEmergencyAlert(facilityId: string | null, title: strin
     return;
   }
 
-  const payload = JSON.stringify({ title, body });
+  const payload = JSON.stringify({
+    title,
+    body,
+    ...(caseId ? { case_id: caseId } : {}),
+  });
   for (const sub of subscriptions) {
     await sendOne(sub, payload);
   }

@@ -86,14 +86,22 @@ export async function logPhiAccess(input: LogPhiAccessInput): Promise<void> {
 /**
  * Extract a client IP only when the deployment explicitly trusts its proxy.
  * Forwarding headers are client-controlled on direct/public requests, so the
- * safe default is `unknown`. Set TRUST_PROXY_HEADERS=true only when the Edge
- * ingress is documented to overwrite these headers before they reach Hono.
+ * safe default is `unknown`. Set TRUST_PROXY_HEADERS=true only when behind
+ * a trusted reverse proxy (Supabase Edge runtime / Cloudflare gateway).
+ * In trusted proxy mode, the rightmost hop of X-Forwarded-For is extracted
+ * because that is the hop appended by the trusted reverse proxy, preventing
+ * IP spoofing via attacker-injected leftmost header values.
  */
 export function getClientIp(c: Context): string {
   if (Deno.env.get("TRUST_PROXY_HEADERS") !== "true") return "unknown";
   const forwarded = c.req.header("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]!.trim();
+  if (forwarded) {
+    const ips = forwarded.split(",").map((s) => s.trim()).filter(Boolean);
+    if (ips.length > 0) {
+      return ips[ips.length - 1]!;
+    }
+  }
   const realIp = c.req.header("x-real-ip");
-  if (realIp) return realIp;
+  if (realIp && realIp.trim()) return realIp.trim();
   return "unknown";
 }

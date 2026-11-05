@@ -9,8 +9,12 @@ export function serializeIntakePayload(form, patientKey, consentCapturedAt = new
     patient_key: patientKey,
     chief_complaint: form.chief_complaint === "Other" ? form.custom_complaint?.trim() || "" : form.chief_complaint,
     patient_name: form.patient_name?.trim() || "",
-    patient_age: form.patient_age ? parseInt(form.patient_age) : undefined,
-    age_months: form.age_months ? parseInt(form.age_months) : null,
+    patient_age: form.patient_age !== undefined && form.patient_age !== null && form.patient_age !== "" && !Number.isNaN(parseInt(form.patient_age, 10))
+      ? parseInt(form.patient_age, 10)
+      : undefined,
+    age_months: form.age_months !== undefined && form.age_months !== null && form.age_months !== "" && !Number.isNaN(parseInt(form.age_months, 10))
+      ? parseInt(form.age_months, 10)
+      : null,
     muac_mm: form.muac_mm ? parseInt(form.muac_mm) : null,
     bp_systolic: form.bp_systolic ? parseInt(form.bp_systolic) : null,
     bp_diastolic: form.bp_diastolic ? parseInt(form.bp_diastolic) : null,

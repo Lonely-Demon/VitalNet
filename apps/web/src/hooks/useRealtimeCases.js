@@ -10,9 +10,15 @@ import { supabase } from '../lib/supabase'
  * @param {function} options.onUpdate   - Called with updated row on UPDATE
  * @param {string}   options.facilityId - Filters to this facility (optional)
  * @param {string}   options.userId     - Filters to this user's cases (optional, for ASHA)
+ * @param {boolean}  options.global     - Allows unscoped/global subscription when explicitly true
  */
-export function useRealtimeCases({ onInsert, onUpdate, facilityId, userId } = {}) {
+export function useRealtimeCases({ onInsert, onUpdate, facilityId, userId, global = false } = {}) {
   useEffect(() => {
+    // Guard against subscribing to realtime cases without resolved scoping filters unless explicitly global
+    if (!global && !facilityId && !userId) {
+      return
+    }
+
     // Build a unique channel name to avoid collisions across hook instances
     const channelName = `case_records_${facilityId ?? 'all'}_${userId ?? 'all'}_${Date.now()}`
 
@@ -50,5 +56,5 @@ export function useRealtimeCases({ onInsert, onUpdate, facilityId, userId } = {}
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [facilityId, userId]) // re-subscribe if facility or user changes
+  }, [facilityId, userId, global]) // re-subscribe if scoping filters or global mode change
 }

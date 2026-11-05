@@ -24,6 +24,7 @@ export interface Config {
   vapidPrivateKey: string;
   vapidSubject: string;
   dataRetentionDays: number;
+  internalSchedulerToken?: string;
 }
 
 function env(name: string): string {
@@ -68,6 +69,7 @@ export function getConfig(): Config {
     vapidPrivateKey: env("VAPID_PRIVATE_KEY"),
     vapidSubject: env("VAPID_SUBJECT") || "mailto:admin@example.com",
     dataRetentionDays: envInt("DATA_RETENTION_DAYS", 0),
+    internalSchedulerToken: env("INTERNAL_SCHEDULER_TOKEN"),
   };
   return cached;
 }

@@ -355,3 +355,150 @@ describe("Metadata and Presets Registries", () => {
     expect(DURATION_METADATA["3_DAYS"].days).toBe(3);
   });
 });
+
+describe("Calculator Finite Input Guards (HIGH-9)", () => {
+  const nonFiniteValues = [NaN, Infinity, -Infinity];
+
+  describe("calculateWeightBasedDose non-finite guards", () => {
+    for (const val of nonFiniteValues) {
+      it(`rejects non-finite weightKg: ${val}`, () => {
+        expect(() =>
+          calculateWeightBasedDose({
+            weightKg: val,
+            mgPerKg: 15,
+            maxMgPerDose: 1000,
+            frequency: "Q6H",
+          }),
+        ).toThrow();
+      });
+
+      it(`rejects non-finite mgPerKg: ${val}`, () => {
+        expect(() =>
+          calculateWeightBasedDose({
+            weightKg: 10,
+            mgPerKg: val,
+            maxMgPerDose: 1000,
+            frequency: "Q6H",
+          }),
+        ).toThrow("mg/kg must be non-negative and max dose must be greater than zero.");
+      });
+
+      it(`rejects non-finite maxMgPerDose: ${val}`, () => {
+        expect(() =>
+          calculateWeightBasedDose({
+            weightKg: 10,
+            mgPerKg: 15,
+            maxMgPerDose: val,
+            frequency: "Q6H",
+          }),
+        ).toThrow("mg/kg must be non-negative and max dose must be greater than zero.");
+      });
+
+      it(`rejects non-finite concentrationMgPerMl: ${val}`, () => {
+        expect(() =>
+          calculateWeightBasedDose({
+            weightKg: 10,
+            mgPerKg: 15,
+            maxMgPerDose: 1000,
+            frequency: "Q6H",
+            concentrationMgPerMl: val,
+          }),
+        ).toThrow("Concentration must be a positive finite number.");
+      });
+
+      it(`rejects non-finite maxMgPerDay: ${val}`, () => {
+        expect(() =>
+          calculateWeightBasedDose({
+            weightKg: 10,
+            mgPerKg: 15,
+            maxMgPerDose: 1000,
+            frequency: "Q6H",
+            maxMgPerDay: val,
+          }),
+        ).toThrow("Maximum daily dose must be a positive finite number.");
+      });
+
+      it(`rejects non-finite maxMgPerKgPerDay: ${val}`, () => {
+        expect(() =>
+          calculateWeightBasedDose({
+            weightKg: 10,
+            mgPerKg: 15,
+            maxMgPerDose: 1000,
+            frequency: "Q6H",
+            maxMgPerKgPerDay: val,
+          }),
+        ).toThrow("Maximum daily mg/kg must be a positive finite number.");
+      });
+    }
+  });
+
+  describe("calculateOrsVolume non-finite guards", () => {
+    for (const val of nonFiniteValues) {
+      it(`rejects non-finite weightKg: ${val}`, () => {
+        expect(() =>
+          calculateOrsVolume({
+            weightKg: val,
+            plan: "PLAN_B",
+          }),
+        ).toThrow("Weight must be between 1.0 kg and 100.0 kg.");
+      });
+
+      it(`rejects non-finite ageMonths: ${val}`, () => {
+        expect(() =>
+          calculateOrsVolume({
+            weightKg: 10,
+            plan: "PLAN_B",
+            ageMonths: val,
+          }),
+        ).toThrow("Age in months must be a finite number.");
+      });
+    }
+  });
+
+  describe("calculateIvDripRate non-finite guards", () => {
+    for (const val of nonFiniteValues) {
+      it(`rejects non-finite volumeMl: ${val}`, () => {
+        expect(() =>
+          calculateIvDripRate({
+            volumeMl: val,
+            durationHours: 2,
+            dropFactor: 20,
+          }),
+        ).toThrow();
+      });
+
+      it(`rejects non-finite durationHours: ${val}`, () => {
+        expect(() =>
+          calculateIvDripRate({
+            volumeMl: 500,
+            durationHours: val,
+            dropFactor: 20,
+          }),
+        ).toThrow();
+      });
+
+      it(`rejects non-finite durationMinutes: ${val}`, () => {
+        expect(() =>
+          calculateIvDripRate({
+            volumeMl: 500,
+            durationHours: 1,
+            durationMinutes: val,
+            dropFactor: 20,
+          }),
+        ).toThrow();
+      });
+    }
+  });
+
+  describe("calculateMaintenanceFluid non-finite guards", () => {
+    for (const val of nonFiniteValues) {
+      it(`rejects non-finite weightKg: ${val}`, () => {
+        expect(() => calculateMaintenanceFluid(val)).toThrow("Weight must be between 1.0 kg and 100.0 kg.");
+      });
+
+      it(`rejects non-finite ageYears: ${val}`, () => {
+        expect(() => calculateMaintenanceFluid(20, val)).toThrow("Age in years must be a finite number.");
+      });
+    }
+  });
+});

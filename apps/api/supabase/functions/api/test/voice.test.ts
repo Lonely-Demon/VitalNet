@@ -26,6 +26,7 @@ function testConfig(overrides: Partial<Config> = {}): Config {
     vapidPrivateKey: "",
     vapidSubject: "mailto:admin@example.com",
     dataRetentionDays: 0,
+    internalSchedulerToken: "",
     ...overrides,
   };
 }
@@ -139,4 +140,30 @@ Deno.test("transcribe: Sarvam is never attempted when unconfigured, even if Groq
       ),
     TranscriptionUnavailable,
   );
+});
+
+Deno.test("transcribe: enforces 20s timeout signal and preserves audio bytes without extra slice", async () => {
+  _setConfigForTest(testConfig({ groqApiKey: "test-groq-key" }));
+  let capturedSignal: AbortSignal | null | undefined;
+  let capturedBlobSize = 0;
+
+  const sampleAudio = new Uint8Array([10, 20, 30, 40, 50]);
+
+  const result = await withMockFetch(
+    (input, init) => {
+      if (urlHostname(input) === "api.groq.com") {
+        capturedSignal = init?.signal;
+        const formData = init?.body as FormData;
+        const fileEntry = formData.get("file") as Blob;
+        capturedBlobSize = fileEntry.size;
+        return Promise.resolve(new Response(JSON.stringify({ text: "transcribed ok" }), { status: 200 }));
+      }
+      throw new Error(`unexpected fetch to ${String(input)}`);
+    },
+    () => transcribe(sampleAudio, "audio.wav", "en"),
+  );
+
+  assertEquals(result, "transcribed ok");
+  assertEquals(capturedSignal instanceof AbortSignal, true);
+  assertEquals(capturedBlobSize, sampleAudio.byteLength);
 });

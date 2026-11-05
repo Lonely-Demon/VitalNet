@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional, Literal
 
@@ -124,14 +125,20 @@ async def list_users(
     profile_rows = profiles_result.data or []
     profiles_by_id = {str(p['id']): p for p in profile_rows}
 
-    auth_users = []
-    for pid in profiles_by_id.keys():
-        try:
-            res = supabase_admin.auth.admin.get_user_by_id(pid)
-            if res and getattr(res, 'user', None):
-                auth_users.append(res.user)
-        except Exception:
-            pass  # User may have been removed from auth while profile row remains
+    sem = asyncio.Semaphore(10)
+
+    async def fetch_auth_user(pid: str):
+        async with sem:
+            try:
+                res = await asyncio.to_thread(supabase_admin.auth.admin.get_user_by_id, pid)
+                if res and getattr(res, "user", None):
+                    return res.user
+            except Exception:
+                pass  # User may have been removed from auth while profile row remains
+            return None
+
+    auth_user_results = await asyncio.gather(*(fetch_auth_user(pid) for pid in profiles_by_id.keys()))
+    auth_users = [u for u in auth_user_results if u is not None]
 
     result = []
     for au in auth_users:
@@ -139,7 +146,7 @@ async def list_users(
         result.append({
             'id':            str(au.id),
             'email':         _mask_csv_value(au.email),
-            'full_name':     profile.get('full_name', ''),
+            'full_name':     _mask_csv_value(profile.get('full_name', '')),
             'role':          profile.get('role', 'asha_worker'),
             'facility_id':   profile.get('facility_id'),
             'facility_name': (profile.get('facilities') or {}).get('name'),

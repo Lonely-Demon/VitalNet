@@ -1,27 +1,51 @@
 // Ported from backend/tests/test_scoping.py
 import { assertEquals, assertThrows } from "@std/assert";
-import { resolveFacilityScope } from "../_shared/scoping.ts";
+import { GLOBAL_SCOPE_ROLE, isGlobalScope, resolveFacilityScope, resolveScope } from "../_shared/scoping.ts";
 import { HttpError } from "../_shared/database.ts";
 
-Deno.test("non-admin role is scoped to own facility", () => {
-  assertEquals(resolveFacilityScope("supervisor", "fac-1", null), "fac-1");
+Deno.test("GLOBAL_SCOPE_ROLE is supervisor", () => {
+  assertEquals(GLOBAL_SCOPE_ROLE, "supervisor");
+  assertEquals(isGlobalScope("supervisor"), true);
+  assertEquals(isGlobalScope("admin"), false);
+  assertEquals(isGlobalScope("doctor"), false);
+});
+
+Deno.test("supervisor defaults to system-wide (unscoped global access, is_global: true)", () => {
+  assertEquals(resolveFacilityScope("supervisor", null, null), null);
+  const scope = resolveScope("supervisor", null, null);
+  assertEquals(scope.facilityId, null);
+  assertEquals(scope.is_global, true);
+});
+
+Deno.test("supervisor can narrow to one facility", () => {
+  assertEquals(resolveFacilityScope("supervisor", null, "fac-9"), "fac-9");
+  const scope = resolveScope("supervisor", null, "fac-9");
+  assertEquals(scope.facilityId, "fac-9");
+  assertEquals(scope.is_global, false);
+});
+
+Deno.test("non-supervisor roles are scoped to own facility", () => {
+  assertEquals(resolveFacilityScope("admin", "fac-1", null), "fac-1");
   assertEquals(resolveFacilityScope("doctor", "fac-1", null), "fac-1");
+  assertEquals(resolveFacilityScope("asha_worker", "fac-1", null), "fac-1");
+  const scope = resolveScope("admin", "fac-1", null);
+  assertEquals(scope.facilityId, "fac-1");
+  assertEquals(scope.is_global, false);
 });
 
-Deno.test("non-admin role cannot widen scope via query param", () => {
-  assertEquals(resolveFacilityScope("supervisor", "fac-1", "fac-2"), "fac-1");
+Deno.test("non-supervisor roles cannot widen scope via query param", () => {
+  assertEquals(resolveFacilityScope("admin", "fac-1", "fac-2"), "fac-1");
   assertEquals(resolveFacilityScope("doctor", "fac-1", "fac-2"), "fac-1");
+  assertEquals(resolveFacilityScope("asha_worker", "fac-1", "fac-2"), "fac-1");
 });
 
-Deno.test("non-admin role without facility is rejected", () => {
-  const err = assertThrows(() => resolveFacilityScope("supervisor", null, null), HttpError);
-  assertEquals(err.status, 400);
-});
+Deno.test("non-supervisor roles without facility are rejected", () => {
+  const errAdmin = assertThrows(() => resolveFacilityScope("admin", null, null), HttpError);
+  assertEquals(errAdmin.status, 400);
 
-Deno.test("admin defaults to system-wide", () => {
-  assertEquals(resolveFacilityScope("admin", null, null), null);
-});
+  const errDoctor = assertThrows(() => resolveFacilityScope("doctor", null, null), HttpError);
+  assertEquals(errDoctor.status, 400);
 
-Deno.test("admin can narrow to one facility", () => {
-  assertEquals(resolveFacilityScope("admin", null, "fac-9"), "fac-9");
+  const errAsha = assertThrows(() => resolveFacilityScope("asha_worker", null, null), HttpError);
+  assertEquals(errAsha.status, 400);
 });

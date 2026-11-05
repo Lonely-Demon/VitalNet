@@ -116,9 +116,9 @@ export default function Dashboard({ filter = 'all' }) {
       : cases.filter(c => !c.deleted_at)
   ), [cases, filter])
 
-  const emergency = useMemo(() => visibleCases.filter(c => c.triage_level === 'EMERGENCY'), [visibleCases])
-  const urgent    = useMemo(() => visibleCases.filter(c => c.triage_level === 'URGENT'), [visibleCases])
-  const routine   = useMemo(() => visibleCases.filter(c => c.triage_level === 'ROUTINE'), [visibleCases])
+  const emergency = useMemo(() => visibleCases.filter(c => (c.overridden_triage || c.triage_level) === 'EMERGENCY'), [visibleCases])
+  const urgent    = useMemo(() => visibleCases.filter(c => (c.overridden_triage || c.triage_level) === 'URGENT'), [visibleCases])
+  const routine   = useMemo(() => visibleCases.filter(c => (c.overridden_triage || c.triage_level) === 'ROUTINE'), [visibleCases])
 
   if (loading) {
     return (

@@ -359,6 +359,7 @@ async def get_ml_agreement(
 # ── Case CSV Export (FEATURES_ROADMAP §1b.3) ──────────────────────────────────
 
 EXPORT_MAX_RANGE_DAYS = 366
+CHUNK_SIZE = 1000
 EXPORT_COLUMNS = [
     "id", "created_at", "reviewed_at", "triage_level", "triage_confidence",
     "overridden_triage", "override_reason", "risk_driver", "chief_complaint",
@@ -403,22 +404,33 @@ async def export_cases(
 
     role, facility_id, scoped = _resolve_scope(user)
 
-    def build_query():
-        q = (
-            db.table("case_records")
-            .select(",".join(EXPORT_COLUMNS))
-            .is_("deleted_at", "null")
-            .gte("created_at", parsed_from.isoformat())
-            .lte("created_at", parsed_to.isoformat())
-            .order("created_at", desc=False)
-        )
-        return (q.eq("facility_id", facility_id) if scoped else q).execute()
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        current_start = offset
+        current_end = offset + CHUNK_SIZE - 1
 
-    failures: list[str] = []
-    res = await _run_query(build_query, "export", failures)
-    if failures:
-        raise HTTPException(status_code=502, detail="Export query failed — try a narrower date range")
-    rows = (res.data if res else []) or []
+        def build_chunk_query(start=current_start, end=current_end):
+            q = (
+                db.table("case_records")
+                .select(",".join(EXPORT_COLUMNS))
+                .is_("deleted_at", "null")
+                .gte("created_at", parsed_from.isoformat())
+                .lte("created_at", parsed_to.isoformat())
+                .order("created_at", desc=False)
+                .range(start, end)
+            )
+            return (q.eq("facility_id", facility_id) if scoped else q).execute()
+
+        failures: list[str] = []
+        res = await _run_query(build_chunk_query, "export", failures)
+        if failures or res is None:
+            raise HTTPException(status_code=502, detail="Export query failed — try a narrower date range")
+        chunk = res.data or []
+        rows.extend(chunk)
+        if len(chunk) < CHUNK_SIZE:
+            break
+        offset += CHUNK_SIZE
 
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")

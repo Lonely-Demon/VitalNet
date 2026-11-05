@@ -20,12 +20,16 @@ self.addEventListener('push', (event) => {
   const safeTitle = 'VitalNet · ' + clean(data.title, 80)
   const safeBody = clean(data.body, 200)
 
+  const notifTag = data.case_id
+    ? `vitalnet-case-${data.case_id}`
+    : `vitalnet-notif-${data.id || Date.now()}`
+
   event.waitUntil(
     self.registration.showNotification(safeTitle, {
       body: safeBody,
       icon: '/pwa-192x192.png',
       badge: '/pwa-64x64.png',
-      tag: 'vitalnet-emergency',
+      tag: notifTag,
       requireInteraction: true,
     })
   )

@@ -90,13 +90,9 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
           setListening(false)
           if (transcript) onResult?.(transcript)
         } catch (err) {
-          console.warn('[VitalNet] Server transcription failed, falling back to browser STT:', err)
-          if (speechSupported) {
-            startBrowserRecognition()
-          } else {
-            setListening(false)
-            setError('failed')
-          }
+          console.warn('[VitalNet] Server transcription failed:', err)
+          setListening(false)
+          setError('failed')
         }
       }
 
@@ -106,7 +102,7 @@ export function useVoiceInput({ lang = 'en-US', onResult } = {}) {
     } catch (err) {
       setError(err.name === 'NotAllowedError' ? 'permissionDenied' : 'failed')
     }
-  }, [lang, onResult, speechSupported, startBrowserRecognition])
+  }, [lang, onResult])
 
   const start = useCallback(() => {
     setError(null)

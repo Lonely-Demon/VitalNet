@@ -2,6 +2,7 @@
 VitalNet Cases Router — all patient case endpoints.
 Extracted from main.py as part of Phase 12 architectural modularisation.
 """
+import asyncio
 import logging
 import re
 import uuid as uuid_lib
@@ -195,14 +196,38 @@ async def submit_case(
 
     # Step 1: Classifier + SHAP (always runs — LLM-independent)
     try:
-        triage_result = predict_triage(form_data)
-        briefing = await generate_briefing(form_data, triage_result)
+        triage_result = await asyncio.to_thread(predict_triage, form_data)
         raw_token = extract_bearer_token(authorization)
         db = get_supabase_for_user(raw_token)
 
-        deterioration_alert, deterioration_visit_count = _check_deterioration_pattern(
-            db, form.patient_key, triage_result["triage_level"]
+        deterioration_alert, deterioration_visit_count = await asyncio.to_thread(
+            _check_deterioration_pattern, db, form.patient_key, triage_result["triage_level"]
         )
+        triage_result["deterioration_alert"] = deterioration_alert
+        triage_result["deterioration_visit_count"] = deterioration_visit_count
+
+        # ADR §52: Pre-fetch trailing 3-visit longitudinal trajectory before briefing generation
+        prior_visits = []
+        if form.patient_key:
+            try:
+                pv_res = (
+                    db.table("case_records")
+                    .select(
+                        "created_at, triage_level, bp_systolic, bp_diastolic, "
+                        "spo2, heart_rate, temperature, chief_complaint"
+                    )
+                    .eq("patient_key", form.patient_key)
+                    .is_("deleted_at", "null")
+                    .order("created_at", desc=True)
+                    .limit(3)
+                    .execute()
+                )
+                prior_visits = pv_res.data or []
+            except Exception as e:
+                logger.warning("Could not pre-fetch longitudinal trajectory: %s", e)
+        triage_result["prior_visits"] = prior_visits
+
+        briefing = await generate_briefing(form_data, triage_result)
 
         paediatric_advisory = build_paediatric_advisory(
             {"patient_age": form.patient_age, "age_months": form.age_months, "muac_mm": form.muac_mm},
@@ -264,27 +289,62 @@ async def submit_case(
             "client_submitted_at": form.client_submitted_at.isoformat()
             if form.client_submitted_at
             else None,
+            "is_sms_stub": False,
         }
 
-        result = (
+        # ADR §51: Idempotent Cross-Transport State-Promoting Database Upsert.
+        # If an earlier emergency SMS alert created an offline stub (is_sms_stub = true),
+        # promote the record with the complete HTTPS submission instead of dropping it.
+        client_uuid_str = record["client_id"]
+        existing_res = (
             db.table("case_records")
-            .upsert(record, on_conflict="client_id", ignore_duplicates=True)
+            .select("id, is_sms_stub, submitted_by, facility_id, created_at")
+            .eq("client_id", client_uuid_str)
+            .maybe_single()
             .execute()
         )
-        if not result.data:
-            # Upsert ignored the duplicate; fetch the existing row to return to client
-            existing = (
+        existing_row = (existing_res.data if existing_res else None) or {}
+
+        if existing_row and existing_row.get("is_sms_stub"):
+            record["is_sms_stub"] = False
+            record["updated_at"] = datetime.now(timezone.utc).isoformat()
+            update_res = (
+                db.table("case_records")
+                .update(record)
+                .eq("client_id", client_uuid_str)
+                .execute()
+            )
+            response = update_res.data[0] if (update_res and update_res.data) else record
+        elif existing_row:
+            existing_fetch = (
                 db.table("case_records")
                 .select(
                     "id, client_id, triage_level, triage_confidence, risk_driver, "
-                    "created_at, created_offline, facility_id"
+                    "created_at, created_offline, facility_id, is_sms_stub"
                 )
-                .eq("client_id", record["client_id"])
+                .eq("client_id", client_uuid_str)
                 .execute()
             )
-            response = existing.data[0] if existing.data else record
+            response = existing_fetch.data[0] if (existing_fetch and existing_fetch.data) else record
         else:
-            response = result.data[0]
+            result = (
+                db.table("case_records")
+                .upsert(record, on_conflict="client_id", ignore_duplicates=True)
+                .execute()
+            )
+            if not result.data:
+                existing_fetch = (
+                    db.table("case_records")
+                    .select(
+                        "id, client_id, triage_level, triage_confidence, risk_driver, "
+                        "created_at, created_offline, facility_id, is_sms_stub"
+                    )
+                    .eq("client_id", client_uuid_str)
+                    .execute()
+                )
+                response = existing_fetch.data[0] if (existing_fetch and existing_fetch.data) else record
+            else:
+                response = result.data[0]
 
         log_phi_access(
             event_type=AuditEventType.PHI_CREATE,
@@ -806,3 +866,74 @@ async def case_patient_summary(
     summary = await generate_patient_summary(briefing, triage_result, language=language)
 
     return summary
+
+
+# ── Offline Consent Revocation Tombstone (ADR §55) ─────────────────────────────
+
+
+@router.post("/api/security/cases/{client_id}/revoke-consent")
+@limiter.limit("30/minute")
+async def revoke_case_consent(
+    request: Request,
+    client_id: str,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("admin", "doctor", "asha_worker")),
+):
+    """
+    ADR §55: Offline consent revocation tombstone drain.
+    Finds the case by client_id (or id) and idempotently erases identifying
+    narratives and associated attachments/events.
+    Returns 200 on success, or 404/409 which cleanly dequeue from client outbox.
+    """
+    from app.api.routes.dsr_routes import _erase_case_row, REDACTED
+    from app.core.database import supabase_admin
+
+    res = (
+        supabase_admin.table("case_records")
+        .select("*")
+        .eq("client_id", client_id)
+        .maybe_single()
+        .execute()
+    )
+    case_row = res.data if res else None
+    if not case_row:
+        res = (
+            supabase_admin.table("case_records")
+            .select("*")
+            .eq("id", client_id)
+            .maybe_single()
+            .execute()
+        )
+        case_row = res.data if res else None
+
+    if not case_row:
+        raise HTTPException(status_code=404, detail="Case not found for revocation")
+
+    role = _resolved_role(user)
+    facility_id = _resolved_facility(user)
+    if role == "asha_worker":
+        if case_row.get("submitted_by") != user.get("sub") and case_row.get("facility_id") != facility_id:
+            raise HTTPException(status_code=403, detail="Not authorized to revoke consent for this case")
+    elif role == "doctor":
+        if facility_id and case_row.get("facility_id") != facility_id:
+            raise HTTPException(status_code=403, detail="Not authorized to access cases outside your facility")
+
+    # If already erased, return idempotently
+    if case_row.get("deleted_at") is not None and case_row.get("patient_name") == REDACTED:
+        return {"status": "already_revoked", "client_id": client_id, "case_id": case_row["id"]}
+
+    _erase_case_row(case_row["id"], case_row)
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_ERASURE,
+        user_id=user.get("sub", "unknown"),
+        user_role=role,
+        resource_type="case_records",
+        resource_id=case_row["id"],
+        facility_id=case_row.get("facility_id"),
+        ip_address=get_client_ip(request),
+        details={"reason": "offline_consent_revocation_tombstone", "client_id": client_id},
+    )
+
+    return {"status": "consent_revoked", "client_id": client_id, "case_id": case_row["id"]}
+

@@ -5,7 +5,17 @@ matters clinically (triage classifications by level) — not an
 instrument-everything approach. Exposed at GET /api/metrics, admin-only
 (see app/api/routes/metrics_routes.py).
 """
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+import os
+
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    REGISTRY,
+    CollectorRegistry,
+    Counter,
+    Histogram,
+    generate_latest,
+    multiprocess,
+)
 
 REQUEST_COUNT = Counter(
     "vitalnet_http_requests_total",
@@ -36,7 +46,11 @@ def record_triage_classification(triage_level: str) -> None:
 
 
 def render_metrics() -> bytes:
-    return generate_latest()
+    if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        return generate_latest(registry)
+    return generate_latest(REGISTRY)
 
 
 METRICS_CONTENT_TYPE = CONTENT_TYPE_LATEST
