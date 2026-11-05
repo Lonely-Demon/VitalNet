@@ -16,6 +16,7 @@ export interface FiredRule {
 
 export interface OverrideInput {
   patient_age: number;
+  age_months?: number | null;
   bp_systolic: number | null;
   bp_diastolic: number | null;
   spo2: number | null;
@@ -23,6 +24,26 @@ export interface OverrideInput {
   temperature: number | null;
   symptoms: readonly string[];
   is_pregnant?: boolean | null;
+}
+
+/**
+ * Resolves effective age in years, accounting for infant age specified in months.
+ * Formula: fractional years (age_months / 12) when patient_age < 2 && age_months != null.
+ */
+export function resolveEffectiveAge(
+  patient_age?: number | null,
+  age_months?: number | null,
+): number | null {
+  if (patient_age !== null && patient_age !== undefined && patient_age < 2 && age_months !== null && age_months !== undefined) {
+    return age_months / 12;
+  }
+  if (patient_age !== null && patient_age !== undefined) {
+    return Number(patient_age);
+  }
+  if (age_months !== null && age_months !== undefined) {
+    return age_months / 12;
+  }
+  return null;
 }
 
 const CRITICAL_SYMPTOMS_OVERRIDE = new Set<Symptom>([
@@ -96,7 +117,9 @@ export function checkOverrides(form: OverrideInput): FiredRule | null {
     });
   }
 
-  const { patient_age: age, temperature: temp } = form;
+  const effectiveAge = resolveEffectiveAge(form.patient_age, form.age_months);
+  const age = effectiveAge ?? form.patient_age;
+  const { temperature: temp } = form;
   if (age < 0.25 && temp !== null && temp >= 38.0) {
     allFired.push({
       id: "neonatal_fever",

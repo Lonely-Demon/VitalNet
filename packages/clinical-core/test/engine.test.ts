@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { assignTier, type EngineInput } from "../src/rules/engine.js";
-import { news2ConcerningVital } from "../src/rules/rules.js";
+import { news2ConcerningVital, resolveEffectiveAge } from "../src/rules/rules.js";
 
 const BASE: EngineInput = {
   patient_age: 40,
@@ -54,6 +54,51 @@ describe("critical symptoms always EMERGENCY", () => {
 it("neonatal fever is EMERGENCY", () => {
   const r = assignTier(withCase({ patient_age: 0.1, temperature: 38.5 }));
   expect(r.tier).toBe("EMERGENCY");
+  expect(r.firedRules.some((rule) => rule.id === "neonatal_fever")).toBe(true);
+});
+
+describe("resolveEffectiveAge & infant fever safety (CRITICAL-2)", () => {
+  it("resolves fractional years when patient_age < 2 and age_months is provided", () => {
+    expect(resolveEffectiveAge(0, 4)).toBeCloseTo(4 / 12, 5);
+    expect(resolveEffectiveAge(0, 2)).toBeCloseTo(2 / 12, 5);
+    expect(resolveEffectiveAge(1, 14)).toBeCloseTo(14 / 12, 5);
+  });
+
+  it("does not override with age_months when patient_age >= 2", () => {
+    expect(resolveEffectiveAge(3, 36)).toBe(3);
+    expect(resolveEffectiveAge(5, 60)).toBe(5);
+  });
+
+  it("handles nullish inputs gracefully", () => {
+    expect(resolveEffectiveAge(40, null)).toBe(40);
+    expect(resolveEffectiveAge(40, undefined)).toBe(40);
+    expect(resolveEffectiveAge(null, 6)).toBeCloseTo(6 / 12, 5);
+    expect(resolveEffectiveAge(undefined, 6)).toBeCloseTo(6 / 12, 5);
+    expect(resolveEffectiveAge(null, null)).toBeNull();
+    expect(resolveEffectiveAge(undefined, undefined)).toBeNull();
+  });
+
+  it("triggers neonatal fever override for 2-month-old infant with fever", () => {
+    // 2-month-old infant (2/12 ≈ 0.167 yr < 0.25 yr): fever >= 38.0C is neonatal emergency
+    const r = assignTier(withCase({ patient_age: 0, age_months: 2, temperature: 38.5 }));
+    expect(r.tier).toBe("EMERGENCY");
+    expect(r.firedRules.some((rule) => rule.id === "neonatal_fever")).toBe(true);
+  });
+
+  it("does NOT trigger neonatal fever for 4-month-old infant with fever", () => {
+    // 4-month-old infant (4/12 ≈ 0.333 yr >= 0.25 yr): NOT a neonate (<3 mo)
+    // Stable infant vitals: HR 120 (normal 100-160), BP 80 (normal >=70)
+    const r = assignTier(withCase({
+      patient_age: 0,
+      age_months: 4,
+      temperature: 38.5,
+      heart_rate: 120,
+      bp_systolic: 80,
+      spo2: 98,
+    }));
+    // Should NOT trigger neonatal_fever override
+    expect(r.firedRules.some((rule) => rule.id === "neonatal_fever")).toBe(false);
+  });
 });
 
 describe("concerning-but-not-extreme vitals never ROUTINE", () => {

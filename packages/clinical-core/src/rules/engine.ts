@@ -20,7 +20,9 @@
 
 import type { Symptom } from "../schema.js";
 import { news2LikeScore, qsofaScore } from "./bands.js";
-import { checkOverrides, news2ConcerningVital, type FiredRule, type OverrideInput } from "./rules.js";
+import { checkOverrides, news2ConcerningVital, resolveEffectiveAge, type FiredRule, type OverrideInput } from "./rules.js";
+
+export { resolveEffectiveAge };
 
 export type Tier = "ROUTINE" | "URGENT" | "EMERGENCY";
 const TIER_RANK: Record<Tier, number> = { ROUTINE: 0, URGENT: 1, EMERGENCY: 2 };
@@ -72,7 +74,9 @@ export function assignTier(form: EngineInput): EngineResult {
   }
 
   const symptoms = new Set(form.symptoms);
-  const { patient_age: age, bp_systolic: bpSys, heart_rate: hr, spo2, temperature: temp } = form;
+  const effectiveAge = resolveEffectiveAge(form.patient_age, form.age_months);
+  const age = effectiveAge ?? form.patient_age;
+  const { bp_systolic: bpSys, heart_rate: hr, spo2, temperature: temp } = form;
 
   const { aggregate, worstSingle } = news2LikeScore(age, bpSys, hr, spo2, temp);
   const qsofa = qsofaScore(bpSys, symptoms.has("altered_consciousness"), age);

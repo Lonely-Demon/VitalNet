@@ -274,6 +274,22 @@ def _temp_emergency_bounds(age_years: Optional[float]) -> tuple[float, float]:
     return (33.0, 41.5)
 
 
+def resolve_effective_age(
+    patient_age: Optional[float], age_months: Optional[float] = None
+) -> Optional[float]:
+    """
+    Resolves effective age in years, using fractional years (age_months / 12.0)
+    when patient_age < 2 and age_months is provided.
+    """
+    if patient_age is not None and patient_age < 2 and age_months is not None:
+        return age_months / 12.0
+    if patient_age is not None:
+        return float(patient_age)
+    if age_months is not None:
+        return age_months / 12.0
+    return None
+
+
 def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
     """
     Deterministic escalation for unambiguous, extreme presentations.
@@ -287,7 +303,9 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
         readable = _readable(hit)
         return f"Critical symptom present: {readable}"
 
-    age = form_data.get("patient_age")
+    raw_age = form_data.get("patient_age")
+    age_months = form_data.get("age_months")
+    age = resolve_effective_age(raw_age, age_months)
     temp = form_data.get("temperature")
     if age is not None and age < 0.25 and temp is not None and temp >= 38.0:
         return f"Neonatal fever (age {age * 12:.0f} months, temperature {temp}°C)"

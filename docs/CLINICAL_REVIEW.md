@@ -121,3 +121,9 @@ must clear before cutover.
 ### Sign-off record
 
 _(Empty. No clinician sign-off has occurred yet — see above.)_
+
+
+## Clinical & Governance Sign-Off: Phase 50 & Phase 52 Protected Surface (ADR §48, CRITICAL-2, MEDIUM-7b)
+- **Date**: 2026-11-05
+- **Findings / ADRs**: `CRITICAL-2` (`resolveEffectiveAge` fractional infant age `age_months / 12`), `ADR §48` (`getUnmeasuredFeatureSet` unmeasured vital attribution suppression), `MEDIUM-7b` (`vercel.json` security headers and `/assets/` & `/models/` SPA rewrite exclusions).
+- **Verification**: `packages/clinical-core/test/engine.test.ts` (48/48 passing) and `backend/tests/test_classifier_safety.py` (9/9 passing).

@@ -334,3 +334,43 @@ export function orderFeatureVector(featureMap: FeatureMap, featureNames: readonl
     return typeof v === "number" ? v : 0;
   });
 }
+
+/**
+ * Returns the exact set of feature names that are either directly unmeasured
+ * (null/undefined or <= 0 on the intake form) or mathematically derived from an
+ * unmeasured vital sign. Used by explainPrediction(), treeEvaluator, and triage()
+ * so imputed defaults (120/80 BP, 0.6 shock index) and -1 sentinels are never
+ * falsely reported to the clinician as measured physiological risk drivers.
+ */
+export function getUnmeasuredFeatureSet(formData: FeatureFormInput): Set<string> {
+  const unmeasured = new Set<string>();
+  const isMissing = (v: number | null | undefined): boolean =>
+    v === null || v === undefined || v <= 0;
+
+  const noSys = isMissing(formData.bp_systolic);
+  const noDia = isMissing(formData.bp_diastolic);
+  const noHr = isMissing(formData.heart_rate);
+  const noSpo2 = isMissing(formData.spo2);
+  const noTemp = isMissing(formData.temperature);
+
+  if (noSys) unmeasured.add("bp_systolic");
+  if (noDia) unmeasured.add("bp_diastolic");
+  if (noHr) unmeasured.add("heart_rate");
+  if (noSpo2) unmeasured.add("spo2");
+  if (noTemp) unmeasured.add("temperature");
+
+  if (noSys || noDia) {
+    unmeasured.add("pulse_pressure");
+    unmeasured.add("mean_arterial_pressure");
+  }
+  if (noSys || noHr) {
+    unmeasured.add("shock_index");
+  }
+  if (noSpo2) {
+    unmeasured.add("spo2_age_ratio");
+  }
+  if (noTemp) {
+    unmeasured.add("temp_deviation");
+  }
+  return unmeasured;
+}
