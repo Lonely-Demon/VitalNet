@@ -233,7 +233,13 @@ Deno.test("CHALLENGE 3.1: getClientIp rightmost proxy IP extraction", async () =
       ip = getClientIp(c);
       return c.text("ok");
     });
-    return { app, getIp: async () => { await app.request("/test", { headers }); return ip; } };
+    return {
+      app,
+      getIp: async () => {
+        await app.request("/test", { headers });
+        return ip;
+      },
+    };
   };
 
   // When untrusted, returns unknown regardless of headers

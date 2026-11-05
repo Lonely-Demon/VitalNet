@@ -75,7 +75,12 @@ const triageOverrideSchema = z.object({
   override_reason: z
     .string()
     .transform(stripControlChars)
-    .pipe(z.string().trim().min(1, "Reason cannot be empty or whitespace-only").max(500, "Reason must be at most 500 characters")),
+    .pipe(
+      z.string().trim().min(1, "Reason cannot be empty or whitespace-only").max(
+        500,
+        "Reason must be at most 500 characters",
+      ),
+    ),
 });
 
 const caseOutcomeSchema = z.object({

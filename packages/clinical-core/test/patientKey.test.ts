@@ -41,7 +41,7 @@ describe("Patient Continuity Key & Indic Phonetics (ADR §49)", () => {
       const raw = key.replace("-", "");
       for (let c = 0; c < 8; c++) {
         const idx = ALPHABET.indexOf(raw[c]!);
-        expect(idx).toBeGreaterThanOrEqual(0);
+        if (idx < 0) throw new Error(`Unexpected char in key: ${raw[c]}`);
         counts[idx]++;
       }
     }
