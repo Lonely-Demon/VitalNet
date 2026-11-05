@@ -240,6 +240,21 @@ Stale docs are worse than no docs — they actively mislead the next reader (hum
 6. **Self-Correction (Self-Healing)**: If a bash command fails (e.g., a test fails, linting fails), read the exact error output and correct the code immediately. Do not ask the user for help unless you are completely stuck after multiple debugging attempts.
 7. **Clean Commits**: If requested to commit, group related changes logically and write clear, imperative commit messages (e.g., "Add SHAP explanations to DoctorPanel"). See `CONTRIBUTING.md` for the full convention.
 8. **Don't guess at blocked decisions**: some FEATURES_ROADMAP items are explicitly scaffolding-only pending a product/vendor decision (SMS aggregator choice, photo-storage backend/consent policy — see `docs/DECISIONS.md` §11) or pending non-engineering review (clinical translation review — §10). Don't "finish" these by guessing at the blocking decision yourself; extend the scaffolding, flag the open decision, and stop there.
+9. **Real-Data Diagnostic & Inspection Isolation**:
+   - Diagnostic inspection of external datasets (e.g. NHAMCS, Iran ED) must operate in streaming aggregate-only mode.
+   - Never materialize per-patient `CanonicalPatientRecord` or `form_data` objects for diagnostic-only runs.
+   - Never load the ML classifier, call `predict_triage()`, or call clinical-core `assignTier()` during data diagnostics.
+   - Always write unit tests that monkeypatch inference functions to raise if diagnostic mode is active.
+   - Explicitly document proxy ground-truth definitions (e.g. NHAMCS `IMMEDR` waiting-time priority vs clinical outcome).
+10. **Synthetic Ablation & Contract Study Invariants**:
+    - **Label Freezing**: Compute reference labels once on the complete intended patient representation (`full_input`) via `assign_triage_labels()`. Reuse that frozen label across all ablation arms without recomputing after field blanking.
+    - **Field Pipeline Parity**: Verify that field utilization matrices strictly match runtime pass-through contracts (e.g. `passed_to_offline_hybrid_triage` matching `apps/web/src/utils/triageClassifier.js::runTriage()`).
+    - **Study Control Namespacing**: Isolate synthetic-generation controls (e.g. `_study_control_reference_month`) under explicit namespaces and assert they never reach production classifier inputs.
+    - **Cohort-Scoped Reporting**: Express sensitivity findings as observed, cohort-scoped metrics with exact disagreement counts/rates.
+    - **Zero Patient Leakage**: Recursively assert that evaluation outputs contain zero patient-level rows, IDs, raw form dicts, free text, or individual probability vectors (only aggregate distributions and mean probabilities).
+11. **Evaluation Provenance & Non-Claims**:
+    - Every evaluation or diagnostic report must emit a complete `study_provenance` block (`execution_mode`, `evaluation_harness_version`, `model_version`, `git_commit`, `timestamp_utc`, `sample_size`, `random_seed`).
+    - Include explicit non-claims stating that diagnostic studies measure frozen model behavior without modification and do not constitute clinical validation or efficacy claims.
 
 ---
 
@@ -303,6 +318,13 @@ history:
 6. **Real-data isolation guards have zero file-extension exceptions.** The
    `guarded_open` function unconditionally rejects *all* extensions accessing
    forbidden data paths.
+7. **Streaming aggregate-only diagnostic parser.** Diagnostics on real sources
+   must stream records directly into aggregate counters in a single pass without
+   constructing `CanonicalPatientRecord` or `form_data` objects in memory.
+8. **Field matrix parity with offline engineInput.** The
+   `passed_to_offline_hybrid_triage` metadata must match the exact `engineInput`
+   key structure in `apps/web/src/utils/triageClassifier.js::runTriage()`
+   (`patient_name` and `observations` are `False`).
 
 ---
 

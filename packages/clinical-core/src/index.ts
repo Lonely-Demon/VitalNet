@@ -34,22 +34,76 @@ export {
 
 export { checkOverrides, news2ConcerningVital, type FiredRule, type OverrideInput } from "./rules/rules.js";
 
-export { assignTier, type Tier, type EngineInput, type EngineResult } from "./rules/engine.js";
+export { assignTier, resolveEffectiveAge, type Tier, type EngineInput, type EngineResult } from "./rules/engine.js";
 
-export { buildFeatureMap, orderFeatureVector, type FeatureFormInput, type FeatureMap } from "./features.js";
+export {
+  buildFeatureMap,
+  orderFeatureVector,
+  getUnmeasuredFeatureSet,
+  type FeatureFormInput,
+  type FeatureMap,
+} from "./features.js";
 
 export {
   evaluateTrees,
   explainPrediction,
+  evaluateNodeTernary,
+  traverseTreeTernary,
+  computeSaabasAttributions,
+  assessFeatureCompleteness,
+  assessCompleteness,
+  CORE_VITALS,
   type TreeJson,
   type TreeNode,
   type EvaluationResult,
   type FeatureAttribution,
+  type ExplainOptions,
+  type NodeEvaluationResult,
+  type FeatureCompletenessStatus,
+  type CompletenessState,
+  type FeatureCompletenessResult,
 } from "./treeEvaluator.js";
 
-export { checkContraindications, CONTRAINDICATION_RULES, type ContraindicationRule, type ContraindicationInput } from "./contraindications.js";
+export {
+  checkContraindications,
+  CONTRAINDICATION_RULES,
+  type ContraindicationRule,
+  type ContraindicationInput,
+} from "./contraindications.js";
 
-export { generatePatientKey, normalizePatientKey, PATIENT_KEY_FORMAT_RE } from "./patientKey.js";
+export {
+  generatePatientKey,
+  generateUnbiasedPatientKey,
+  normalizePatientKey,
+  deriveDeterministicPatientKey,
+  deriveAbhaKey,
+  buildIndicPhoneticSkeleton,
+  ALPHABET,
+  MAX_UNBIASED_BYTE,
+  PATIENT_KEY_FORMAT_RE,
+} from "./patientKey.js";
+
+export {
+  parseAbhaQr,
+  parseAbhaQrPayload,
+  parsePatientQrPayload,
+  type ParsedAbhaQr,
+  type ParsedQrIdentity,
+} from "./abhaScanner.js";
+
+export {
+  encodeEmergencySms,
+  encodeEmergencySmsFrame,
+  decodeEmergencySms,
+  decodeEmergencySmsFrame,
+  computeCrc24,
+  uuidToBytes,
+  bytesToUuid,
+  base64UrlEncode,
+  base64UrlDecode,
+  type SmsFrameInput,
+  type DecodedSmsFrame,
+} from "./smsCodec.js";
 
 export {
   triage,
@@ -87,4 +141,3 @@ export {
   type MaintenanceFluidBreakdown,
   type MaintenanceFluidResult,
 } from "./calculators.js";
-

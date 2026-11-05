@@ -30,6 +30,7 @@ const ERASABLE_CASE_FIELDS = [
   "observations",
   "known_conditions",
   "current_medications",
+  "human_review_reason",
 ] as const;
 
 interface CaseRecord {
@@ -108,27 +109,50 @@ dsr.get("/api/admin/cases/:case_id/export", rateLimit(10, 60), requireRole("admi
 
 /**
  * Anonymises rather than hard-deletes: identifying free-text fields on
- * case_records and referrals.reason are replaced with a redaction marker,
- * and the case is soft-deleted if not already. case_outcomes is
- * deliberately left untouched — an immutable, insert-only table by design
- * that carries no direct patient identifier.
+ * case_records, briefing JSONB narrative fields, and referrals (reason + sbar_draft)
+ * are replaced with a redaction marker, and the case is soft-deleted if not already.
+ * Associated records in case_attachments and client_events are purged.
  */
 async function eraseCaseRow(caseUuid: string, caseRecord: CaseRecord): Promise<void> {
   const admin = getSupabaseAdmin();
-  const updateBody: Record<string, string> = {};
+  const updateBody: Record<string, unknown> = {};
   for (const field of ERASABLE_CASE_FIELDS) updateBody[field] = REDACTED;
   if (caseRecord.deleted_at === null) {
-    (updateBody as Record<string, unknown>).deleted_at = new Date().toISOString();
+    updateBody.deleted_at = new Date().toISOString();
+  }
+
+  // ADR §55: Narrative scrubbing inside briefing JSONB
+  const briefing = caseRecord.briefing as Record<string, unknown> | null;
+  if (briefing && typeof briefing === "object") {
+    updateBody.briefing = {
+      triage_level: briefing.triage_level,
+      primary_risk_driver: REDACTED,
+      differential_diagnoses: [REDACTED],
+      red_flags: [REDACTED],
+      recommended_immediate_actions: briefing.recommended_immediate_actions,
+      recommended_tests: briefing.recommended_tests,
+      uncertainty_flags: REDACTED,
+      disclaimer: briefing.disclaimer,
+      llm_status: "redacted_dsr",
+      needs_review: false,
+    };
   }
 
   const { error: caseError } = await admin.from("case_records").update(updateBody).eq("id", caseUuid);
   if (caseError) throw caseError;
 
-  const { error: referralError } = await admin.from("referrals").update({ reason: REDACTED }).eq(
-    "case_id",
-    caseUuid,
-  );
+  const { error: referralError } = await admin.from("referrals").update({
+    reason: REDACTED,
+    sbar_draft: REDACTED,
+  }).eq("case_id", caseUuid);
   if (referralError) throw referralError;
+
+  await admin.from("case_attachments").delete().eq("case_id", caseUuid);
+
+  const clientId = caseRecord.client_id as string | undefined;
+  if (clientId) {
+    await admin.from("client_events").delete().eq("event_id", clientId);
+  }
 }
 
 dsr.post("/api/admin/cases/:case_id/erase", rateLimit(10, 60), requireRole("admin"), async (c) => {
@@ -194,3 +218,65 @@ dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin"
 
   return c.json({ enabled: true, checked: (candidates ?? []).length, purged: purged.length });
 });
+
+// ── Offline Consent Revocation Tombstone (ADR §55) ─────────────────────────────
+
+dsr.post(
+  "/api/security/cases/:client_id/revoke-consent",
+  rateLimit(30, 60),
+  requireRole("admin", "doctor", "asha_worker"),
+  async (c) => {
+    const user = c.get("user");
+    const clientId = c.req.param("client_id")!;
+    const admin = getSupabaseAdmin();
+
+    let { data: caseRecord } = await admin
+      .from("case_records")
+      .select("*")
+      .eq("client_id", clientId)
+      .maybeSingle();
+
+    if (!caseRecord) {
+      const { data: byId } = await admin
+        .from("case_records")
+        .select("*")
+        .eq("id", clientId)
+        .maybeSingle();
+      caseRecord = byId;
+    }
+
+    if (!caseRecord) {
+      throw new HttpError(404, "Case not found for revocation");
+    }
+
+    const row = caseRecord as CaseRecord;
+    if (user.resolvedRole === "asha_worker") {
+      if (row.submitted_by !== user.sub && (!user.resolvedFacilityId || row.facility_id !== user.resolvedFacilityId)) {
+        throw new HttpError(403, "Not authorized to revoke consent for this case");
+      }
+    } else if (user.resolvedRole === "doctor" || user.resolvedRole === "admin") {
+      if (user.resolvedFacilityId && row.facility_id !== user.resolvedFacilityId) {
+        throw new HttpError(403, "Not authorized to access cases outside your facility");
+      }
+    }
+
+    if (row.deleted_at !== null && row.patient_name === REDACTED) {
+      return c.json({ status: "already_revoked", client_id: clientId, case_id: row.id });
+    }
+
+    await eraseCaseRow(row.id, row);
+
+    await logPhiAccess({
+      eventType: AuditEventType.PHI_ERASURE,
+      userId: user.sub ?? "unknown",
+      userRole: user.resolvedRole,
+      resourceType: "case_records",
+      resourceId: row.id,
+      facilityId: row.facility_id,
+      ipAddress: getClientIp(c),
+      details: { reason: "offline_consent_revocation_tombstone", client_id: clientId },
+    });
+
+    return c.json({ status: "consent_revoked", client_id: clientId, case_id: row.id });
+  },
+);

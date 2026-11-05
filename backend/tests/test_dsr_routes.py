@@ -64,12 +64,12 @@ def test_erase_case_row_redacts_identifying_fields_and_soft_deletes(monkeypatch)
         assert update_body[field] == REDACTED
     assert "deleted_at" in update_body  # was None — this call sets it
 
-    # referrals.reason also redacted
+    # referrals.reason and sbar_draft also redacted
     referrals_update_calls = [
         call for call in admin.table.return_value.update.call_args_list
-        if call.args[0] == {"reason": REDACTED}
+        if call.args[0] == {"reason": REDACTED, "sbar_draft": REDACTED}
     ]
-    assert referrals_update_calls, "referrals.reason must be redacted alongside case_records"
+    assert referrals_update_calls, "referrals.reason and sbar_draft must be redacted alongside case_records"
 
 
 def test_erase_case_row_does_not_overwrite_existing_deleted_at(monkeypatch):
@@ -95,3 +95,52 @@ def test_erase_case_row_never_touches_case_outcomes(monkeypatch):
 
     tables_written = {call.args[0] for call in admin.table.call_args_list}
     assert "case_outcomes" not in tables_written
+
+
+def test_erase_case_row_scrubs_briefing_jsonb(monkeypatch):
+    # ADR §55: Briefing JSONB narrative fields must be redacted while retaining triage_level
+    admin = _mock_supabase_admin()
+    monkeypatch.setattr("app.api.routes.dsr_routes.supabase_admin", admin)
+
+    case_data = {
+        "deleted_at": None,
+        "briefing": {
+            "triage_level": "EMERGENCY",
+            "primary_risk_driver": "Chest pain with diaphoresis",
+            "differential_diagnoses": ["Acute Coronary Syndrome"],
+            "red_flags": ["Severe chest pain"],
+            "recommended_immediate_actions": "Administer oxygen, ABCDE",
+            "recommended_tests": "ECG, Troponin",
+            "uncertainty_flags": "High suspicion",
+            "disclaimer": "Decision support only",
+        },
+    }
+
+    _erase_case_row("case-1", case_data)
+
+    case_update_call = admin.table.return_value.update.call_args_list[0]
+    update_body = case_update_call.args[0]
+    scrubbed_briefing = update_body["briefing"]
+
+    assert scrubbed_briefing["triage_level"] == "EMERGENCY"
+    assert scrubbed_briefing["primary_risk_driver"] == REDACTED
+    assert scrubbed_briefing["differential_diagnoses"] == [REDACTED]
+    assert scrubbed_briefing["red_flags"] == [REDACTED]
+    assert scrubbed_briefing["uncertainty_flags"] == REDACTED
+    assert scrubbed_briefing["llm_status"] == "redacted_dsr"
+    assert scrubbed_briefing["needs_review"] is False
+    assert scrubbed_briefing["recommended_immediate_actions"] == "Administer oxygen, ABCDE"
+    assert scrubbed_briefing["disclaimer"] == "Decision support only"
+
+
+def test_erase_case_row_purges_attachments_and_client_events(monkeypatch):
+    # ADR §55: case_attachments and client_events must be deleted
+    admin = _mock_supabase_admin()
+    monkeypatch.setattr("app.api.routes.dsr_routes.supabase_admin", admin)
+
+    case_data = {"id": "case-1", "client_id": "client-uuid-1", "deleted_at": None}
+    _erase_case_row("case-1", case_data)
+
+    delete_calls = admin.table.return_value.delete.call_args_list
+    assert len(delete_calls) >= 2, "Must delete from case_attachments and client_events"
+

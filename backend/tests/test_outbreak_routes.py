@@ -100,3 +100,44 @@ def test_case_with_multiple_symptoms_contributes_to_each():
     signals = _compute_ears_signals(rows, TODAY)
     symptoms_flagged = {s["symptom"] for s in signals}
     assert symptoms_flagged == {"high_fever", "severe_headache"}
+
+
+def test_ears_c2_guard_band_skips_two_days():
+    # ADR §54: 9 days of history (t-9 .. t-1) with an early ramp-up at t-2=5 and t-1=10.
+    # The 2-day guard band must skip t-2 and t-1, computing the baseline over [t-9 .. t-3] (all 1s).
+    rows = []
+    # Days t-9 to t-3: 1 case each
+    for n in range(3, 10):
+        rows += [_row(_day_n_days_before_today(n), "high_fever")] * 1
+    # Day t-2: 5 cases (early ramp-up)
+    rows += [_row(_day_n_days_before_today(2), "high_fever")] * 5
+    # Day t-1: 10 cases (early ramp-up)
+    rows += [_row(_day_n_days_before_today(1), "high_fever")] * 10
+    # Today: 12 cases
+    rows += [_row(TODAY, "high_fever")] * 12
+
+    signals = _compute_ears_signals(rows, TODAY, use_guard_band=True)
+    assert len(signals) == 1
+    # Baseline over [t-9 .. t-3] (7 days of 1) gives mean = 1.0, stddev = 0.0
+    assert signals[0]["baseline_mean"] == 1.0
+    assert signals[0]["baseline_stddev"] == 0.0
+    assert signals[0]["today_count"] == 12
+
+
+def test_poisson_variance_floor_zero_trap_remediation():
+    # ADR §54: Zero baseline produces sample stddev = 0.
+    # Poisson floor ensures effective_sigma = max(0, sqrt(0.25), 0.5) = 0.5.
+    rows = [_row(TODAY, "persistent_vomiting")] * 4
+    signals = _compute_ears_signals(rows, TODAY)
+    assert len(signals) == 1
+    assert signals[0]["effective_sigma"] == 0.5
+    assert signals[0]["z_score"] == 8.0  # (4 - 0) / 0.5 = 8.0
+
+
+def test_ist_day_bucketing():
+    from app.api.routes.outbreak_routes import _day_bucket
+    # 2026-11-03 20:30 UTC is 2026-11-04 02:00 IST
+    assert _day_bucket("2026-11-03T20:30:00Z") == "2026-11-04"
+    # 2026-11-04 18:00 UTC is 2026-11-04 23:30 IST
+    assert _day_bucket("2026-11-04T18:00:00Z") == "2026-11-04"
+

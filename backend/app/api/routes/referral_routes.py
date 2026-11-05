@@ -112,9 +112,17 @@ async def list_active_facilities(
     for f in facilities:
         f["open_case_count"] = load_by_facility.get(f["id"], 0)
 
-    # Sort least-loaded first as a suggestion — the doctor can still pick
-    # any facility in the list, this only orders the options.
-    facilities.sort(key=lambda f: f["open_case_count"])
+    # ADR §53: Lexicographic capacity-tier scoring deprioritizing full facilities.
+    # Capacity status rank: available (0) < limited/null (1) < full (2),
+    # with ties broken by open_case_count ascending, then name.
+    capacity_rank = {"available": 0, "limited": 1, "full": 2}
+    facilities.sort(
+        key=lambda f: (
+            capacity_rank.get(f.get("capacity_status") or "limited", 1),
+            f.get("open_case_count", 0),
+            f.get("name") or "",
+        )
+    )
 
     return facilities
 
@@ -326,7 +334,7 @@ async def update_referral_status(
 
     existing = (
         db.table("referrals")
-        .select("id, receiving_facility_id, referring_facility_id, status")
+        .select("id, case_id, receiving_facility_id, referring_facility_id, status")
         .eq("id", referral_uuid)
         .maybe_single()
         .execute()
@@ -351,6 +359,18 @@ async def update_referral_status(
     )
     if not update_result.data:
         raise HTTPException(status_code=409, detail="Referral was modified concurrently. Please retry.")
+
+    # ADR §53: Automated post-discharge follow-up task generation
+    # When receiving hospital doctor marks referral as completed, schedule
+    # 48-hour follow-up task for the originating community worker.
+    if body.status == "completed" and row.get("case_id"):
+        try:
+            db.rpc(
+                "fn_mark_referral_followup_due",
+                {"p_case_id": row["case_id"], "p_referral_id": referral_uuid},
+            ).execute()
+        except Exception as e:
+            logger.warning("Could not execute fn_mark_referral_followup_due RPC: %s", e)
 
     log_phi_access(
         event_type=AuditEventType.PHI_UPDATE,

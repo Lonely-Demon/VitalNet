@@ -40,6 +40,7 @@ _ERASABLE_CASE_FIELDS = [
     "observations",
     "known_conditions",
     "current_medications",
+    "human_review_reason",
 ]
 
 
@@ -122,24 +123,41 @@ async def export_case_data(
 def _erase_case_row(case_uuid: str, case: dict) -> None:
     """
     Anonymises rather than hard-deletes: identifying free-text fields on
-    `case_records` and the `referrals.reason` free-text field are replaced
-    with a redaction marker, and the case is soft-deleted (`deleted_at`) if
-    not already. Vitals/symptoms/triage output/timestamps survive so
-    aggregate reporting and model retraining keep working on de-identified
-    data.
-
-    `case_outcomes` is deliberately left untouched: it's an immutable,
-    insert-only table by design (medical-record convention — corrections
-    are new rows, not edits) and carries no direct patient identifier, only
-    clinical disposition/notes tied to a case_id. Redacting it would break
-    that invariant for a table that isn't actually the PII surface.
+    `case_records`, narrative fields in `case_records.briefing`, and
+    `referrals.reason` / `referrals.sbar_draft` are replaced with a redaction marker,
+    and the case is soft-deleted (`deleted_at`) if not already.
+    Associated records in `case_attachments` and `client_events` are purged.
+    Vitals/symptoms/triage output/timestamps survive so aggregate reporting and
+    model retraining keep working on de-identified data.
     """
     update_body = {field: REDACTED for field in _ERASABLE_CASE_FIELDS}
     if case.get("deleted_at") is None:
         update_body["deleted_at"] = datetime.now(timezone.utc).isoformat()
 
+    # ADR §55: Scrub narrative fields inside briefing JSONB while retaining
+    # non-PHI triage tier and generic clinical protocol guidance.
+    briefing = case.get("briefing")
+    if isinstance(briefing, dict):
+        update_body["briefing"] = {
+            "triage_level": briefing.get("triage_level"),
+            "primary_risk_driver": REDACTED,
+            "differential_diagnoses": [REDACTED],
+            "red_flags": [REDACTED],
+            "recommended_immediate_actions": briefing.get("recommended_immediate_actions"),
+            "recommended_tests": briefing.get("recommended_tests"),
+            "uncertainty_flags": REDACTED,
+            "disclaimer": briefing.get("disclaimer"),
+            "llm_status": "redacted_dsr",
+            "needs_review": False,
+        }
+
     supabase_admin.table("case_records").update(update_body).eq("id", case_uuid).execute()
-    supabase_admin.table("referrals").update({"reason": REDACTED}).eq("case_id", case_uuid).execute()
+    supabase_admin.table("referrals").update({"reason": REDACTED, "sbar_draft": REDACTED}).eq("case_id", case_uuid).execute()
+    supabase_admin.table("case_attachments").delete().eq("case_id", case_uuid).execute()
+
+    client_id = case.get("client_id")
+    if client_id:
+        supabase_admin.table("client_events").delete().eq("event_id", client_id).execute()
 
 
 @router.post("/{case_id}/erase")

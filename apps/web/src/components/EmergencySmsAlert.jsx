@@ -9,10 +9,12 @@
 // default messaging app, so no PHI is put in the message body.
 import { useTranslation } from 'react-i18next'
 
-export function EmergencySmsAlert() {
+export function EmergencySmsAlert({ smsFrame } = {}) {
   const { t } = useTranslation()
   const facilityPhone = (typeof window !== 'undefined' && (sessionStorage.getItem('vn_facility_phone') || localStorage.getItem('vn_facility_phone'))) || ''
-  const body = encodeURIComponent(t('intakeForm.result.emergencySmsBody'))
+  const baseText = t('intakeForm.result.emergencySmsBody')
+  const fullText = smsFrame ? `${baseText} [${smsFrame}]` : baseText
+  const body = encodeURIComponent(fullText)
   const smsHref = `sms:${facilityPhone}?body=${body}`
 
   return (

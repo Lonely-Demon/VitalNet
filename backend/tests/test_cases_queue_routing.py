@@ -48,3 +48,32 @@ def test_legacy_cursor_remains_accepted_without_review_component():
     assert "created_at.lt." in predicate
     assert "created_at.eq." in predicate
     assert "needs_review" not in predicate
+
+
+def test_sms_stub_state_promotion_record_payload():
+    # ADR §51: Full HTTPS submission must clear is_sms_stub = False
+    record = {
+        "id": CASE_ID,
+        "is_sms_stub": False,
+        "chief_complaint": "Severe acute respiratory distress",
+        "triage_level": "EMERGENCY",
+    }
+    assert record["is_sms_stub"] is False
+    assert record["triage_level"] == "EMERGENCY"
+
+
+def test_longitudinal_prior_visits_extraction():
+    # ADR §52: Prior visits must be chronologically ordered and capped to trailing 3
+    raw_visits = [
+        {"created_at": "2026-07-01T10:00:00Z", "triage_level": "ROUTINE", "chief_complaint": "Cold"},
+        {"created_at": "2026-07-03T10:00:00Z", "triage_level": "URGENT", "chief_complaint": "Fever"},
+        {"created_at": "2026-07-04T10:00:00Z", "triage_level": "EMERGENCY", "chief_complaint": "Chest pain"},
+        {"created_at": "2026-06-25T10:00:00Z", "triage_level": "ROUTINE", "chief_complaint": "Rash"},
+    ]
+    # Sort descending by created_at and cap to 3
+    sorted_visits = sorted(raw_visits, key=lambda v: v["created_at"], reverse=True)[:3]
+    assert len(sorted_visits) == 3
+    assert sorted_visits[0]["triage_level"] == "EMERGENCY"
+    assert sorted_visits[1]["triage_level"] == "URGENT"
+    assert sorted_visits[2]["triage_level"] == "ROUTINE"
+

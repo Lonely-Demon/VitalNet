@@ -17,11 +17,19 @@
 //     new callers once the migration completes.
 
 import { checkContraindications, type ContraindicationInput } from "./contraindications.js";
-import { buildFeatureMap, orderFeatureVector, type FeatureFormInput } from "./features.js";
+import { buildFeatureMap, getUnmeasuredFeatureSet, orderFeatureVector, type FeatureFormInput } from "./features.js";
 import { assignTier, type EngineInput, type Tier } from "./rules/engine.js";
 import { checkOverrides, news2ConcerningVital, type FiredRule } from "./rules/rules.js";
-import { evaluateTrees, explainPrediction, type TreeJson } from "./treeEvaluator.js";
+import {
+  assessFeatureCompleteness,
+  evaluateTrees,
+  explainPrediction,
+  type CompletenessState,
+  type FeatureCompletenessStatus,
+  type TreeJson,
+} from "./treeEvaluator.js";
 
+export type { CompletenessState, FeatureCompletenessStatus };
 export type TriageMode = "rules_first" | "hybrid";
 
 /** The mode every new caller should use. Flip this one constant (and its
@@ -45,6 +53,10 @@ export interface ModelOpinion {
    * replaces the Python backend's SHAP prose with a directly-computed,
    * always-available attribution. */
   topFactors: Array<{ feature: string; contribution: number }>;
+  missingVitals: string[];
+  missingCriticalVitals: string[];
+  completenessState: CompletenessState;
+  status: FeatureCompletenessStatus;
 }
 
 export interface TriageResult {
@@ -69,15 +81,39 @@ function runModel(form: TriageFormInput, trees: TreeJson, featureNames: readonly
   const confidence = probabilities[classIndex] ?? 0;
   const sorted = [...probabilities].sort((a, b) => b - a);
   const margin = sorted.length > 1 ? sorted[0]! - sorted[1]! : 1;
-  const lowConfidence = confidence < LOW_CONFIDENCE_PROBA || margin < LOW_CONFIDENCE_MARGIN || hasNaN;
 
-  const attributions = explainPrediction(trees, vector, classIndex).slice(0, 5);
+  const completeness = assessFeatureCompleteness(form);
+  const missingVitals = completeness.missingCriticalVitals;
+  const completenessState = completeness.status;
+
+  const unmeasuredNames = getUnmeasuredFeatureSet(form);
+  const unmeasuredIndices = new Set<number>();
+  featureNames.forEach((name, idx) => {
+    if (unmeasuredNames.has(name)) unmeasuredIndices.add(idx);
+  });
+
+  const lowConfidence =
+    confidence < LOW_CONFIDENCE_PROBA ||
+    margin < LOW_CONFIDENCE_MARGIN ||
+    hasNaN ||
+    completenessState === "SPARSE_CONTEXT";
+
+  const attributions = explainPrediction(trees, vector, classIndex, { unmeasuredIndices }).slice(0, 5);
   const topFactors = attributions.map((a) => ({
     feature: featureNames[a.featureIndex] ?? `feature_${a.featureIndex}`,
     contribution: a.contribution,
   }));
 
-  return { tier, confidence, lowConfidence, topFactors };
+  return {
+    tier,
+    confidence,
+    lowConfidence,
+    topFactors,
+    missingVitals,
+    missingCriticalVitals: missingVitals,
+    completenessState,
+    status: completenessState,
+  };
 }
 
 export interface TriageOptions {
@@ -87,6 +123,10 @@ export interface TriageOptions {
    * the advisory model entirely (rules-only triage — always safe). */
   trees?: TreeJson;
   featureNames?: readonly string[];
+  /** Harmonized with Audit Fix [CRITICAL-1]: when true in rules_first mode,
+   * allows an EMERGENCY model prediction to elevate an URGENT/ROUTINE rules
+   * decision (monotonic safety lattice: max(assignTier, model.tier)). */
+  monotonicModelElevation?: boolean;
 }
 
 export function triage(form: TriageFormInput, options: TriageOptions = {}): TriageResult {
@@ -122,10 +162,22 @@ export function triage(form: TriageFormInput, options: TriageOptions = {}): Tria
   // opinion and never influences `tier`.
   const engineResult = assignTier(form);
   const model = canRunModel ? runModel(form, options.trees!, options.featureNames!) : undefined;
+  const TIER_RANK: Record<Tier, number> = { ROUTINE: 0, URGENT: 1, EMERGENCY: 2 };
+
+  let finalTier = engineResult.tier;
+  const firedRules = [...engineResult.firedRules];
+  if (options.monotonicModelElevation && model && TIER_RANK[model.tier] > TIER_RANK[finalTier]) {
+    finalTier = model.tier;
+    firedRules.push({
+      id: "ml_monotonic_elevation",
+      citation: "Monotonic safety lattice: advisory ML model escalated tier above rules baseline",
+      detail: `Model escalated ${engineResult.tier} -> ${model.tier}`,
+    });
+  }
 
   return {
-    tier: engineResult.tier,
-    firedRules: engineResult.firedRules,
+    tier: finalTier,
+    firedRules,
     contraindicationFlags,
     ...(model ? { model, modelAgreed: model.tier === engineResult.tier } : {}),
     mode,

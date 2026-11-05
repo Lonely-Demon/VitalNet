@@ -20,70 +20,147 @@
 // after Worker A queued a case offline would submit A's patient data under
 // B's identity/JWT (getPendingEvents) and see A's patient name/complaint in
 // the dead-letter list (getDeadLetters). Both are scoped by owner_id below.
-import { getOfflineDB } from './offlineDB'
+import { getOfflineDB, LEGACY_RECOVERY_STATUS, CORRUPT_KEY_REASON } from './offlineDB'
 
 const STORE_NAME = 'outbox'
 const MAX_PENDING = 50
-const RECOVERY_STATUS = 'recovery_required'
+const RECOVERY_STATUS = LEGACY_RECOVERY_STATUS
 export const OUTBOX_STALE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
-
 
 function notifyOutboxChange() {
   window.dispatchEvent(new CustomEvent('offline-queue-changed'))
 }
 
-// ── Outbox payload encryption for shared-tablet PHI isolation (VN-2026-08-C4-03) ──
-// Generates an ephemeral AES-256-GCM session key on login stored in sessionStorage.
-// When Worker A logs out, sessionStorage is wiped. Worker B inspecting IndexedDB
-// directly only sees encrypted ciphertext blobs { _encrypted: true, iv, ct }.
+// ── Outbox payload encryption for shared-tablet PHI isolation (ADR §47) ──
+// Persists non-extractable AES-256-GCM CryptoKey handles directly in IndexedDB v5
+// store 'device_keystore', keyed by outbox_aes_gcm_${effectiveOwner}.
+// Includes migration bridge from volatile sessionStorage and AAD cryptographic binding.
 
-async function getSessionOutboxKey() {
-  const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('vn_outbox_key') : null
-  if (stored) {
-    const raw = Uint8Array.from(atob(stored), (c) => c.charCodeAt(0))
-    return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
-  }
-  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'])
-  const exported = await crypto.subtle.exportKey('raw', key)
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(exported)))
-  if (typeof sessionStorage !== 'undefined') {
-    sessionStorage.setItem('vn_outbox_key', b64)
-  }
-  return key
+export function buildAad(ownerId, eventId) {
+  const aadString = `vn:v2:${ownerId || 'anon'}:${eventId || 'none'}`
+  return new TextEncoder().encode(aadString)
 }
 
-export async function encryptOutboxPayload(payload) {
+export async function getOwnerOutboxKey(ownerId) {
+  const effectiveOwner = ownerId || 'anon'
+  const keyId = `outbox_aes_gcm_${effectiveOwner}`
+  const db = await getOfflineDB()
+
+  // 1. Migration Bridge: if pre-upgrade sessionStorage key exists, import as non-extractable
+  if (typeof sessionStorage !== 'undefined') {
+    const legacySessionKey = sessionStorage.getItem('vn_outbox_key')
+    if (legacySessionKey) {
+      try {
+        const raw = Uint8Array.from(atob(legacySessionKey), (c) => c.charCodeAt(0))
+        const importedKey = await crypto.subtle.importKey(
+          'raw',
+          raw,
+          { name: 'AES-GCM', length: 256 },
+          false,
+          ['encrypt', 'decrypt']
+        )
+        await db.put('device_keystore', {
+          key_id: keyId,
+          key: importedKey,
+          migrated_from_session: true,
+          created_at: new Date().toISOString(),
+        })
+        sessionStorage.removeItem('vn_outbox_key')
+        return importedKey
+      } catch (err) {
+        console.warn('[VitalNet] Migration of legacy sessionStorage outbox key failed', err)
+      }
+    }
+  }
+
+  // 2. Retrieve existing key from device_keystore
   try {
-    const key = await getSessionOutboxKey()
-    const iv = crypto.getRandomValues(new Uint8Array(12))
-    const encoded = new TextEncoder().encode(JSON.stringify(payload))
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded)
-    return { _encrypted: true, iv: Array.from(iv), ct: Array.from(new Uint8Array(ct)) }
+    const record = await db.get('device_keystore', keyId)
+    if (record && record.key) {
+      return record.key
+    }
   } catch (err) {
-    console.warn('[VitalNet] Outbox encryption fallback to plaintext', err)
+    console.warn('[VitalNet] Error retrieving key from device_keystore', err)
+  }
+
+  // 3. Generate persistent non-extractable AES-256-GCM key
+  const newKey = await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 },
+    false, // extractable: false
+    ['encrypt', 'decrypt']
+  )
+
+  try {
+    await db.put('device_keystore', {
+      key_id: keyId,
+      key: newKey,
+      created_at: new Date().toISOString(),
+    })
+  } catch (err) {
+    console.warn('[VitalNet] Failed saving key to device_keystore', err)
+  }
+
+  return newKey
+}
+
+export async function encryptOutboxPayload(payload, ownerId, eventId) {
+  try {
+    const key = await getOwnerOutboxKey(ownerId)
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const aad = buildAad(ownerId, eventId)
+    const encoded = new TextEncoder().encode(JSON.stringify(payload))
+    const ct = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: aad },
+      key,
+      encoded
+    )
+    return {
+      _encrypted: true,
+      _v: 2,
+      iv: Array.from(iv),
+      ct: Array.from(new Uint8Array(ct)),
+    }
+  } catch (err) {
+    console.warn('[VitalNet] Outbox encryption failed, fallback to plaintext', err)
     return payload
   }
 }
 
-export async function decryptOutboxPayload(payload) {
+export async function decryptOutboxPayload(payload, ownerId, eventId) {
   if (!payload || !payload._encrypted) return payload
   try {
-    const key = await getSessionOutboxKey()
+    const key = await getOwnerOutboxKey(ownerId)
     const iv = new Uint8Array(payload.iv)
     const ct = new Uint8Array(payload.ct)
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct)
+
+    // v2: decrypt with AAD binding
+    if (payload._v === 2) {
+      const aad = buildAad(ownerId, eventId)
+      const decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv, additionalData: aad },
+        key,
+        ct
+      )
+      return JSON.parse(new TextDecoder().decode(decrypted))
+    }
+
+    // Legacy fallback without AAD
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      ct
+    )
     return JSON.parse(new TextDecoder().decode(decrypted))
   } catch (err) {
-    console.warn('[VitalNet] Outbox payload decryption failed (different session/worker key)', err)
+    console.warn('[VitalNet] Outbox payload decryption failed', err)
     return null
   }
 }
 
 /**
- * Queue an event for later sync. No token stored — fresh token fetched at
- * sync time. ownerId is the queuing worker's auth user id; it gates who may
- * later drain or view this row (see module header). Payload is encrypted
- * at rest with the worker's session key (VN-2026-08-C4-03).
+ * Queue an event for later sync. Captures performance.now() monotonic offset
+ * to eliminate clock rollbacks/skew, encrypts payload with AAD binding, and
+ * registers background sync.
  */
 export async function enqueue(eventId, type, payload, ownerId) {
   const pendingCount = await getPendingCount()
@@ -92,19 +169,48 @@ export async function enqueue(eventId, type, payload, ownerId) {
     throw new Error(`Offline queue is full (${MAX_PENDING} items). Please sync before submitting more cases.`)
   }
 
-  const encryptedPayload = await encryptOutboxPayload(payload)
+  const encryptedPayload = await encryptOutboxPayload(payload, ownerId, eventId)
   const db = await getOfflineDB()
+  const monotonicMs = typeof performance !== 'undefined' ? Math.round(performance.now()) : Date.now()
+
   await db.put(STORE_NAME, {
     event_id: eventId,
     owner_id: ownerId ?? null,
     type,
     payload: encryptedPayload,
     created_at: new Date().toISOString(),
+    intake_monotonic_ms: monotonicMs,
     attempts: 0,
     status: 'pending',
     last_error: null,
   })
+
+  // Register ServiceWorker Background Sync (vitalnet-outbox-sync) if available
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && typeof window !== 'undefined' && 'SyncManager' in window) {
+    navigator.serviceWorker.ready
+      .then((reg) => reg.sync?.register?.('vitalnet-outbox-sync'))
+      .catch(() => {})
+  }
+
   notifyOutboxChange()
+}
+
+/**
+ * Queue an offline consent revocation tombstone event (ADR §55).
+ */
+export async function enqueueConsentRevocation(clientId, ownerId, reason = 'patient_withdrew_consent_offline') {
+  const eventId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `revoke-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  await enqueue(
+    eventId,
+    'case.revoke_consent',
+    {
+      client_id: clientId,
+      reason,
+      revoked_at: new Date().toISOString(),
+    },
+    ownerId
+  )
+  return eventId
 }
 
 export async function dequeue(eventId) {
@@ -115,10 +221,11 @@ export async function dequeue(eventId) {
 
 /**
  * Pending events owned by `ownerId`, oldest first — the FIFO drain order
- * processQueue() uses. Scoped by owner so a worker never drains (submits
- * under their own JWT) a case another worker queued on the same device.
- * Returns [] when ownerId is falsy: with no known identity there is nothing
- * safe to submit. Decrypts payloads using the active session key.
+ * processQueue() uses. Scoped by owner so a worker never drains a case another
+ * worker queued on the same device.
+ * Enforces quarantine self-healing: if an encrypted row fails decryption,
+ * it transitions to 'recovery_required' with CORRUPT_KEY_REASON so it no longer
+ * counts toward MAX_PENDING = 50.
  */
 export async function getPendingEvents(ownerId) {
   if (!ownerId) return []
@@ -126,10 +233,24 @@ export async function getPendingEvents(ownerId) {
   const all = await db.getAllFromIndex(STORE_NAME, 'created_at')
   const owned = all.filter((e) => e.status === 'pending' && e.owner_id === ownerId)
   const decrypted = []
+
   for (const item of owned) {
-    const plain = await decryptOutboxPayload(item.payload)
+    const plain = await decryptOutboxPayload(item.payload, item.owner_id, item.event_id)
     if (plain) {
       decrypted.push({ ...item, payload: plain })
+    } else if (item.payload && item.payload._encrypted) {
+      // Quarantine self-healing (ADR §47)
+      console.warn(`[VitalNet] Quarantining unrecoverable event ${item.event_id} due to key loss.`)
+      const tx = db.transaction(STORE_NAME, 'readwrite')
+      const row = await tx.store.get(item.event_id)
+      if (row && row.status === 'pending') {
+        row.status = RECOVERY_STATUS
+        row.recovery_reason = CORRUPT_KEY_REASON
+        row.last_error = 'Encrypted under a lost legacy session key; requires device cleanup.'
+        await tx.store.put(row)
+      }
+      await tx.done
+      notifyOutboxChange()
     }
   }
   return decrypted
@@ -248,7 +369,7 @@ export async function getDeadLetters(ownerId) {
   const owned = all.filter((e) => e.owner_id === ownerId)
   const decrypted = []
   for (const item of owned) {
-    const plain = await decryptOutboxPayload(item.payload)
+    const plain = await decryptOutboxPayload(item.payload, item.owner_id, item.event_id)
     decrypted.push({
       ...item,
       payload: plain || { patient_name: '[Encrypted from prior session]', chief_complaint: 'Offline submission' },

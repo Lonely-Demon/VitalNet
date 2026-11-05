@@ -88,12 +88,20 @@ export async function submitCase(formData) {
 // Rate-safety: 3.5s between items = max ~17 items/min, safely under the 20/min per-user limit.
 const QUEUE_ITEM_DELAY_MS = 3500
 
-/** Drains a single 'case.submit' outbox event. Returns 'synced' | 'failed' | 'dead'. */
+let _activeDrainPromise = null
+
+/** Drains a single 'case.submit' outbox event. Reconciles clock skew using boot-relative monotonic offset. */
 async function drainCaseSubmit(item, token) {
+  const payload = { ...item.payload }
+  if (item.intake_monotonic_ms != null && typeof performance !== 'undefined') {
+    const elapsedMs = Math.max(0, Math.round(performance.now()) - item.intake_monotonic_ms)
+    payload.client_submitted_at = new Date(Date.now() - elapsedMs).toISOString()
+  }
+
   const res = await fetch(`${apiBase('cases.submit')}/api/submit`, {
     method: 'POST',
     headers: { ...buildAuthHeaders(token), 'X-Event-Id': item.event_id },
-    body: JSON.stringify(item.payload),
+    body: JSON.stringify(payload),
   })
 
   if (res.ok) {
@@ -107,9 +115,6 @@ async function drainCaseSubmit(item, token) {
   }
   if (res.status >= 400 && res.status < 500) {
     // Any 4xx = permanent client error — this payload will NEVER succeed as-is.
-    // Dead-letter rather than dequeue-and-forget, so the worker can see
-    // (and, once reviewed, discard or retry) what failed instead of it
-    // silently vanishing — see lib/outbox.js's getDeadLetters().
     const detail = await res.text()
     console.warn(
       '[VitalNet] Permanent error — dead-lettering to prevent head-of-line blocking.',
@@ -123,57 +128,85 @@ async function drainCaseSubmit(item, token) {
   return 'failed'
 }
 
+/** Drains a 'case.revoke_consent' outbox tombstone event (ADR §55). */
+async function drainConsentRevoke(item, token) {
+  const clientId = item.payload?.client_id || item.event_id
+  const res = await fetch(`${apiBase('cases.submit')}/api/security/cases/${clientId}/revoke-consent`, {
+    method: 'POST',
+    headers: { ...buildAuthHeaders(token), 'X-Event-Id': item.event_id },
+    body: JSON.stringify(item.payload || {}),
+  })
+
+  if (res.ok || res.status === 404 || res.status === 409) {
+    await dequeue(item.event_id)
+    return 'synced'
+  }
+  if (res.status >= 400 && res.status < 500) {
+    const detail = await res.text()
+    console.warn('[VitalNet] Consent revocation error — dead-lettering', item.event_id, res.status, detail)
+    await markDead(item.event_id, `HTTP ${res.status}: ${detail}`.slice(0, 500))
+    return 'dead'
+  }
+  await incrementAttempts(item.event_id)
+  return 'failed'
+}
+
 /**
  * processQueue — called on every 'online' event and on app load.
  * Gets a fresh token from supabase.auth.getSession() at run time.
  * Returns { synced: number, failed: number, dead: number, requiresLogin?: boolean }
  */
 export async function processQueue() {
-  // Get fresh token FIRST — supabase-js auto-refreshes if the access token
-  // expired — because the drain is scoped to the logged-in worker's own
-  // queued rows (owner_id). A different worker's rows on this shared device
-  // are left untouched for that worker to sync under their own identity.
-  const { data: { session } } = await supabase.auth.getSession()
-  if (!session) {
-    // No valid session — user needs to re-login before the outbox can drain
-    return { synced: 0, failed: 0, dead: 0, requiresLogin: true }
+  if (_activeDrainPromise) {
+    return _activeDrainPromise
   }
-  const freshToken = session.access_token
-  const ownerId = session.user.id
 
-  const pending = await getPendingEvents(ownerId)
-  if (pending.length === 0) return { synced: 0, failed: 0, dead: 0 }
-
-  let synced = 0
-  let failed = 0
-  let dead = 0
-
-  for (const item of pending) {
+  _activeDrainPromise = (async () => {
     try {
-      let outcome
-      switch (item.type) {
-        case 'case.submit':
-          outcome = await drainCaseSubmit(item, freshToken)
-          break
-        default:
-          // Unknown event type (should never happen — enqueue() only ever
-          // writes types this drain loop knows about) — dead-letter rather
-          // than loop on it forever.
-          console.warn(`[VitalNet] Unknown outbox event type "${item.type}" — dead-lettering.`, item.event_id)
-          await markDead(item.event_id, `Unknown event type: ${item.type}`)
-          outcome = 'dead'
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        return { synced: 0, failed: 0, dead: 0, requiresLogin: true }
       }
-      if (outcome === 'synced') synced++
-      else if (outcome === 'dead') dead++
-      else failed++
-    } catch {
-      // Network error — leave in queue for next attempt
-      await incrementAttempts(item.event_id)
-      failed++
-    }
-    // Paced delay between items — stays under per-user rate limit during bulk sync
-    await new Promise(resolve => setTimeout(resolve, QUEUE_ITEM_DELAY_MS))
-  }
+      const freshToken = session.access_token
+      const ownerId = session.user.id
 
-  return { synced, failed, dead }
+      const pending = await getPendingEvents(ownerId)
+      if (pending.length === 0) return { synced: 0, failed: 0, dead: 0 }
+
+      let synced = 0
+      let failed = 0
+      let dead = 0
+
+      for (const item of pending) {
+        try {
+          let outcome
+          switch (item.type) {
+            case 'case.submit':
+              outcome = await drainCaseSubmit(item, freshToken)
+              break
+            case 'case.revoke_consent':
+              outcome = await drainConsentRevoke(item, freshToken)
+              break
+            default:
+              console.warn(`[VitalNet] Unknown outbox event type "${item.type}" — dead-lettering.`, item.event_id)
+              await markDead(item.event_id, `Unknown event type: ${item.type}`)
+              outcome = 'dead'
+          }
+          if (outcome === 'synced') synced++
+          else if (outcome === 'dead') dead++
+          else failed++
+        } catch {
+          await incrementAttempts(item.event_id)
+          failed++
+        }
+        await new Promise(resolve => setTimeout(resolve, QUEUE_ITEM_DELAY_MS))
+      }
+
+      return { synced, failed, dead }
+    } finally {
+      _activeDrainPromise = null
+    }
+  })()
+
+  return _activeDrainPromise
 }
