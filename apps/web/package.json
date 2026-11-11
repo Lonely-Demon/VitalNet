@@ -21,7 +21,7 @@
     "react-dom": "^19.2.8",
     "react-i18next": "^17.0.9",
     "tailwindcss": "^4.3.3",
-    "uuid": "^14.0.0",
+    "uuid": "^14.0.2",
     "vite-plugin-pwa": "^1.2.0",
     "workbox-window": "^7.4.0",
     "zod": "^4.3.6"
