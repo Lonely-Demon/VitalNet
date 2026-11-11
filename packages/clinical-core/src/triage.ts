@@ -70,6 +70,11 @@ export interface TriageResult {
    * Undefined if no model was run. Feeds needs_review + the ML-agreement
    * analytics (the model-promotion gate, DECISIONS §33). */
   modelAgreed?: boolean;
+  lowConfidence: boolean;
+  completenessState: CompletenessState;
+  missingVitals: string[];
+  needsReview: boolean;
+  needs_review?: boolean;
   mode: TriageMode;
 }
 
@@ -134,12 +139,24 @@ export function triage(form: TriageFormInput, options: TriageOptions = {}): Tria
   const contraindicationFlags = checkContraindications(form);
   const canRunModel = options.trees && options.featureNames?.length;
 
+  const completeness = assessFeatureCompleteness(form);
+
   if (mode === "hybrid") {
     // Reproduces classifier.py::predict_triage's CURRENT production order —
     // transition-only, see module header.
     const override = checkOverrides(form);
     if (override) {
-      return { tier: "EMERGENCY", firedRules: [override], contraindicationFlags, mode };
+      return {
+        tier: "EMERGENCY",
+        firedRules: [override],
+        contraindicationFlags,
+        lowConfidence: false,
+        completenessState: completeness.status,
+        missingVitals: completeness.missingCriticalVitals,
+        needsReview: false,
+        needs_review: false,
+        mode,
+      };
     }
     if (!canRunModel) {
       throw new Error("hybrid mode requires a tree bundle — the model is authoritative for the non-override band");
@@ -154,7 +171,23 @@ export function triage(form: TriageFormInput, options: TriageOptions = {}): Tria
         firedRules.push(floor);
       }
     }
-    return { tier, firedRules, contraindicationFlags, model, modelAgreed: model.tier === tier, mode };
+    const lowConfidence = model.lowConfidence;
+    const completenessState = model.completenessState;
+    const missingVitals = model.missingVitals;
+    const needsReview = Boolean(lowConfidence && tier !== "EMERGENCY");
+    return {
+      tier,
+      firedRules,
+      contraindicationFlags,
+      model,
+      modelAgreed: model.tier === tier,
+      lowConfidence,
+      completenessState,
+      missingVitals,
+      needsReview,
+      needs_review: needsReview,
+      mode,
+    };
   }
 
   // rules_first (default): the rules engine is the ENTIRE authoritative
@@ -175,11 +208,25 @@ export function triage(form: TriageFormInput, options: TriageOptions = {}): Tria
     });
   }
 
+  const lowConfidence = model ? model.lowConfidence : completeness.lowConfidence;
+  const completenessState = model ? model.completenessState : completeness.status;
+  const missingVitals = model ? model.missingVitals : completeness.missingCriticalVitals;
+  const modelAgreed = model ? model.tier === engineResult.tier : undefined;
+  const needsReview = Boolean(
+    (lowConfidence && finalTier !== "EMERGENCY") ||
+    (model && modelAgreed === false && finalTier !== "EMERGENCY")
+  );
+
   return {
     tier: finalTier,
     firedRules,
     contraindicationFlags,
-    ...(model ? { model, modelAgreed: model.tier === engineResult.tier } : {}),
+    lowConfidence,
+    completenessState,
+    missingVitals,
+    needsReview,
+    needs_review: needsReview,
+    ...(model ? { model, modelAgreed } : {}),
     mode,
   };
 }

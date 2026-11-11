@@ -10,12 +10,17 @@ export interface SmsFrameInput {
   clientId?: string;
   patient_age?: number;
   patientAge?: number;
-  patient_sex?: "male" | "female" | "other";
-  patientSex?: "male" | "female" | "other";
+  age?: number;
+  age_months?: number | null;
+  ageMonths?: number | null;
+  patient_sex?: "male" | "female" | "other" | string;
+  patientSex?: "male" | "female" | "other" | string;
+  sex?: "male" | "female" | "other" | string;
   is_pregnant?: boolean | null;
   isPregnant?: boolean | null;
-  triage_level?: Tier;
-  triageTier?: Tier;
+  triage_level?: Tier | string;
+  triageTier?: Tier | string;
+  tier?: Tier | string;
   symptoms: readonly string[];
   bp_systolic?: number | null;
   bpSystolic?: number | null;
@@ -32,12 +37,16 @@ export interface DecodedSmsFrame {
   clientId: string;
   patient_age: number;
   patientAge: number;
+  age_months?: number | null;
+  ageMonths?: number | null;
   patient_sex: "male" | "female" | "other";
   patientSex: "male" | "female" | "other";
+  sex?: "male" | "female" | "other";
   is_pregnant: boolean;
   isPregnant: boolean;
   triage_level: Tier;
   triageTier: Tier;
+  tier?: Tier;
   symptoms: Symptom[];
   bp_systolic: number | null;
   bpSystolic: number | null;
@@ -137,24 +146,36 @@ export function encodeEmergencySms(input: SmsFrameInput): string {
 
   // Byte 16: Version (bits 7..5), Sex (bits 4..3), Pregnant (bit 2), Tier (bits 1..0)
   const version = 1;
-  const sex = input.patient_sex || input.patientSex || "male";
+  const rawSex = input.patient_sex ?? input.patientSex ?? input.sex ?? "male";
+  const normalizedSex = String(rawSex).toLowerCase();
   let sexCode = 0;
-  if (sex === "female") sexCode = 1;
-  else if (sex === "other") sexCode = 2;
+  if (normalizedSex === "female") sexCode = 1;
+  else if (normalizedSex === "other") sexCode = 2;
 
   const isPregnant = Boolean(input.is_pregnant ?? input.isPregnant);
   const pregCode = isPregnant ? 1 : 0;
 
-  const tier = input.triage_level || input.triageTier || "ROUTINE";
+  const rawTier = input.triage_level ?? input.triageTier ?? input.tier ?? "ROUTINE";
+  const normalizedTier = String(rawTier).toUpperCase();
   let tierCode = 0;
-  if (tier === "URGENT") tierCode = 1;
-  else if (tier === "EMERGENCY") tierCode = 2;
+  if (normalizedTier === "URGENT") tierCode = 1;
+  else if (normalizedTier === "EMERGENCY") tierCode = 2;
 
   buf[16] = ((version & 0x7) << 5) | ((sexCode & 0x3) << 3) | ((pregCode & 0x1) << 2) | (tierCode & 0x3);
 
-  // Byte 17: Patient Age (0..120)
-  const age = input.patient_age ?? input.patientAge ?? 0;
-  buf[17] = Math.min(120, Math.max(0, Math.round(age)));
+  // Byte 17: Patient Age (0..120 years, or 200..223 for sub-year/toddler 0..23 months, or 254 legacy sentinel)
+  const rawAgeMonths = input.age_months ?? input.ageMonths;
+  const rawAge = input.patient_age ?? input.patientAge ?? input.age;
+
+  if (rawAgeMonths != null && rawAgeMonths >= 0 && rawAgeMonths <= 23) {
+    buf[17] = 200 + Math.round(rawAgeMonths);
+  } else if (rawAgeMonths == null && rawAge != null && rawAge > 0 && rawAge < 1) {
+    const derivedMonths = Math.min(23, Math.max(0, Math.round(rawAge * 12)));
+    buf[17] = 200 + derivedMonths;
+  } else {
+    const age = rawAge ?? 0;
+    buf[17] = Math.min(120, Math.max(0, Math.round(age)));
+  }
 
   // Bytes 18..19: Symptom Mask (16 bits)
   let mask = 0;
@@ -229,12 +250,29 @@ export function decodeEmergencySms(frameText: string): DecodedSmsFrame {
     throw new Error("InvalidSmsFrame: Frame text must be non-empty string");
   }
 
-  const match = frameText.match(/VN1:([A-Za-z0-9_-]{37,39})/);
-  if (!match) {
+  const trimmed = frameText.trim();
+  let base64Part: string | null = null;
+  const directMatch = trimmed.match(/^VN1:([A-Za-z0-9_-]{37,39})$/);
+  if (directMatch) {
+    base64Part = directMatch[1]!;
+  } else {
+    const embeddedMatch = trimmed.match(/(?:^|[\s\[(])VN1:([A-Za-z0-9_-]{37,39})(?=[\])\s]|$)/);
+    if (embeddedMatch) {
+      base64Part = embeddedMatch[1]!;
+    }
+  }
+
+  if (!base64Part) {
+    const vn1Idx = frameText.indexOf("VN1:");
+    if (vn1Idx !== -1) {
+      const rest = frameText.slice(vn1Idx + 4).trim().split(/[\s\])]/)[0]!;
+      throw new Error(
+        `InvalidSmsFrame: Malformed or truncated VN1 frame (payload length ${rest.length}, expected 37..39 Base64url chars)`
+      );
+    }
     throw new Error("InvalidSmsFrame: No VN1 emergency frame found in SMS body (must start with VN1:)");
   }
 
-  const base64Part = match[1]!;
   const buf = base64UrlDecode(base64Part);
 
   if (buf.length !== 28) {
@@ -267,7 +305,18 @@ export function decodeEmergencySms(frameText: string): DecodedSmsFrame {
   const isPregnant = pregCode === 1;
   const triageTier: Tier = tierCode === 2 ? "EMERGENCY" : tierCode === 1 ? "URGENT" : "ROUTINE";
 
-  const patientAge = buf[17]!;
+  const rawAgeByte = buf[17]!;
+  let patientAge: number;
+  let ageMonths: number | null = null;
+  if (rawAgeByte >= 200 && rawAgeByte <= 223) {
+    ageMonths = rawAgeByte - 200;
+    patientAge = Math.floor(ageMonths / 12);
+  } else if (rawAgeByte === 254) {
+    patientAge = 0;
+    ageMonths = 6;
+  } else {
+    patientAge = rawAgeByte;
+  }
 
   const mask = (buf[18]! << 8) | buf[19]!;
   const symptoms: Symptom[] = [];
@@ -288,12 +337,16 @@ export function decodeEmergencySms(frameText: string): DecodedSmsFrame {
     client_id: clientId,
     patientAge,
     patient_age: patientAge,
+    ageMonths,
+    age_months: ageMonths,
     patientSex,
     patient_sex: patientSex,
+    sex: patientSex,
     isPregnant,
     is_pregnant: isPregnant,
     triageTier,
     triage_level: triageTier,
+    tier: triageTier,
     symptoms,
     bpSystolic,
     bp_systolic: bpSystolic,

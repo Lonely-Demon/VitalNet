@@ -7,9 +7,11 @@ import {
   computeCrc24,
   uuidToBytes,
   bytesToUuid,
+  base64UrlEncode,
   type SmsFrameInput,
 } from "../src/smsCodec.js";
 import { ALLOWED_SYMPTOMS } from "../src/schema.js";
+import { assignTier } from "../src/rules/engine.js";
 
 describe("VN1 Emergency SMS Binary Codec (ADR §51)", () => {
   it("round-trips a full EMERGENCY maternal preeclampsia case in 42 ASCII chars", () => {
@@ -219,4 +221,90 @@ describe("VN1 Emergency SMS Binary Codec (ADR §51)", () => {
     const reconstructed = bytesToUuid(bytes);
     expect(reconstructed).toBe(original);
   });
+
+  describe("Sub-Year Infant & Toddler Age Encoding (REG-01)", () => {
+    it("round-trips exact sub-year and toddler ages from 0 to 23 months (bytes 200..223)", () => {
+      for (let months = 0; months <= 23; months++) {
+        const input: SmsFrameInput = {
+          client_id: "550e8400-e29b-41d4-a716-446655440000",
+          patient_age: Math.floor(months / 12),
+          age_months: months,
+          patient_sex: "female",
+          is_pregnant: false,
+          triage_level: "ROUTINE",
+          symptoms: [],
+        };
+        const encoded = encodeEmergencySmsFrame(input);
+        const decoded = decodeEmergencySmsFrame(encoded);
+
+        expect(decoded.age_months).toBe(months);
+        expect(decoded.ageMonths).toBe(months);
+        expect(decoded.patient_age).toBe(Math.floor(months / 12));
+        expect(decoded.patientAge).toBe(Math.floor(months / 12));
+      }
+    });
+
+    it("derives sub-year months when rawAge is a fractional year without explicit age_months", () => {
+      const input: SmsFrameInput = {
+        client_id: "550e8400-e29b-41d4-a716-446655440000",
+        patient_age: 0.25, // 3 months
+        patient_sex: "male",
+        triage_level: "ROUTINE",
+        symptoms: [],
+      };
+      const encoded = encodeEmergencySmsFrame(input);
+      const decoded = decodeEmergencySmsFrame(encoded);
+
+      expect(decoded.age_months).toBe(3);
+      expect(decoded.patient_age).toBe(0);
+    });
+
+    it("maintains backward-compatibility for legacy byte 254 frames", () => {
+      const buf = new Uint8Array(28);
+      const uuid = uuidToBytes("550e8400-e29b-41d4-a716-446655440000");
+      buf.set(uuid, 0);
+      buf[16] = 1 << 5; // Version 1, male, not pregnant, ROUTINE
+      buf[17] = 254; // Legacy sub-year sentinel
+      const crc = computeCrc24(buf, 25);
+      buf[25] = (crc >> 16) & 0xff;
+      buf[26] = (crc >> 8) & 0xff;
+      buf[27] = crc & 0xff;
+
+      const rawEncoded = `VN1:${base64UrlEncode(buf)}`;
+      const decoded = decodeEmergencySmsFrame(rawEncoded);
+
+      expect(decoded.patient_age).toBe(0);
+      expect(decoded.patientAge).toBe(0);
+      expect(decoded.age_months).toBe(6);
+      expect(decoded.ageMonths).toBe(6);
+    });
+
+    it("verifies encoded/decoded 1-month infant with temp 38.5 triggers neonatal_fever override in assignTier", () => {
+      const input: SmsFrameInput = {
+        client_id: "550e8400-e29b-41d4-a716-446655440000",
+        patient_age: 0,
+        age_months: 1,
+        patient_sex: "female",
+        is_pregnant: false,
+        triage_level: "ROUTINE", // Naive / pre-rules level
+        symptoms: [],
+        temperature: 38.5,
+      };
+
+      const encoded = encodeEmergencySmsFrame(input);
+      const decoded = decodeEmergencySmsFrame(encoded);
+
+      expect(decoded.age_months).toBe(1);
+      expect(decoded.patient_age).toBe(0);
+      expect(decoded.temperature).toBe(38.5);
+
+      // Verify that assignTier evaluates effective age < 0.25 years (1 month) with temp >= 38.0C
+      const result = assignTier(decoded);
+      expect(result.tier).toBe("EMERGENCY");
+      const neonatalRule = result.firedRules.find((r) => r.id === "neonatal_fever");
+      expect(neonatalRule).toBeDefined();
+      expect(neonatalRule?.citation).toContain("Neonatal fever");
+    });
+  });
 });
+

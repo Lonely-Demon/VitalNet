@@ -32,6 +32,58 @@ export interface ParsedQrIdentity {
 }
 
 /**
+ * Safely parses Date of Birth string supporting both ISO (YYYY-MM-DD)
+ * and Indian standard (DD/MM/YYYY, DD-MM-YYYY) formats (BUG-21).
+ * Calculates exact age considering month and day birthday arrival.
+ */
+export function parseDob(dobStr: string, referenceDate: Date = new Date()): { age?: number; yob?: number } {
+  const clean = (dobStr || "").trim();
+  const currentYear = referenceDate.getFullYear();
+  const currentMonth = referenceDate.getMonth() + 1; // 1-indexed
+  const currentDay = referenceDate.getDate();
+
+  const parts = clean.split(/[/.-]/);
+  if (parts.length === 3) {
+    let year: number | undefined;
+    let month: number | undefined;
+    let day: number | undefined;
+
+    if (parts[0]!.length === 4) {
+      // ISO: YYYY-MM-DD
+      year = Number.parseInt(parts[0]!, 10);
+      month = Number.parseInt(parts[1]!, 10);
+      day = Number.parseInt(parts[2]!, 10);
+    } else if (parts[2]!.length === 4) {
+      // Indian / UK: DD/MM/YYYY
+      day = Number.parseInt(parts[0]!, 10);
+      month = Number.parseInt(parts[1]!, 10);
+      year = Number.parseInt(parts[2]!, 10);
+    }
+
+    if (year && !Number.isNaN(year) && year > 1900 && year <= currentYear) {
+      let age = currentYear - year;
+      if (month && !Number.isNaN(month) && day && !Number.isNaN(day)) {
+        if (currentMonth < month || (currentMonth === month && currentDay < day)) {
+          age -= 1;
+        }
+      }
+      return { age: Math.max(0, age), yob: year };
+    }
+  }
+
+  // Fallback to 4-digit year match if date has non-standard delimiter or is just year
+  const yearMatch = clean.match(/\b(19\d{2}|20\d{2})\b/);
+  if (yearMatch) {
+    const y = Number.parseInt(yearMatch[1]!, 10);
+    if (!Number.isNaN(y) && y > 1900 && y <= currentYear) {
+      return { age: Math.max(0, currentYear - y), yob: y };
+    }
+  }
+
+  return {};
+}
+
+/**
  * Parses an offline QR string representing an ABDM ABHA QR card (v3 JSON or legacy delimited)
  * or a plain VitalNet patient continuity key.
  */
@@ -74,22 +126,19 @@ export function parseAbhaQr(qrText: string): ParsedAbhaQr | null {
       let yob: number | undefined;
       let dob: string | undefined;
 
-      if (typeof data.yob === "number") {
-        yob = data.yob;
-        age = Math.max(0, currentYear - yob);
-      } else if (typeof data.dob === "string") {
+      if (typeof data.dob === "string" && data.dob.trim()) {
         dob = data.dob.trim();
-        const parts = dob.split(/[/.-]/);
-        if (parts.length === 3) {
-          const parsedYear = Number.parseInt(parts[2]!, 10);
-          if (!Number.isNaN(parsedYear) && parsedYear > 1900 && parsedYear <= currentYear) {
-            yob = parsedYear;
-            age = Math.max(0, currentYear - parsedYear);
-          }
-        }
+        const parsedDob = parseDob(dob);
+        age = parsedDob.age;
+        yob = parsedDob.yob;
       }
 
-      if (age === undefined) {
+      if (typeof data.yob === "number" && !Number.isNaN(data.yob)) {
+        yob = data.yob;
+        if (age === undefined) {
+          age = Math.max(0, currentYear - yob);
+        }
+      } else if (age === undefined) {
         const yearMatch = String(data.dob || data.yob || "").match(/\b(19\d{2}|20\d{2})\b/);
         if (yearMatch) {
           const parsed = Number.parseInt(yearMatch[1]!, 10);
@@ -144,12 +193,10 @@ export function parseAbhaQr(qrText: string): ParsedAbhaQr | null {
         let dob: string | undefined;
         let yob: number | undefined;
         if (parts[3]) {
-          dob = parts[3];
-          const yearMatch = dob.match(/\b(19\d{2}|20\d{2})\b/);
-          if (yearMatch) {
-            yob = Number.parseInt(yearMatch[1]!, 10);
-            age = Math.max(0, new Date().getFullYear() - yob);
-          }
+          dob = parts[3].trim();
+          const parsedDob = parseDob(dob);
+          age = parsedDob.age;
+          yob = parsedDob.yob;
         }
 
         return {

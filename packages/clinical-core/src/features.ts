@@ -345,7 +345,7 @@ export function orderFeatureVector(featureMap: FeatureMap, featureNames: readonl
 export function getUnmeasuredFeatureSet(formData: FeatureFormInput): Set<string> {
   const unmeasured = new Set<string>();
   const isMissing = (v: number | null | undefined): boolean =>
-    v === null || v === undefined || v <= 0;
+    v === null || v === undefined || !Number.isFinite(v) || v <= 0;
 
   const noSys = isMissing(formData.bp_systolic);
   const noDia = isMissing(formData.bp_diastolic);

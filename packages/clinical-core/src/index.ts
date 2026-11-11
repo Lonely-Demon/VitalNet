@@ -32,7 +32,16 @@ export {
   type News2Result,
 } from "./rules/bands.js";
 
-export { checkOverrides, news2ConcerningVital, type FiredRule, type OverrideInput } from "./rules/rules.js";
+export {
+  checkOverrides,
+  news2ConcerningVital,
+  calculatePediatricGcs,
+  normalizeSymptomDuration,
+  type FiredRule,
+  type OverrideInput,
+  type PediatricGcsResult,
+  type NormalizedSymptomDuration,
+} from "./rules/rules.js";
 
 export { assignTier, resolveEffectiveAge, type Tier, type EngineInput, type EngineResult } from "./rules/engine.js";
 
@@ -46,7 +55,9 @@ export {
 
 export {
   evaluateTrees,
+  evaluateSingleTree,
   explainPrediction,
+  computeRiskDriver,
   evaluateNodeTernary,
   traverseTreeTernary,
   computeSaabasAttributions,
@@ -87,6 +98,7 @@ export {
   parseAbhaQr,
   parseAbhaQrPayload,
   parsePatientQrPayload,
+  parseDob,
   type ParsedAbhaQr,
   type ParsedQrIdentity,
 } from "./abhaScanner.js";

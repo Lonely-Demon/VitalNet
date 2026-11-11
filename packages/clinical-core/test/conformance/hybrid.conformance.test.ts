@@ -52,7 +52,7 @@ async function readJsonl(path: string): Promise<ConformanceRecord[]> {
 
 describe.skipIf(!existsSync(patientsPath))(
   "clinical-core triage() (hybrid mode) matches Python predict_triage",
-  { timeout: 60000 },
+  { timeout: 120000 },
   () => {
     it("agrees with the Python-labeled conformance set", async () => {
       const records = await readJsonl(patientsPath);

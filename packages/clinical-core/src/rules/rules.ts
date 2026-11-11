@@ -243,3 +243,178 @@ export function news2ConcerningVital(form: OverrideInput): FiredRule | null {
   }
   return null;
 }
+
+/**
+ * Pediatric Glasgow Coma Scale (pGCS) calculator (BUG-39).
+ * Computes eye (1-4), verbal (1-5), and motor (1-6) scores.
+ * Maximum score is 15. Guards against division by zero when calculating ratios/percentages.
+ */
+export interface PediatricGcsResult {
+  eye: number;
+  verbal: number;
+  motor: number;
+  totalScore: number;
+  maxScore: number;
+  scoreRatio: number;
+  tier: "EMERGENCY" | "URGENT" | "ROUTINE";
+  isComa: boolean;
+  citation: string;
+}
+
+export function calculatePediatricGcs(
+  eye: number,
+  verbal: number,
+  motor: number,
+  maxScore: number = 15
+): PediatricGcsResult {
+  // Validate and clamp inputs
+  const safeEye = Number.isFinite(eye) ? Math.max(1, Math.min(4, Math.round(eye))) : 1;
+  const safeVerbal = Number.isFinite(verbal) ? Math.max(1, Math.min(5, Math.round(verbal))) : 1;
+  const safeMotor = Number.isFinite(motor) ? Math.max(1, Math.min(6, Math.round(motor))) : 1;
+
+  const totalScore = safeEye + safeVerbal + safeMotor;
+
+  // Guard against division by zero (BUG-39): if maxScore <= 0 or not finite, fallback safely to standard 15
+  const safeMax = Number.isFinite(maxScore) && maxScore > 0 ? maxScore : 15;
+  const scoreRatio = Number((totalScore / safeMax).toFixed(4));
+
+  // Clinical interpretation per PALS:
+  // pGCS <= 8: Severe impairment / Coma -> EMERGENCY
+  // pGCS 9-12: Moderate impairment -> URGENT
+  // pGCS 13-15: Mild or normal -> ROUTINE
+  let tier: "EMERGENCY" | "URGENT" | "ROUTINE" = "ROUTINE";
+  if (totalScore <= 8) {
+    tier = "EMERGENCY";
+  } else if (totalScore <= 12) {
+    tier = "URGENT";
+  }
+
+  return {
+    eye: safeEye,
+    verbal: safeVerbal,
+    motor: safeMotor,
+    totalScore,
+    maxScore: safeMax,
+    scoreRatio,
+    tier,
+    isComa: totalScore <= 8,
+    citation: "Paediatric Glasgow Coma Scale (Simpson & Reilly 1982 / PALS Guidelines)",
+  };
+}
+
+/**
+ * Normalizes symptom duration and arrival timestamps (BUG-40).
+ * Disallows negative duration (clamping to 0) and handles future timestamps
+ * gracefully by clamping to current/reference time.
+ */
+export interface NormalizedSymptomDuration {
+  durationMinutes: number;
+  durationHours: number;
+  durationDays: number;
+  rawDuration: string | number;
+  isNegativeAdjusted: boolean;
+  isFutureTimestampAdjusted: boolean;
+  standardizedText: string;
+}
+
+export function normalizeSymptomDuration(
+  durationInput?: string | number | null,
+  timestampInput?: string | number | Date | null,
+  referenceTimeMs: number = Date.now()
+): NormalizedSymptomDuration {
+  let durationMinutes = 0;
+  let isNegative = false;
+  let isFuture = false;
+  const rawDuration = durationInput ?? "";
+
+  // 1. Process timestampInput if provided
+  if (timestampInput !== null && timestampInput !== undefined && timestampInput !== "") {
+    let tMs: number;
+    if (timestampInput instanceof Date) {
+      tMs = timestampInput.getTime();
+    } else if (typeof timestampInput === "number") {
+      tMs = timestampInput;
+    } else {
+      tMs = Date.parse(String(timestampInput));
+    }
+
+    if (Number.isFinite(tMs)) {
+      if (tMs > referenceTimeMs) {
+        // Future timestamp detected: handle gracefully (clamp to reference time)
+        isFuture = true;
+        durationMinutes = 0;
+      } else {
+        const diffMs = referenceTimeMs - tMs;
+        durationMinutes = Math.max(0, Math.round(diffMs / (60 * 1000)));
+      }
+    }
+  }
+
+  // 2. If durationInput is provided, parse it
+  if (durationInput !== null && durationInput !== undefined && durationInput !== "") {
+    if (typeof durationInput === "number") {
+      if (!Number.isFinite(durationInput) || durationInput <= 0) {
+        isNegative = durationInput < 0;
+        durationMinutes = 0;
+      } else {
+        // Assume hours if plain numeric
+        durationMinutes = Math.round(durationInput * 60);
+      }
+    } else {
+      const trimmed = String(durationInput).trim().toLowerCase();
+      // Look for negative patterns like "-5 hours", "-2d"
+      if (trimmed.startsWith("-") || trimmed.includes("negative")) {
+        isNegative = true;
+        durationMinutes = 0;
+      } else {
+        const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(d|day|days|h|hr|hrs|hour|hours|m|min|mins|minute|minutes|w|week|weeks|mo|month|months)?/i);
+        if (match && match[1]) {
+          const val = parseFloat(match[1]);
+          const unit = (match[2] || "h").toLowerCase();
+          if (unit.startsWith("d")) {
+            durationMinutes = Math.round(val * 24 * 60);
+          } else if (unit.startsWith("m") && !unit.startsWith("mo")) {
+            durationMinutes = Math.round(val);
+          } else if (unit.startsWith("w")) {
+            durationMinutes = Math.round(val * 7 * 24 * 60);
+          } else if (unit.startsWith("mo")) {
+            durationMinutes = Math.round(val * 30 * 24 * 60);
+          } else {
+            // Default hours
+            durationMinutes = Math.round(val * 60);
+          }
+        }
+      }
+    }
+  }
+
+  // Ensure durationMinutes is never negative
+  if (durationMinutes < 0) {
+    isNegative = true;
+    durationMinutes = 0;
+  }
+
+  const durationHours = Number((durationMinutes / 60).toFixed(2));
+  const durationDays = Number((durationMinutes / (24 * 60)).toFixed(2));
+
+  let standardizedText = "";
+  if (durationMinutes === 0) {
+    standardizedText = "acute (< 1 hour)";
+  } else if (durationMinutes < 60) {
+    standardizedText = `${durationMinutes} minute(s)`;
+  } else if (durationHours < 48) {
+    standardizedText = `${durationHours} hour(s)`;
+  } else {
+    standardizedText = `${durationDays} day(s)`;
+  }
+
+  return {
+    durationMinutes,
+    durationHours,
+    durationDays,
+    rawDuration,
+    isNegativeAdjusted: isNegative,
+    isFutureTimestampAdjusted: isFuture,
+    standardizedText,
+  };
+}

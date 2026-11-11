@@ -108,7 +108,7 @@ export interface NodeEvaluationResult {
 
 /**
  * Evaluates a single tree node using ternary missing routing (defaultLeft).
- * If raw feature value is null, undefined, or NaN, routes via defaultLeft.
+ * If raw feature value is null, undefined, or NaN, routes via defaultLeft or right.
  * If measured, uses standard float32 comparison against threshold.
  */
 export function evaluateNodeTernary(
@@ -136,6 +136,17 @@ export function evaluateNodeTernary(
     nextNode = fVal <= fThr ? tree.left[nodeId]! : tree.right[nodeId]!;
   }
   return { isLeaf: false, nextNode, splitFeature: featIdx, defaultLeftUsed };
+}
+
+/**
+ * Evaluates a single tree to its leaf node, routing missing values to defaultLeft or right.
+ */
+export function evaluateSingleTree(
+  tree: TreeNode,
+  featureVector: readonly number[]
+): { leafIndex: number; leafValue: Array<[number, number]> | null } {
+  const result = traverseTreeTernary(tree, featureVector);
+  return { leafIndex: result.leafIndex, leafValue: result.leafValue ?? null };
 }
 
 /**
@@ -263,7 +274,37 @@ export function explainPrediction(
 
   return [...contributionByFeature.entries()]
     .map(([featureIndex, contribution]) => ({ featureIndex, contribution }))
-    .sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+    .sort((a, b) => {
+      const aPos = a.contribution > 0;
+      const bPos = b.contribution > 0;
+      if (aPos && !bPos) return -1;
+      if (!aPos && bPos) return 1;
+      if (aPos && bPos) return b.contribution - a.contribution;
+      return Math.abs(b.contribution) - Math.abs(a.contribution);
+    });
+}
+
+/**
+ * Computes the top risk driver feature for the predicted dominant class (BUG-12).
+ * Locks attribution class to dominantClassIndex, suppresses unmeasured vitals,
+ * and prioritizes positive risk contributions first.
+ */
+export function computeRiskDriver(
+  treeJson: TreeJson,
+  x: readonly number[],
+  dominantClassIndex: number,
+  featureNames: readonly string[],
+  options?: ExplainOptions
+): { featureName: string; featureIndex: number; contribution: number } | null {
+  const attributions = explainPrediction(treeJson, x, dominantClassIndex, options);
+  if (attributions.length === 0) return null;
+  const top = attributions[0]!;
+  const featureName = featureNames[top.featureIndex] ?? `feature_${top.featureIndex}`;
+  return {
+    featureName,
+    featureIndex: top.featureIndex,
+    contribution: top.contribution,
+  };
 }
 
 export type FeatureCompletenessStatus = "COMPLETE" | "PARTIAL_VITALS" | "SPARSE_CONTEXT";
@@ -287,9 +328,11 @@ export const CORE_VITALS = [
 
 /**
  * Assesses completeness of vital measurements on an intake form.
- * - COMPLETE: All 5 core vitals measured.
+ * - COMPLETE: All core vitals measured (age-appropriate: BP exempt for age < 5).
  * - PARTIAL_VITALS: 1–2 missing vitals, or >=3 missing vitals with at least 1 symptom.
  * - SPARSE_CONTEXT: >=3 missing vitals AND zero symptoms (forces lowConfidence = true).
+ * Strictly guards isMissing against IEEE-754 NaN (!Number.isFinite(v) || v <= 0).
+ * Rejects whitespace-only chief complaints from COMPLETE status.
  */
 export function assessFeatureCompleteness(formData: {
   bp_systolic?: number | null;
@@ -298,22 +341,54 @@ export function assessFeatureCompleteness(formData: {
   spo2?: number | null;
   temperature?: number | null;
   symptoms?: readonly string[] | null;
+  patient_age?: number | null;
+  patientAge?: number | null;
+  age?: number | null;
+  age_months?: number | null;
+  ageMonths?: number | null;
+  chief_complaint?: string | null;
+  chiefComplaint?: string | null;
 }): FeatureCompletenessResult {
+  const isMissingVital = (v: number | null | undefined): boolean =>
+    v === null || v === undefined || !Number.isFinite(v) || v <= 0;
+
+  const rawAge = formData.patient_age ?? formData.patientAge ?? formData.age;
+  const rawMonths = formData.age_months ?? formData.ageMonths;
+  let effectiveAge: number | undefined;
+  if (rawAge !== undefined && rawAge !== null) {
+    effectiveAge = Number(rawAge);
+    if (effectiveAge < 2 && rawMonths !== undefined && rawMonths !== null) {
+      effectiveAge = rawMonths / 12;
+    }
+  } else if (rawMonths !== undefined && rawMonths !== null) {
+    effectiveAge = rawMonths / 12;
+  }
+
+  const isPediatric = effectiveAge !== undefined && effectiveAge < 5;
+
   const missingVitals: string[] = [];
+  const missingCriticalVitals: string[] = [];
   for (const v of CORE_VITALS) {
     const val = formData[v];
-    if (val === null || val === undefined || val <= 0) {
+    if (isMissingVital(val)) {
       missingVitals.push(v);
+      if (!isPediatric || (v !== "bp_systolic" && v !== "bp_diastolic")) {
+        missingCriticalVitals.push(v);
+      }
     }
   }
 
+  const rawComplaint = formData.chief_complaint ?? formData.chiefComplaint;
+  const isWhitespaceOnlyComplaint =
+    typeof rawComplaint === "string" && rawComplaint.length > 0 && rawComplaint.trim().length === 0;
+
   const symptoms = Array.isArray(formData.symptoms) ? formData.symptoms : [];
-  const missingCount = missingVitals.length;
+  const missingCount = missingCriticalVitals.length;
 
   let status: FeatureCompletenessStatus;
-  if (missingCount === 0) {
+  if (missingCount === 0 && !isWhitespaceOnlyComplaint) {
     status = "COMPLETE";
-  } else if (missingCount <= 2 || symptoms.length >= 1) {
+  } else if (missingCount <= 2 || symptoms.length >= 1 || (missingCount === 0 && isWhitespaceOnlyComplaint)) {
     status = "PARTIAL_VITALS";
   } else {
     status = "SPARSE_CONTEXT";
@@ -322,7 +397,7 @@ export function assessFeatureCompleteness(formData: {
   return {
     status,
     state: status,
-    missingCriticalVitals: missingVitals,
+    missingCriticalVitals,
     missingVitals,
     lowConfidence: status === "SPARSE_CONTEXT",
   };
