@@ -93,9 +93,33 @@ let _activeDrainPromise = null
 /** Drains a single 'case.submit' outbox event. Reconciles clock skew using boot-relative monotonic offset. */
 async function drainCaseSubmit(item, token) {
   const payload = { ...item.payload }
-  if (item.intake_monotonic_ms != null && typeof performance !== 'undefined') {
-    const elapsedMs = Math.max(0, Math.round(performance.now()) - item.intake_monotonic_ms)
-    payload.client_submitted_at = new Date(Date.now() - elapsedMs).toISOString()
+  // BUG-06: Cross-tab / reload resilient monotonic calculation
+  if (
+    typeof performance !== 'undefined' &&
+    typeof performance.now === 'function' &&
+    item.intake_monotonic_ms != null
+  ) {
+    let elapsedMs = null
+    const currentOrigin = typeof performance.timeOrigin === 'number' ? performance.timeOrigin : null
+    const itemOrigin = typeof item.enqueued_time_origin === 'number' ? item.enqueued_time_origin : null
+
+    if (itemOrigin != null && currentOrigin != null) {
+      const enqueuedAbsolute = itemOrigin + item.intake_monotonic_ms
+      const currentAbsolute = currentOrigin + performance.now()
+      if (currentAbsolute >= enqueuedAbsolute) {
+        elapsedMs = Math.round(currentAbsolute - enqueuedAbsolute)
+      }
+    } else if (itemOrigin == null && performance.now() >= item.intake_monotonic_ms) {
+      elapsedMs = Math.round(performance.now() - item.intake_monotonic_ms)
+    }
+
+    if (elapsedMs != null && elapsedMs >= 0) {
+      payload.client_submitted_at = new Date(Date.now() - elapsedMs).toISOString()
+    } else if (!payload.client_submitted_at && item.created_at) {
+      payload.client_submitted_at = item.created_at
+    }
+  } else if (!payload.client_submitted_at && item.created_at) {
+    payload.client_submitted_at = item.created_at
   }
 
   const res = await fetch(`${apiBase('cases.submit')}/api/submit`, {
@@ -137,9 +161,20 @@ async function drainConsentRevoke(item, token) {
     body: JSON.stringify(item.payload || {}),
   })
 
-  if (res.ok || res.status === 404 || res.status === 409) {
+  if (res.ok || res.status === 409) {
     await dequeue(item.event_id)
     return 'synced'
+  }
+  // BUG-08: Do not drop revocation immediately on 404 (e.g. if case.submit hasn't synced yet)
+  if (res.status === 404) {
+    if ((item.attempts || 0) < 3) {
+      await incrementAttempts(item.event_id)
+      return 'failed'
+    }
+    const detail = await res.text()
+    console.warn('[VitalNet] Consent revocation 404 after retries — dead-lettering', item.event_id, detail)
+    await markDead(item.event_id, `HTTP 404: Case not found for revocation: ${detail}`.slice(0, 500))
+    return 'dead'
   }
   if (res.status >= 400 && res.status < 500) {
     const detail = await res.text()

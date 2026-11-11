@@ -16,7 +16,7 @@ import { getCaseHistoryByPatientKey } from '../api/cases'
 import { serializeIntakePayload } from '../lib/intakePayload'
 import QrScannerModal from '../components/QrScannerModal'
 import VitalCaptureAssist from '../components/VitalCaptureAssist'
-import { cachePatientVisit, getOfflinePatientHistory } from '../lib/patientHistoryCache'
+import { cachePatientVisit, cachePatientVisits, getOfflinePatientHistory } from '../lib/patientHistoryCache'
 
 // Stable English identifiers — these are the actual values submitted to the
 // API (chief_complaint is a free-text-ish field, not a coded enum server-
@@ -167,18 +167,29 @@ export default function IntakeForm() {
   // another worker's form before the profile resolves. Null ⇒ no draft
   // persistence until the profile is known (see useDraftSave).
   const { loadDraft, saveDraft, clearDraft } = useDraftSave(profile?.id ?? null)
-  const draftLoadedRef = useRef(false)
+  const loadedDraftOwnerRef = useRef(null)
   const profileId = profile?.id ?? null
 
-  // Load draft once profile id resolves (fix mount race condition VN-CRITICAL-4d)
+  // Load draft once profile id resolves, and reset on worker switch/logout (BUG-60)
   useEffect(() => {
-    if (!profileId || draftLoadedRef.current) return
-    draftLoadedRef.current = true
+    if (!profileId) {
+      if (loadedDraftOwnerRef.current) {
+        setForm(emptyForm)
+        loadedDraftOwnerRef.current = null
+      }
+      return
+    }
+    if (loadedDraftOwnerRef.current === profileId) return
+    loadedDraftOwnerRef.current = profileId
     let mounted = true
     loadDraft().then(draft => {
-      if (mounted && draft) {
-        setForm(draft)
-        showToast('Restored unsaved draft', 'info')
+      if (mounted) {
+        if (draft) {
+          setForm(draft)
+          showToast('Restored unsaved draft', 'info')
+        } else {
+          setForm(emptyForm)
+        }
       }
     }).catch(console.error)
     return () => { mounted = false }
@@ -234,9 +245,9 @@ export default function IntakeForm() {
       const data = await getCaseHistoryByPatientKey(key)
       const cases = data.cases || []
       setHistoryLookup({ cases, source: 'network' })
-      // Cache fetched visits in IndexedDB patient_history_cache (ADR §49)
-      for (const c of cases) {
-        await cachePatientVisit({ ...c, patient_key: key }, profile?.id).catch(() => {})
+      // Cache fetched visits in IndexedDB patient_history_cache in a batch (BUG-25)
+      if (cases.length > 0) {
+        await cachePatientVisits(cases.map((c) => ({ ...c, patient_key: key })), profile?.id).catch(() => {})
       }
     } catch {
       // Offline fallback: check 14-day local cache & 7-day longitudinal deterioration
@@ -327,14 +338,27 @@ export default function IntakeForm() {
           try {
             smsFrame = encodeEmergencySmsFrame({
               clientId: data.client_id,
+              client_id: data.client_id,
+              patient_age: payload.patient_age != null ? Number(payload.patient_age) : 30,
+              patientAge: payload.patient_age != null ? Number(payload.patient_age) : 30,
               age: payload.patient_age != null ? Number(payload.patient_age) : 30,
+              age_months: payload.age_months != null ? Number(payload.age_months) : null,
+              ageMonths: payload.age_months != null ? Number(payload.age_months) : null,
+              patient_sex: payload.patient_sex || 'other',
+              patientSex: payload.patient_sex || 'other',
               sex: payload.patient_sex || 'other',
+              is_pregnant: !!payload.is_pregnant,
               isPregnant: !!payload.is_pregnant,
+              triage_level: 'EMERGENCY',
+              triageTier: 'EMERGENCY',
               tier: 'EMERGENCY',
               symptoms: payload.symptoms || [],
+              bp_systolic: payload.bp_systolic != null ? Number(payload.bp_systolic) : null,
               bpSystolic: payload.bp_systolic != null ? Number(payload.bp_systolic) : null,
+              bp_diastolic: payload.bp_diastolic != null ? Number(payload.bp_diastolic) : null,
               bpDiastolic: payload.bp_diastolic != null ? Number(payload.bp_diastolic) : null,
               spo2: payload.spo2 != null ? Number(payload.spo2) : null,
+              heart_rate: payload.heart_rate != null ? Number(payload.heart_rate) : null,
               heartRate: payload.heart_rate != null ? Number(payload.heart_rate) : null,
               temperature: payload.temperature != null ? Number(payload.temperature) : null,
             })
@@ -836,10 +860,27 @@ export default function IntakeForm() {
         onDetected={(scanned) => {
           setForm((prev) => {
             const next = { ...prev }
-            if (scanned.patientKey) next.patient_key = scanned.patientKey
-            if (scanned.patientName && !prev.patient_name) next.patient_name = scanned.patientName
-            if (scanned.patientAge != null && !prev.patient_age) next.patient_age = String(scanned.patientAge)
-            if (scanned.patientSex && !prev.patient_sex) next.patient_sex = scanned.patientSex
+            const isDifferentKey = Boolean(
+              prev.patient_key && scanned.patientKey && prev.patient_key !== scanned.patientKey
+            )
+
+            if (scanned.patientKey) {
+              next.patient_key = scanned.patientKey
+            }
+
+            if (isDifferentKey) {
+              // Rescanning for a distinct patient: clear and replace prior demographic data
+              // to prevent cross-patient record splicing (BUG-65)
+              next.patient_name = scanned.patientName || ''
+              next.patient_age = scanned.patientAge != null ? String(scanned.patientAge) : ''
+              next.age_months = ''
+              next.patient_sex = scanned.patientSex || ''
+            } else {
+              // First scan or re-scan of same patient key
+              if (scanned.patientName) next.patient_name = scanned.patientName
+              if (scanned.patientAge != null) next.patient_age = String(scanned.patientAge)
+              if (scanned.patientSex) next.patient_sex = scanned.patientSex
+            }
             return next
           })
           if (scanned.patientKey) {

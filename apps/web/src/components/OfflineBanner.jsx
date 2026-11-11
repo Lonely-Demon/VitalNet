@@ -33,7 +33,7 @@ export default function OfflineBanner() {
       const [count, dead, recovery, stale, health] = await Promise.all([
         getPendingCount(),
         getDeadLetters(ownerId),
-        getRecoveryRequiredCount(),
+        getRecoveryRequiredCount(ownerId),
         getStalePendingCount(ownerId),
         getStorageHealth(),
       ])
@@ -81,11 +81,11 @@ export default function OfflineBanner() {
   }
 
   const handlePurgeRecovery = async () => {
-    if (!session) return
+    if (!session || !ownerId) return
     const confirmed = window.confirm(
       'Clear legacy offline submissions that cannot be safely attributed to a worker? This permanently deletes only migrated recovery records and does not affect current pending submissions.',
     )
-    if (confirmed) await purgeRecoveryRequired()
+    if (confirmed) await purgeRecoveryRequired(ownerId)
   }
 
   if (online && queueCount === 0 && deadLetters.length === 0 && recoveryCount === 0 && staleCount === 0 && !highPressure) return null

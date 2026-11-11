@@ -74,7 +74,15 @@ export default function Dashboard({ filter = 'all' }) {
     }
   }
 
-  useEffect(() => { fetchCases() }, [fetchCases])
+  // Reset pagination cursor state and re-fetch when filter changes (BUG-34)
+  useEffect(() => {
+    setNextCursor(null)
+    setNextTriagePriority(null)
+    setNextNeedsReview(null)
+    setNextId(null)
+    setHasMore(false)
+    fetchCases()
+  }, [filter, fetchCases])
 
   const handleReviewed = useCallback((caseId) => {
     setCases((prev) => prev.map((c) => (
@@ -94,18 +102,31 @@ export default function Dashboard({ filter = 'all' }) {
         if (prev.find((c) => c.id === newCase.id)) return prev
         return [newCase, ...prev]
       })
-      if (newCase.triage_level === 'EMERGENCY') {
+      const effectiveTriage = newCase.overridden_triage || newCase.triage_level
+      if (effectiveTriage === 'EMERGENCY') {
         showToast('New EMERGENCY case received', 'error')
       }
     },
     onUpdate: (updatedCase) => {
+      let wasEscalated = false
       setCases((prev) => {
         // A case just soft-deleted should drop off the dashboard immediately
         if (updatedCase.deleted_at) {
           return prev.filter((c) => c.id !== updatedCase.id)
         }
+        const existing = prev.find((c) => c.id === updatedCase.id)
+        if (existing) {
+          const oldTriage = existing.overridden_triage || existing.triage_level
+          const newTriage = updatedCase.overridden_triage || updatedCase.triage_level
+          if (oldTriage !== 'EMERGENCY' && newTriage === 'EMERGENCY') {
+            wasEscalated = true
+          }
+        }
         return prev.map((c) => (c.id === updatedCase.id ? updatedCase : c))
       })
+      if (wasEscalated) {
+        showToast('Case escalated to EMERGENCY', 'error')
+      }
     },
   })
 

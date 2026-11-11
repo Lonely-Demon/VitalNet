@@ -59,6 +59,9 @@ export async function getOfflineDB() {
 
   return openDB(DB_NAME, DB_VERSION, {
     async upgrade(db, oldVersion, _newVersion, transaction) {
+      // BUG-15: ISOLATE ALL SCHEMA CREATIONS SYNCHRONOUSLY FIRST.
+      // In W3C IndexedDB, all createObjectStore calls must execute
+      // synchronously before any async operations to prevent TransactionInactiveError.
       // form-drafts (added in v2)
       if (!db.objectStoreNames.contains('form-drafts')) {
         db.createObjectStore('form-drafts')   // manually keyed — key is `draft-{ownerId}`
@@ -72,28 +75,6 @@ export async function getOfflineDB() {
         outbox.createIndex('status', 'status')
       }
 
-      // v2 -> v3: migrate any still-queued submission_queue rows into the
-      // outbox as explicit recovery records.
-      if (oldVersion > 0 && oldVersion < 3 && db.objectStoreNames.contains('submission_queue')) {
-        const oldStore = transaction.objectStore('submission_queue')
-        const outboxStore = transaction.objectStore('outbox')
-        const rows = await oldStore.getAll()
-        for (const row of rows) {
-          await outboxStore.put({
-            event_id: row.client_id,
-            owner_id: null,
-            type: 'case.submit',
-            payload: row.payload,
-            created_at: row.queued_at,
-            attempts: 0,
-            status: LEGACY_RECOVERY_STATUS,
-            recovery_reason: LEGACY_RECOVERY_REASON,
-            last_error: 'Legacy offline submission requires explicit device recovery.',
-          })
-        }
-        db.deleteObjectStore('submission_queue')
-      }
-
       // device_keystore (added in v5, ADR §47) — stores persistent non-extractable
       // Web CryptoKey objects structured-cloned directly in IndexedDB.
       if (!db.objectStoreNames.contains('device_keystore')) {
@@ -105,6 +86,33 @@ export async function getOfflineDB() {
       if (!db.objectStoreNames.contains('patient_history_cache')) {
         db.createObjectStore('patient_history_cache', { keyPath: 'patient_key' })
       }
+
+      // v2 -> v3: migrate any still-queued submission_queue rows into the
+      // outbox as explicit recovery records.
+      if (oldVersion > 0 && oldVersion < 3 && db.objectStoreNames.contains('submission_queue')) {
+        const oldStore = transaction.objectStore('submission_queue')
+        const outboxStore = transaction.objectStore('outbox')
+        const rows = await oldStore.getAll()
+        await Promise.all(rows.map((row) =>
+          outboxStore.put({
+            event_id: row.client_id,
+            owner_id: null,
+            type: 'case.submit',
+            payload: row.payload,
+            created_at: row.queued_at,
+            attempts: 0,
+            status: LEGACY_RECOVERY_STATUS,
+            recovery_reason: LEGACY_RECOVERY_REASON,
+            last_error: 'Legacy offline submission requires explicit device recovery.',
+          })
+        ))
+        try {
+          db.deleteObjectStore('submission_queue')
+        } catch (err) {
+          console.warn('[VitalNet] Cleanup of legacy submission_queue deferred', err)
+        }
+      }
+      await transaction.done
     },
   })
 }

@@ -36,6 +36,8 @@ function notifyOutboxChange() {
 // store 'device_keystore', keyed by outbox_aes_gcm_${effectiveOwner}.
 // Includes migration bridge from volatile sessionStorage and AAD cryptographic binding.
 
+const _inflightKeyPromises = new Map()
+
 export function buildAad(ownerId, eventId) {
   const aadString = `vn:v2:${ownerId || 'anon'}:${eventId || 'none'}`
   return new TextEncoder().encode(aadString)
@@ -44,9 +46,28 @@ export function buildAad(ownerId, eventId) {
 export async function getOwnerOutboxKey(ownerId) {
   const effectiveOwner = ownerId || 'anon'
   const keyId = `outbox_aes_gcm_${effectiveOwner}`
+  if (_inflightKeyPromises.has(keyId)) {
+    return _inflightKeyPromises.get(keyId)
+  }
+  const promise = _resolveOwnerOutboxKey(keyId)
+  _inflightKeyPromises.set(keyId, promise)
+  try {
+    return await promise
+  } finally {
+    _inflightKeyPromises.delete(keyId)
+  }
+}
+
+async function _resolveOwnerOutboxKey(keyId) {
   const db = await getOfflineDB()
 
-  // 1. Migration Bridge: if pre-upgrade sessionStorage key exists, import as non-extractable
+  // BUG-07: Step 1: Consult IndexedDB device_keystore FIRST
+  const record = await db.get('device_keystore', keyId)
+  if (record && record.key) {
+    return record.key
+  }
+
+  // BUG-07: Step 2: Migration Bridge if no IDB key exists
   if (typeof sessionStorage !== 'undefined') {
     const legacySessionKey = sessionStorage.getItem('vn_outbox_key')
     if (legacySessionKey) {
@@ -73,17 +94,7 @@ export async function getOwnerOutboxKey(ownerId) {
     }
   }
 
-  // 2. Retrieve existing key from device_keystore
-  try {
-    const record = await db.get('device_keystore', keyId)
-    if (record && record.key) {
-      return record.key
-    }
-  } catch (err) {
-    console.warn('[VitalNet] Error retrieving key from device_keystore', err)
-  }
-
-  // 3. Generate persistent non-extractable AES-256-GCM key
+  // BUG-07: Step 3: Generate persistent non-extractable AES-256-GCM key
   const newKey = await crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 },
     false, // extractable: false
@@ -98,6 +109,7 @@ export async function getOwnerOutboxKey(ownerId) {
     })
   } catch (err) {
     console.warn('[VitalNet] Failed saving key to device_keystore', err)
+    throw err
   }
 
   return newKey
@@ -121,8 +133,8 @@ export async function encryptOutboxPayload(payload, ownerId, eventId) {
       ct: Array.from(new Uint8Array(ct)),
     }
   } catch (err) {
-    console.warn('[VitalNet] Outbox encryption failed, fallback to plaintext', err)
-    return payload
+    console.error('[VitalNet] Outbox encryption failed; refusing plaintext fallback', err)
+    throw new Error(`Outbox encryption failed: ${err?.message || err}`)
   }
 }
 
@@ -172,6 +184,7 @@ export async function enqueue(eventId, type, payload, ownerId) {
   const encryptedPayload = await encryptOutboxPayload(payload, ownerId, eventId)
   const db = await getOfflineDB()
   const monotonicMs = typeof performance !== 'undefined' ? Math.round(performance.now()) : Date.now()
+  const timeOriginMs = (typeof performance !== 'undefined' && typeof performance.timeOrigin === 'number') ? performance.timeOrigin : null
 
   await db.put(STORE_NAME, {
     event_id: eventId,
@@ -180,6 +193,7 @@ export async function enqueue(eventId, type, payload, ownerId) {
     payload: encryptedPayload,
     created_at: new Date().toISOString(),
     intake_monotonic_ms: monotonicMs,
+    enqueued_time_origin: timeOriginMs,
     attempts: 0,
     status: 'pending',
     last_error: null,
@@ -199,6 +213,18 @@ export async function enqueue(eventId, type, payload, ownerId) {
  * Queue an offline consent revocation tombstone event (ADR §55).
  */
 export async function enqueueConsentRevocation(clientId, ownerId, reason = 'patient_withdrew_consent_offline') {
+  const db = await getOfflineDB()
+  // BUG-08: Coalesce local case.submit items when revoking consent
+  const all = await db.getAll(STORE_NAME)
+  for (const item of all) {
+    if (
+      (item.event_id === clientId || item.payload?.client_id === clientId) &&
+      item.type === 'case.submit'
+    ) {
+      await db.delete(STORE_NAME, item.event_id)
+    }
+  }
+
   const eventId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `revoke-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
   await enqueue(
     eventId,
@@ -270,9 +296,13 @@ export async function getPendingCount() {
  * Count legacy rows that cannot be safely attributed to a worker. This is an
  * aggregate-only signal: callers must not receive the payload or identifiers.
  */
-export async function getRecoveryRequiredCount() {
+export async function getRecoveryRequiredCount(ownerId = null) {
   const db = await getOfflineDB()
-  return db.countFromIndex(STORE_NAME, 'status', RECOVERY_STATUS)
+  const rows = await db.getAllFromIndex(STORE_NAME, 'status', RECOVERY_STATUS)
+  if (!ownerId) {
+    return rows.filter((r) => r.owner_id == null).length
+  }
+  return rows.filter((r) => r.owner_id === ownerId || r.owner_id == null).length
 }
 
 /**
@@ -316,16 +346,21 @@ export async function purgeStalePending(ownerId, now = Date.now()) {
 /**
  * Permanently purge ownerless legacy recovery records after an explicit
  * device-level confirmation. This never touches pending, dead-lettered, or
- * currently owned rows.
+ * currently owned rows of other workers (BUG-24).
  */
-export async function purgeRecoveryRequired() {
+export async function purgeRecoveryRequired(ownerId = null) {
+  if (!ownerId) return 0
   const db = await getOfflineDB()
   const rows = await db.getAllFromIndex(STORE_NAME, 'status', RECOVERY_STATUS)
+  let removed = 0
   for (const row of rows) {
-    await db.delete(STORE_NAME, row.event_id)
+    if (row.owner_id === ownerId || row.owner_id == null) {
+      await db.delete(STORE_NAME, row.event_id)
+      removed += 1
+    }
   }
-  if (rows.length > 0) notifyOutboxChange()
-  return rows.length
+  if (removed > 0) notifyOutboxChange()
+  return removed
 }
 
 /**

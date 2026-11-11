@@ -157,8 +157,7 @@ function TapCadencePanel({ onApply }) {
     if (vitalTarget === 'heart_rate') {
       onApply({ heart_rate: calculatedBpm }, `HR ${calculatedBpm} bpm applied`)
     } else {
-      // Vital fields in IntakeForm focus on heart_rate, but we can surface or apply
-      onApply({ heart_rate: calculatedBpm }, `Cadence ${calculatedBpm}/min applied`)
+      onApply({ respiratory_rate: calculatedBpm }, `RR ${calculatedBpm}/min applied`)
     }
   }
 
@@ -271,6 +270,123 @@ function TapCadencePanel({ onApply }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Camera Torch Fingertip rPPG Pulse Estimator
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Evaluates pulse signal with dynamic effective FPS derived from sample timestamps:
+ * 1. Time-based duration gate (>= 9.5s)
+ * 2. Dynamic effective FPS calculation from sample timestamps (BUG-49)
+ * 3. 2.0s settling window discard (auto-exposure)
+ * 4. 1-second sliding window detrending
+ * 5. 300ms peak refractory period (<= 200 bpm)
+ * 6. Regularity SNR gate: CV_IBI <= 0.22
+ * 7. Physiological range gate: 40..190 bpm
+ */
+export function calculateRppgPulse(samples) {
+  if (!samples || samples.length < 30) {
+    return { ok: false, error: 'Too few camera samples recorded. Please retry.' }
+  }
+
+  const t0 = samples[0].time
+  const tEnd = samples[samples.length - 1].time
+  const totalDurationMs = tEnd - t0
+
+  // Time-based duration gate (>= 9.5s)
+  if (totalDurationMs < 9500) {
+    return { ok: false, error: 'Insufficient sample duration. Please retry for a full 12 seconds.' }
+  }
+
+  // Dynamic effective FPS from sample timestamps (BUG-49)
+  const effectiveFps = (samples.length - 1) / (totalDurationMs / 1000)
+  if (!Number.isFinite(effectiveFps) || effectiveFps < 10 || effectiveFps > 240) {
+    return { ok: false, error: 'Unstable camera frame rate detected. Please retry.' }
+  }
+
+  // Discard initial 2.0s (auto-exposure settling)
+  const activeSamples = samples.filter((s) => s.time - t0 >= 2000)
+  const activeDurationMs =
+    activeSamples.length > 0
+      ? activeSamples[activeSamples.length - 1].time - activeSamples[0].time
+      : 0
+
+  if (activeSamples.length < 20 || activeDurationMs < 6000) {
+    return { ok: false, error: 'Too few steady samples captured.' }
+  }
+
+  const rawR = activeSamples.map((s) => s.r)
+
+  // Detrending: 1-second rolling mean subtraction based on effectiveFps
+  const windowSize = Math.max(5, Math.round(effectiveFps))
+  const halfWin = Math.floor(windowSize / 2)
+  const detrended = []
+
+  for (let i = 0; i < rawR.length; i++) {
+    const start = Math.max(0, i - halfWin)
+    const end = Math.min(rawR.length, i + halfWin + 1)
+    let sum = 0
+    for (let j = start; j < end; j++) sum += rawR[j]
+    const localMean = sum / (end - start)
+    detrended.push(rawR[i] - localMean)
+  }
+
+  // Peak detection with refractory period >= 300ms (Math.round(0.3 * effectiveFps) frames)
+  const refractoryFrames = Math.max(2, Math.round(0.3 * effectiveFps))
+  const peaks = []
+  let lastPeak = -refractoryFrames
+
+  for (let i = 1; i < detrended.length - 1; i++) {
+    if (
+      detrended[i] > 0.15 &&
+      detrended[i] > detrended[i - 1] &&
+      detrended[i] > detrended[i + 1] &&
+      i - lastPeak >= refractoryFrames
+    ) {
+      peaks.push(i)
+      lastPeak = i
+    }
+  }
+
+  if (peaks.length < 4) {
+    return {
+      ok: false,
+      error: 'Could not detect distinct pulse peaks. Please ensure flash is on and lens is fully covered.',
+    }
+  }
+
+  // Inter-beat intervals (IBI in ms) calculated directly from sample timestamps (BUG-49)
+  const ibis = []
+  for (let i = 1; i < peaks.length; i++) {
+    const deltaMs = activeSamples[peaks[i]].time - activeSamples[peaks[i - 1]].time
+    ibis.push(deltaMs)
+  }
+
+  const meanIbi = ibis.reduce((a, b) => a + b, 0) / ibis.length
+  const variance = ibis.reduce((a, b) => a + Math.pow(b - meanIbi, 2), 0) / ibis.length
+  const stdDev = Math.sqrt(variance)
+  const cv = meanIbi > 0 ? stdDev / meanIbi : 1.0
+
+  // Regularity Gate (ADR §50): CV_IBI <= 0.22
+  if (cv > 0.22) {
+    return {
+      ok: false,
+      error: `Pulse rhythm too erratic or motion-corrupted (CV = ${cv.toFixed(2)} > 0.22 gate). Please hold finger steady and retry.`,
+      cv,
+    }
+  }
+
+  const bpm = Math.round(60000 / meanIbi)
+
+  // Physiological boundary gate (ADR §50): 40..190 bpm
+  if (bpm < 40 || bpm > 190) {
+    return {
+      ok: false,
+      error: `Calculated pulse (${bpm} bpm) out of physiological range (40–190 bpm). Please retry.`,
+      bpm,
+      cv,
+    }
+  }
+
+  return { ok: true, bpm, cv, effectiveFps }
+}
+
 function RppgCameraPanel({ onApply }) {
   const [measuring, setMeasuring] = useState(false)
   const [progress, setProgress] = useState(0) // 0 .. 100%
@@ -353,7 +469,6 @@ function RppgCameraPanel({ onApply }) {
       const ctx = canvas.getContext('2d', { willReadFrequently: true })
 
       const DURATION_MS = 12000 // 12-second acquisition window
-      const FPS = 30
 
       function sampleFrame() {
         if (!videoRef.current || videoRef.current.readyState < 2) {
@@ -398,7 +513,7 @@ function RppgCameraPanel({ onApply }) {
         } else {
           // Finished acquisition — analyze pulse
           stopCameraStream()
-          processRppgSamples(samplesRef.current, FPS)
+          processRppgSamples(samplesRef.current)
         }
       }
 
@@ -414,96 +529,16 @@ function RppgCameraPanel({ onApply }) {
     }
   }
 
-  /**
-   * Evaluates pulse signal with:
-   * 1. 2.0s settling window discard (auto-exposure)
-   * 2. 1-second sliding window detrending
-   * 3. 300ms peak refractory period (<= 200 bpm)
-   * 4. Regularity SNR gate: CV_IBI <= 0.22
-   * 5. Physiological range gate: 40..190 bpm
-   */
-  function processRppgSamples(samples, fps) {
-    if (!samples || samples.length < fps * 10) {
-      setErrorMsg('Insufficient sample duration. Please retry for a full 12 seconds.')
+  function processRppgSamples(samples) {
+    const res = calculateRppgPulse(samples)
+    if (!res.ok) {
+      setErrorMsg(res.error)
+      if (res.cv != null) setResultCv(parseFloat(res.cv.toFixed(3)))
       return
     }
-
-    const t0 = samples[0].time
-    // Discard initial 2.0s (auto-exposure settling)
-    const activeSamples = samples.filter((s) => s.time - t0 >= 2000)
-    if (activeSamples.length < fps * 6) {
-      setErrorMsg('Too few steady samples captured.')
-      return
-    }
-
-    const rawR = activeSamples.map((s) => s.r)
-
-    // Detrending: 1-second rolling mean subtraction (approx 30 samples)
-    const windowSize = fps
-    const halfWin = Math.floor(windowSize / 2)
-    const detrended = []
-
-    for (let i = 0; i < rawR.length; i++) {
-      const start = Math.max(0, i - halfWin)
-      const end = Math.min(rawR.length, i + halfWin + 1)
-      let sum = 0
-      for (let j = start; j < end; j++) sum += rawR[j]
-      const localMean = sum / (end - start)
-      detrended.push(rawR[i] - localMean)
-    }
-
-    // Peak detection with refractory period >= 300ms (Math.round(0.3 * fps) frames)
-    const refractoryFrames = Math.round(0.3 * fps)
-    const peaks = []
-    let lastPeak = -refractoryFrames
-
-    for (let i = 1; i < detrended.length - 1; i++) {
-      if (
-        detrended[i] > 0.15 &&
-        detrended[i] > detrended[i - 1] &&
-        detrended[i] > detrended[i + 1] &&
-        i - lastPeak >= refractoryFrames
-      ) {
-        peaks.push(i)
-        lastPeak = i
-      }
-    }
-
-    if (peaks.length < 4) {
-      setErrorMsg('Could not detect distinct pulse peaks. Please ensure flash is on and lens is fully covered.')
-      return
-    }
-
-    // Inter-beat intervals (IBI in ms)
-    const ibis = []
-    for (let i = 1; i < peaks.length; i++) {
-      const deltaFrames = peaks[i] - peaks[i - 1]
-      ibis.push(deltaFrames * (1000 / fps))
-    }
-
-    const meanIbi = ibis.reduce((a, b) => a + b, 0) / ibis.length
-    const variance = ibis.reduce((a, b) => a + Math.pow(b - meanIbi, 2), 0) / ibis.length
-    const stdDev = Math.sqrt(variance)
-    const cv = meanIbi > 0 ? stdDev / meanIbi : 1.0
-
-    setResultCv(parseFloat(cv.toFixed(3)))
-
-    // Regularity Gate (ADR §50): CV_IBI <= 0.22
-    if (cv > 0.22) {
-      setErrorMsg(`Pulse rhythm too erratic or motion-corrupted (CV = ${cv.toFixed(2)} > 0.22 gate). Please hold finger steady and retry.`)
-      return
-    }
-
-    const bpm = Math.round(60000 / meanIbi)
-
-    // Physiological boundary gate (ADR §50): 40..190 bpm
-    if (bpm < 40 || bpm > 190) {
-      setErrorMsg(`Calculated pulse (${bpm} bpm) out of physiological range (40–190 bpm). Please retry.`)
-      return
-    }
-
-    setResultBpm(bpm)
-    setStatusMessage(`Estimated Pulse: ${bpm} bpm (Regular rhythm, CV = ${cv.toFixed(2)})`)
+    setResultCv(parseFloat(res.cv.toFixed(3)))
+    setResultBpm(res.bpm)
+    setStatusMessage(`Estimated Pulse: ${res.bpm} bpm (Regular rhythm, CV = ${res.cv.toFixed(2)})`)
   }
 
   return (
@@ -606,6 +641,34 @@ function RppgCameraPanel({ onApply }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. Web Bluetooth GATT Medical Device Bridge
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Standalone IEEE 11073-20601 SFLOAT parser supporting sentinels (BUG-48):
+ * - 0x07FE: +INFINITY -> null
+ * - 0x07FF: NaN -> null
+ * - 0x0800: NRes -> null
+ * - 0x0801: Reserved -> null
+ * - 0x0802: -INFINITY -> null
+ */
+export function parseIeee11073Sfloat(val, offset) {
+  if (!val || offset + 2 > val.byteLength) return null
+  const raw = val.getUint16(offset, true)
+  const mantissaRaw = raw & 0x0fff
+
+  // Check IEEE 11073-20601 special value sentinels:
+  if (mantissaRaw >= 0x07fe && mantissaRaw <= 0x0802) {
+    return null
+  }
+
+  let mantissa = mantissaRaw
+  if (mantissa >= 0x0800) mantissa -= 0x1000
+
+  let exponent = raw >> 12
+  if (exponent >= 0x08) exponent -= 0x10
+
+  const result = mantissa * Math.pow(10, exponent)
+  return Number.isFinite(result) ? result : null
+}
+
 function BluetoothGattPanel({ onApply }) {
   const [device, setDevice] = useState(null)
   const [connecting, setConnecting] = useState(false)
@@ -613,18 +676,68 @@ function BluetoothGattPanel({ onApply }) {
   const [lastReading, setLastReading] = useState(null)
   const [bleError, setBleError] = useState(null)
 
-  const isBluetoothAvailable = typeof navigator !== 'undefined' && 'bluetooth' in navigator
+  const lastConnectAttemptRef = useRef(0)
+  const connectLockRef = useRef(false)
+  const CONNECT_COOLDOWN_MS = 1500
+
+  const deviceRef = useRef(null)
+  const activeCharsRef = useRef([])
+  const disconnectHandlerRef = useRef(null)
+
+  const handleDisconnect = useCallback(() => {
+    setConnected(false)
+    setLastReading(null)
+  }, [])
+  disconnectHandlerRef.current = handleDisconnect
+
+  const cleanupBleResources = useCallback(() => {
+    if (deviceRef.current && disconnectHandlerRef.current) {
+      try {
+        deviceRef.current.removeEventListener('gattserverdisconnected', disconnectHandlerRef.current)
+      } catch {}
+    }
+    activeCharsRef.current.forEach(({ char, listener }) => {
+      try {
+        char.removeEventListener('characteristicvaluechanged', listener)
+        if (char.service?.device?.gatt?.connected) {
+          char.stopNotifications().catch(() => {})
+        }
+      } catch {}
+    })
+    activeCharsRef.current = []
+  }, [])
 
   const disconnectDevice = () => {
-    if (device && device.gatt && device.gatt.connected) {
-      device.gatt.disconnect()
+    cleanupBleResources()
+    if (deviceRef.current?.gatt?.connected) {
+      deviceRef.current.gatt.disconnect()
     }
+    deviceRef.current = null
     setDevice(null)
     setConnected(false)
     setLastReading(null)
   }
 
+  useEffect(() => {
+    return () => {
+      cleanupBleResources()
+      if (deviceRef.current?.gatt?.connected) {
+        deviceRef.current.gatt.disconnect()
+      }
+      deviceRef.current = null
+    }
+  }, [cleanupBleResources])
+
+  const isBluetoothAvailable = typeof navigator !== 'undefined' && 'bluetooth' in navigator
+
   const connectDevice = async () => {
+    const now = Date.now()
+    if (connectLockRef.current || now - lastConnectAttemptRef.current < CONNECT_COOLDOWN_MS) {
+      return
+    }
+    lastConnectAttemptRef.current = now
+    connectLockRef.current = true
+
     setBleError(null)
     setConnecting(true)
 
@@ -646,11 +759,9 @@ function BluetoothGattPanel({ onApply }) {
         optionalServices: [HR_SERVICE, BP_SERVICE, PLX_SERVICE, 'heart_rate', 'blood_pressure', 'pulse_oximeter'],
       })
 
+      deviceRef.current = selectedDevice
       setDevice(selectedDevice)
-
-      selectedDevice.addEventListener('gattserverdisconnected', () => {
-        setConnected(false)
-      })
+      selectedDevice.addEventListener('gattserverdisconnected', disconnectHandlerRef.current)
 
       const server = await selectedDevice.gatt.connect()
       setConnected(true)
@@ -662,66 +773,88 @@ function BluetoothGattPanel({ onApply }) {
         if (hrService) {
           const hrChar = await hrService.getCharacteristic(0x2a37).catch(() => hrService.getCharacteristic('heart_rate_measurement'))
           await hrChar.startNotifications()
-          hrChar.addEventListener('characteristicvaluechanged', (e) => {
+          const hrListener = (e) => {
             const val = e.target.value
             const flags = val.getUint8(0)
             const hr = (flags & 0x01) ? val.getUint16(1, true) : val.getUint8(1)
             setLastReading({ type: 'Heart Rate', value: `${hr} bpm`, vitals: { heart_rate: hr } })
             onApply({ heart_rate: hr }, `Bluetooth HR ${hr} bpm applied`)
-          })
+          }
+          hrChar.addEventListener('characteristicvaluechanged', hrListener)
+          activeCharsRef.current.push({ char: hrChar, listener: hrListener })
         }
       } catch {
         // Not a pure HR device, try BP
       }
 
-      // Try discovering Blood Pressure Service (0x1810)
+      // Try discovering Blood Pressure Service (0x1810) (BUG-48)
       try {
         const bpService = await server.getPrimaryService(BP_SERVICE).catch(() => server.getPrimaryService('blood_pressure'))
         if (bpService) {
           const bpChar = await bpService.getCharacteristic(0x2a35).catch(() => bpService.getCharacteristic('blood_pressure_measurement'))
           await bpChar.startNotifications()
-          bpChar.addEventListener('characteristicvaluechanged', (e) => {
+          const bpListener = (e) => {
             const val = e.target.value
-            // IEEE 11073-20601 SFLOAT decoding
-            const parseSfloat = (offset) => {
-              const raw = val.getUint16(offset, true)
-              let mantissa = raw & 0x0fff
-              if (mantissa >= 0x0800) mantissa -= 0x1000
-              let exponent = raw >> 12
-              if (exponent >= 0x08) exponent -= 0x10
-              return Math.round(mantissa * Math.pow(10, exponent))
+            const flags = val.getUint8(0)
+            const isKpa = (flags & 0x01) === 1
+            const sbpRaw = parseIeee11073Sfloat(val, 1)
+            const dbpRaw = parseIeee11073Sfloat(val, 3)
+
+            if (sbpRaw === null || dbpRaw === null) return
+
+            const KPA_TO_MMHG = 7.50062
+            const sbp = Math.round(isKpa ? sbpRaw * KPA_TO_MMHG : sbpRaw)
+            const dbp = Math.round(isKpa ? dbpRaw * KPA_TO_MMHG : dbpRaw)
+
+            if (sbp >= 30 && sbp <= 300 && dbp >= 10 && dbp <= 200) {
+              setLastReading({
+                type: 'Blood Pressure',
+                value: `${sbp}/${dbp} mmHg`,
+                vitals: { bp_systolic: sbp, bp_diastolic: dbp },
+              })
+              onApply({ bp_systolic: sbp, bp_diastolic: dbp }, `Bluetooth BP ${sbp}/${dbp} applied`)
             }
-            const sbp = parseSfloat(1)
-            const dbp = parseSfloat(3)
-            setLastReading({
-              type: 'Blood Pressure',
-              value: `${sbp}/${dbp} mmHg`,
-              vitals: { bp_systolic: sbp, bp_diastolic: dbp },
-            })
-            onApply({ bp_systolic: sbp, bp_diastolic: dbp }, `Bluetooth BP ${sbp}/${dbp} applied`)
-          })
+          }
+          bpChar.addEventListener('characteristicvaluechanged', bpListener)
+          activeCharsRef.current.push({ char: bpChar, listener: bpListener })
         }
       } catch {
         // Not BP
       }
 
-      // Try discovering Pulse Oximeter Service (0x1822)
+      // Try discovering Pulse Oximeter Service (0x1822) (BUG-48)
       try {
         const plxService = await server.getPrimaryService(PLX_SERVICE).catch(() => server.getPrimaryService('pulse_oximeter'))
         if (plxService) {
           const plxChar = await plxService.getCharacteristic(0x2a5e)
-          await plxChar.startNotifications()
-          plxChar.addEventListener('characteristicvaluechanged', (e) => {
-            const val = e.target.value
-            const spo2 = val.getUint8(1)
-            const hr = val.getUint8(3)
-            setLastReading({
-              type: 'Pulse Oximeter',
-              value: `SpO2 ${spo2}%, HR ${hr} bpm`,
-              vitals: { spo2, heart_rate: hr },
-            })
-            onApply({ spo2, heart_rate: hr }, `Bluetooth SpO2 ${spo2}% applied`)
-          })
+            .catch(() => plxService.getCharacteristic(0x2a5f))
+            .catch(() => plxService.getCharacteristic('plx_spot_check_measurement'))
+            .catch(() => plxService.getCharacteristic('plx_continuous_measurement'))
+
+          if (plxChar) {
+            await plxChar.startNotifications()
+            const plxListener = (e) => {
+              const val = e.target.value
+              const spo2Raw = parseIeee11073Sfloat(val, 1)
+              const hrRaw = parseIeee11073Sfloat(val, 3)
+
+              if (spo2Raw === null || hrRaw === null) return
+
+              const spo2 = Math.round(spo2Raw)
+              const hr = Math.round(hrRaw)
+
+              if (spo2 >= 50 && spo2 <= 100 && hr >= 30 && hr <= 250) {
+                setLastReading({
+                  type: 'Pulse Oximeter',
+                  value: `SpO2 ${spo2}%, HR ${hr} bpm`,
+                  vitals: { spo2, heart_rate: hr },
+                })
+                onApply({ spo2, heart_rate: hr }, `Bluetooth SpO2 ${spo2}% applied`)
+              }
+            }
+            plxChar.addEventListener('characteristicvaluechanged', plxListener)
+            activeCharsRef.current.push({ char: plxChar, listener: plxListener })
+          }
         }
       } catch {
         // Not PLX
@@ -732,6 +865,9 @@ function BluetoothGattPanel({ onApply }) {
       if (err.name !== 'NotFoundError') {
         setBleError(err.message || 'Bluetooth connection failed.')
       }
+    } finally {
+      connectLockRef.current = false
+      setConnecting(false)
     }
   }
 

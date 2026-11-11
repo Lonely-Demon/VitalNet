@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { getOfflineDB } from '../lib/offlineDB'
 
@@ -81,22 +81,30 @@ function getInitialProfile() {
 export function AuthProvider({ children }) {
   const [session,  setSession]  = useState(undefined) // undefined = loading
   const [profile,  setProfile]  = useState(() => getInitialProfile())
+  const activeUserIdRef = useRef(null)
 
   useEffect(() => {
     // Load existing session from IndexedDB on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
-      if (session) fetchProfile(session.user.id)
+      if (session) {
+        activeUserIdRef.current = session.user.id
+        fetchProfile(session.user.id)
+      }
     })
 
     // Listen for auth state changes (login, logout, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         setSession(session)
-        if (session) fetchProfile(session.user.id)
-        else {
+        if (session) {
+          activeUserIdRef.current = session.user.id
+          fetchProfile(session.user.id)
+        } else {
+          const targetUserId = activeUserIdRef.current || (typeof localStorage !== 'undefined' ? localStorage.getItem('vn_last_user_id') : null)
           setProfile(null)
-          clearSharedDeviceState()
+          clearSharedDeviceState(targetUserId)
+          activeUserIdRef.current = null
         }
       }
     )
@@ -163,8 +171,10 @@ export function AuthProvider({ children }) {
     signIn:    (email, password) =>
                  supabase.auth.signInWithPassword({ email, password }),
     signOut:   async () => {
+      const targetUserId = session?.user?.id || activeUserIdRef.current || (typeof localStorage !== 'undefined' ? localStorage.getItem('vn_last_user_id') : null)
       // Tear down device-local PHI for the signing-out user before ending session.
-      await clearSharedDeviceState(session?.user?.id)
+      await clearSharedDeviceState(targetUserId)
+      activeUserIdRef.current = null
       setProfile(null)
       return supabase.auth.signOut()
     },

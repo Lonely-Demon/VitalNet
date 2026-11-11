@@ -281,7 +281,7 @@ export default function BriefingCard({ caseData, onReviewed }) {
                     <VitalTrendSparkline
                       key={definition.key}
                       {...definition}
-                      values={history.map((visit) => visit[definition.key])}
+                      values={[...history].reverse().map((visit) => visit[definition.key])}
                     />
                   ))}
                 </div>

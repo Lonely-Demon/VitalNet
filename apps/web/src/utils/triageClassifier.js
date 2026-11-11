@@ -32,7 +32,59 @@
 // test — this file has no parity test of its own anymore, there is nothing
 // left here that could drift from the server.
 
-import { triage, checkOverrides, checkContraindications } from '@vitalnet/clinical-core'
+import {
+  triage,
+  checkOverrides,
+  checkContraindications,
+  assessFeatureCompleteness,
+} from '@vitalnet/clinical-core'
+
+export const PAEDIATRIC_ADVISORY_VERSION = 'paediatric_advisory.v1'
+export const MUAC_REFERRAL_THRESHOLD_MM = 115
+
+export function buildPaediatricAdvisory(input, enabled = false) {
+  if (!enabled) {
+    return {
+      version: PAEDIATRIC_ADVISORY_VERSION,
+      status: 'disabled_pending_governance',
+      eligible_for_muac_screen: null,
+      muac_screen_status: 'not_computed',
+    }
+  }
+  const ageYears = input.patient_age
+  const ageMonths = input.age_months
+  const muacMm = input.muac_mm
+
+  if (typeof ageYears !== 'number' || !Number.isFinite(ageYears)) {
+    return {
+      version: PAEDIATRIC_ADVISORY_VERSION,
+      status: 'insufficient_age_data',
+      eligible_for_muac_screen: null,
+      muac_screen_status: 'not_computed',
+    }
+  }
+
+  const resolvedMonths = typeof ageMonths === 'number' && Number.isFinite(ageMonths) ? ageMonths : ageYears * 12
+  const eligible = resolvedMonths >= 6 && resolvedMonths <= 59
+  let screenStatus = 'out_of_scope'
+  if (eligible && (muacMm == null || !Number.isFinite(muacMm))) {
+    screenStatus = 'eligible_missing_muac'
+  } else if (eligible && muacMm != null && Number.isFinite(muacMm)) {
+    screenStatus = muacMm < MUAC_REFERRAL_THRESHOLD_MM
+      ? 'below_reference_threshold_full_assessment_needed'
+      : 'at_or_above_reference_threshold'
+  }
+
+  return {
+    version: PAEDIATRIC_ADVISORY_VERSION,
+    status: 'research_only',
+    eligible_for_muac_screen: eligible,
+    age_months_used_for_scope: resolvedMonths,
+    muac_screen_status: screenStatus,
+    reference_threshold_mm: MUAC_REFERRAL_THRESHOLD_MM,
+    clinical_interpretation_required: true,
+  }
+}
 
 const TREES_PATH = '/models/triage_trees.json'
 const FEATURES_CONFIG_PATH = '/models/features_config.json'
@@ -149,6 +201,7 @@ export async function runTriage(formData) {
   const engineInput = {
     patient_age: formData.patient_age,
     age_months: formData.age_months ?? null,
+    muac_mm: formData.muac_mm ?? null,
     patient_sex: formData.patient_sex || null,
     bp_systolic: formData.bp_systolic ?? null,
     bp_diastolic: formData.bp_diastolic ?? null,
@@ -164,6 +217,11 @@ export async function runTriage(formData) {
     current_medications: formData.current_medications || null,
   }
 
+  const paediatricAdvisory = buildPaediatricAdvisory(
+    { patient_age: formData.patient_age, age_months: formData.age_months, muac_mm: formData.muac_mm },
+    typeof import.meta !== 'undefined' && import.meta.env?.VITE_PAEDIATRIC_ADVISORY_ENABLED === 'true'
+  )
+
   let trees, featureNames
   try {
     trees = await loadModel()
@@ -173,6 +231,7 @@ export async function runTriage(formData) {
     // comment above). Fall back to the override-only, mode-independent
     // safety net rather than a guessed tier.
     const override = checkOverrides(engineInput)
+    const completeness = assessFeatureCompleteness(engineInput)
     return {
       triageLevel: override ? 'EMERGENCY' : null,
       confidence: null,
@@ -181,6 +240,10 @@ export async function runTriage(formData) {
       modelUnavailable: true,
       contraindicationFlags: checkContraindications(engineInput),
       firedRules: override ? [override] : [],
+      completeness_state: completeness.status,
+      completenessState: completeness.status,
+      paediatric_advisory: paediatricAdvisory,
+      topFactors: [],
     }
   }
 
@@ -194,5 +257,9 @@ export async function runTriage(formData) {
     modelUnavailable: false,
     contraindicationFlags: result.contraindicationFlags,
     firedRules: result.firedRules,
+    completeness_state: result.completenessState ?? null,
+    completenessState: result.completenessState ?? null,
+    paediatric_advisory: paediatricAdvisory,
+    topFactors: result.model?.topFactors ?? [],
   }
 }

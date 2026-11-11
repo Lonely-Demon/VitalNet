@@ -24,6 +24,8 @@ export default function QrScannerModal({ isOpen, onClose, onDetected }) {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const scanIntervalRef = useRef(null)
+  const detectInFlightRef = useRef(false)
+  const hasDetectedRef = useRef(false)
 
   const stopCamera = useCallback(() => {
     if (scanIntervalRef.current) {
@@ -34,12 +36,14 @@ export default function QrScannerModal({ isOpen, onClose, onDetected }) {
       streamRef.current.getTracks().forEach((track) => track.stop())
       streamRef.current = null
     }
+    detectInFlightRef.current = false
     setTorchOn(false)
     setTorchAvailable(false)
     setIsScanning(false)
   }, [])
 
   const handleQrString = useCallback((rawText) => {
+    if (hasDetectedRef.current) return false
     if (!rawText || typeof rawText !== 'string') return false
     const trimmed = rawText.trim()
     if (!trimmed) return false
@@ -48,6 +52,7 @@ export default function QrScannerModal({ isOpen, onClose, onDetected }) {
     try {
       const abhaResult = parseAbhaQr ? parseAbhaQr(trimmed) : (parsePatientQrPayload ? parsePatientQrPayload(trimmed) : null)
       if (abhaResult && abhaResult.patientKey) {
+        hasDetectedRef.current = true
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
           navigator.vibrate(50)
         }
@@ -70,6 +75,7 @@ export default function QrScannerModal({ isOpen, onClose, onDetected }) {
     // 2. Try parsing as direct VitalNet XXXX-XXXX patient key
     const normalized = normalizePatientKey(trimmed)
     if (normalized && PATIENT_KEY_RE && PATIENT_KEY_RE.test(normalized)) {
+      hasDetectedRef.current = true
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         navigator.vibrate(50)
       }
@@ -93,6 +99,8 @@ export default function QrScannerModal({ isOpen, onClose, onDetected }) {
       return
     }
 
+    hasDetectedRef.current = false
+    detectInFlightRef.current = false
     let isMounted = true
 
     async function startCamera() {
@@ -127,6 +135,12 @@ export default function QrScannerModal({ isOpen, onClose, onDetected }) {
           await videoRef.current.play().catch(() => {})
         }
 
+        // Post-await mount verification (BUG-50)
+        if (!isMounted) {
+          stream.getTracks().forEach((t) => t.stop())
+          return
+        }
+
         // Check torch capability
         const track = stream.getVideoTracks()[0]
         if (track && typeof track.getCapabilities === 'function') {
@@ -144,8 +158,12 @@ export default function QrScannerModal({ isOpen, onClose, onDetected }) {
             const barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] })
             scanIntervalRef.current = setInterval(async () => {
               if (!videoRef.current || videoRef.current.readyState < 2) return
+              if (detectInFlightRef.current || hasDetectedRef.current) return
+
+              detectInFlightRef.current = true
               try {
                 const barcodes = await barcodeDetector.detect(videoRef.current)
+                if (hasDetectedRef.current) return
                 if (barcodes && barcodes.length > 0) {
                   const rawValue = barcodes[0].rawValue
                   if (rawValue) {
@@ -154,6 +172,8 @@ export default function QrScannerModal({ isOpen, onClose, onDetected }) {
                 }
               } catch {
                 // Ignore transient frame detect errors
+              } finally {
+                detectInFlightRef.current = false
               }
             }, 250)
           } catch (err) {
