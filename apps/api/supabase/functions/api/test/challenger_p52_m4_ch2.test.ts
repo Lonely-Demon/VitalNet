@@ -9,16 +9,8 @@ import { assertEquals, assertThrows } from "@std/assert";
 import { HttpError } from "../_shared/database.ts";
 import { constantTimeEqual } from "../routes/push.ts";
 import { sanitizeCsvValue, toCsv } from "../_shared/csv.ts";
-import {
-  CircuitState,
-  fallbackBriefing,
-  LlmCircuitBreaker,
-} from "../_shared/llm.ts";
-import {
-  computeEarsC2Signal,
-  computeEarsSignals,
-  type EarsRow,
-} from "../_shared/ears.ts";
+import { CircuitState, fallbackBriefing, LlmCircuitBreaker } from "../_shared/llm.ts";
+import { computeEarsC2Signal, computeEarsSignals, type EarsRow } from "../_shared/ears.ts";
 
 // =============================================================================
 // CHALLENGE 1: routes/dsr.ts
@@ -472,7 +464,7 @@ Deno.test("CHALLENGE 3.2: EARS C2 contiguous 7-day calendar baseline [t-9..t-3] 
   // - Baseline days [t-9 .. t-3]: ZERO cases recorded
   let rows: EarsRow[] = [];
   rows = rows.concat(createRows(1, "cholera", 10)); // Guard band t-1
-  rows = rows.concat(createRows(2, "cholera", 8));  // Guard band t-2
+  rows = rows.concat(createRows(2, "cholera", 8)); // Guard band t-2
   rows = rows.concat(createRows(0, "cholera", 25)); // Today
 
   // Execute computeEarsSignals with useGuardBand = true

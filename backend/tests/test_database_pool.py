@@ -3,13 +3,11 @@ Unit tests for database connection pool configuration (REG-10),
 prompt injection sanitization (REG-04), and DSR atomic RPC early return (REG-03).
 """
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
-import pytest
 
-from app.api.routes.dsr_routes import REDACTED, _erase_case_row
-from app.core import database
+from app.api.routes.dsr_routes import _erase_case_row
 from app.core.database import _shared_limits, _shared_transport, get_supabase_for_user
 from app.services.llm import _sanitize_field, sanitize_for_prompt
 

@@ -247,7 +247,7 @@ async function withRateLimitMock<T>(fn: () => Promise<T>): Promise<T> {
         headers: { "Content-Type": "application/json" },
       });
     }
-    return original(input, init);
+    return await original(input, init);
   };
   try {
     return await fn();
@@ -323,7 +323,7 @@ Deno.test("REG-02, REG-05: POST /api/cases/sms-gateway accepts verified webhook 
         headers: { "Content-Type": "application/json" },
       });
     }
-    return original(input, init);
+    return await original(input, init);
   };
 
   try {
@@ -377,7 +377,9 @@ Deno.test("REG-03: Doctor and Admin fail closed on consent revocation if resolve
 
   assertThrows(
     () => {
-      if (!doctorWithoutFacility.resolvedFacilityId || caseRow.facility_id !== doctorWithoutFacility.resolvedFacilityId) {
+      if (
+        !doctorWithoutFacility.resolvedFacilityId || caseRow.facility_id !== doctorWithoutFacility.resolvedFacilityId
+      ) {
         throw new HttpError(403, "Not authorized to access cases outside your facility");
       }
     },
@@ -434,4 +436,3 @@ Deno.test("triage: infant with age_months accurately resolves fractional years",
   const firedNeonatal = result.firedRules.some((r) => r.id === "neonatal_fever");
   assertEquals(firedNeonatal, true);
 });
-

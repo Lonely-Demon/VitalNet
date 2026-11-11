@@ -18,7 +18,7 @@ import {
   type Symptom,
   triage,
 } from "@vitalnet/clinical-core";
-import { getCurrentUser, requireRole, type AuthedUser } from "../_shared/auth.ts";
+import { type AuthedUser, getCurrentUser, requireRole } from "../_shared/auth.ts";
 import { getConfig } from "../_shared/config.ts";
 import { idempotent } from "../_shared/idempotency.ts";
 import { rateLimit } from "../_shared/rateLimit.ts";
@@ -246,7 +246,9 @@ cases.post(
           } else {
             const { data: rows } = await db
               .from("case_records")
-              .select("created_at, triage_level, chief_complaint, bp_systolic, bp_diastolic, heart_rate, temperature, spo2")
+              .select(
+                "created_at, triage_level, chief_complaint, bp_systolic, bp_diastolic, heart_rate, temperature, spo2",
+              )
               .eq("patient_key", form.patient_key)
               .order("created_at", { ascending: false })
               .limit(3);
@@ -374,7 +376,8 @@ cases.post(
         // BUG-52, REG-05: Preserve clinician review if already conducted on the emergency stub
         if (existingRow.reviewed_at !== null || existingRow.overridden_triage !== null) {
           record.triage_level = existingRow.triage_level ?? record.triage_level;
-          record.triage_priority = existingRow.triage_priority ?? (result.tier === "EMERGENCY" ? 0 : result.tier === "URGENT" ? 1 : 2);
+          record.triage_priority = existingRow.triage_priority ??
+            (result.tier === "EMERGENCY" ? 0 : result.tier === "URGENT" ? 1 : 2);
           record.needs_review = existingRow.needs_review ?? false;
         }
 
@@ -499,7 +502,7 @@ cases.post("/api/cases/sms-gateway", rateLimit(60, 60), async (c) => {
   const config = getConfig();
 
   let user: AuthedUser | null = null;
-  let isWebhook = false;
+  let _isWebhook = false;
 
   if (rawAuth) {
     user = await getCurrentUser(rawAuth);
@@ -507,8 +510,10 @@ cases.post("/api/cases/sms-gateway", rateLimit(60, 60), async (c) => {
     if (!allowed.includes(user.resolvedRole)) {
       throw new HttpError(403, `Role '${user.resolvedRole}' is not permitted for SMS gateway`);
     }
-  } else if (webhookToken && config.internalSchedulerToken && constantTimeEqual(webhookToken, config.internalSchedulerToken)) {
-    isWebhook = true;
+  } else if (
+    webhookToken && config.internalSchedulerToken && constantTimeEqual(webhookToken, config.internalSchedulerToken)
+  ) {
+    _isWebhook = true;
   } else {
     throw new HttpError(401, "Authentication required: valid JWT bearer token or webhook token required");
   }
@@ -556,7 +561,10 @@ cases.post("/api/cases/sms-gateway", rateLimit(60, 60), async (c) => {
   } else {
     const match = bodyText.match(/^\s*TRIAGE\s+(?<age>\d{1,3})\s+(?<sex>[MFmf])\s+(?<symptoms>[a-zA-Z_,]+)\s*$/i);
     if (!match || !match.groups) {
-      throw new HttpError(400, "Invalid plain text SMS format. Expected: TRIAGE <age> <sex:M|F> <symptoms_comma_separated>");
+      throw new HttpError(
+        400,
+        "Invalid plain text SMS format. Expected: TRIAGE <age> <sex:M|F> <symptoms_comma_separated>",
+      );
     }
     const ageNum = Number.parseInt(match.groups.age!, 10);
     if (ageNum < 0 || ageNum > 120) {

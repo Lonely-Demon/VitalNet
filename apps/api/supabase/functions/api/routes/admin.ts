@@ -24,8 +24,6 @@ function validatePassword(password: string): void {
   }
 }
 
-
-
 const ROLE_ENUM = z.enum(["asha_worker", "doctor", "admin", "supervisor"]);
 
 const createUserSchema = z.object({

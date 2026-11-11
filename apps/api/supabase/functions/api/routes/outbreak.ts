@@ -14,34 +14,39 @@ import type { AppEnv } from "../_shared/types.ts";
 
 export const outbreak = new Hono<AppEnv>();
 
-outbreak.get("/api/outbreak/signals", rateLimit(60, 60), requireRole("doctor", "supervisor", "admin", "super_admin"), async (c) => {
-  const user = c.get("user");
-  const requestedFacilityId = c.req.query("facility_id") ?? null;
-  const scopedFacilityId = resolveFacilityScope(user.resolvedRole, user.resolvedFacilityId, requestedFacilityId);
+outbreak.get(
+  "/api/outbreak/signals",
+  rateLimit(60, 60),
+  requireRole("doctor", "supervisor", "admin", "super_admin"),
+  async (c) => {
+    const user = c.get("user");
+    const requestedFacilityId = c.req.query("facility_id") ?? null;
+    const scopedFacilityId = resolveFacilityScope(user.resolvedRole, user.resolvedFacilityId, requestedFacilityId);
 
-  const now = new Date();
-  const today = toIstDayBucket(now.toISOString());
-  const since = new Date(now.getTime() - (BASELINE_DAYS + GUARD_BAND_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString();
+    const now = new Date();
+    const today = toIstDayBucket(now.toISOString());
+    const since = new Date(now.getTime() - (BASELINE_DAYS + GUARD_BAND_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString();
 
-  const db = getSupabaseForUser(user.token);
-  const { data, error } = await db.rpc("fn_outbreak_signal_counts", {
-    p_facility_id: scopedFacilityId,
-    p_since: since,
-  });
+    const db = getSupabaseForUser(user.token);
+    const { data, error } = await db.rpc("fn_outbreak_signal_counts", {
+      p_facility_id: scopedFacilityId,
+      p_since: since,
+    });
 
-  if (error) {
-    console.warn("Outbreak signals query failed:", error);
-    throw new HttpError(502, "Outbreak signals query failed — try again");
-  }
+    if (error) {
+      console.warn("Outbreak signals query failed:", error);
+      throw new HttpError(502, "Outbreak signals query failed — try again");
+    }
 
-  const signals = computeEarsSignals((data ?? []) as EarsRow[], today, true);
+    const signals = computeEarsSignals((data ?? []) as EarsRow[], today, true);
 
-  return c.json({
-    facility_id: scopedFacilityId,
-    date: today,
-    baseline_days: BASELINE_DAYS,
-    guard_band_days: GUARD_BAND_DAYS,
-    signal_count: signals.length,
-    signals,
-  });
-});
+    return c.json({
+      facility_id: scopedFacilityId,
+      date: today,
+      baseline_days: BASELINE_DAYS,
+      guard_band_days: GUARD_BAND_DAYS,
+      signal_count: signals.length,
+      signals,
+    });
+  },
+);

@@ -16,12 +16,8 @@ Covers:
 
 import json
 from pathlib import Path
-import re
 import subprocess
-import uuid
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 from app.services.sms import (
     encode_emergency_sms,
@@ -29,13 +25,14 @@ from app.services.sms import (
     compute_crc24,
     _base64url_encode,
     _base64url_decode,
-    SmsParseError,
 )
 from app.api.routes.cases import (
     _triage_priority_from_tier,
     SYSTEM_SUBMITTER_UUID,
     SYSTEM_FACILITY_UUID,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 TEST_UUID = "12345678-1234-5678-1234-567812345678"
 

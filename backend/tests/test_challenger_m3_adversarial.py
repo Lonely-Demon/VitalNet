@@ -22,11 +22,9 @@ Covers:
    - Compact 28-byte SMS codec alias resolution (age, sex, tier) and sub-year neonatal encoding.
 """
 
-import asyncio
 from datetime import datetime, timedelta, timezone
-import statistics
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 import uuid
 
 import pytest
@@ -37,7 +35,6 @@ from starlette.requests import Request
 from app.api.routes import cases
 from app.api.routes import outbreak_routes
 from app.api.routes import referral_routes
-from app.api.routes import analytics_routes
 from app.core import scoping
 from app.services import llm
 from app.services import sms
@@ -268,7 +265,7 @@ async def test_cases_sms_stub_preserves_clinician_overrides():
     with patch("app.api.routes.cases.get_supabase_for_user", return_value=mock_db), \
          patch("app.api.routes.cases.extract_bearer_token", return_value="token"), \
          patch("app.api.routes.cases.predict_triage", return_value={"triage_level": "ROUTINE", "risk_driver": "mild", "confidence_score": 0.95}):
-        res = await cases.submit_case(
+        await cases.submit_case(
             request=req,
             form=form,
             background_tasks=bg,

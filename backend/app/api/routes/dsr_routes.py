@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from app.core.auth import require_role
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
-from app.core.database import supabase_admin
+from app.core.database import extract_bearer_token, get_supabase_for_user, supabase_admin
 from app.api.routes.cases import _parse_uuid, limiter
 
 logger = logging.getLogger("vitalnet")

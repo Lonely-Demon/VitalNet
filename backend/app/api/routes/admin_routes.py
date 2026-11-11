@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 from typing import Optional, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status

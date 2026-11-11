@@ -14,7 +14,6 @@ import re
 from pathlib import Path
 import pytest
 import sqlparse
-from sqlparse.sql import Statement
 
 MIGRATION_PATH = Path(__file__).resolve().parent.parent / "supabase" / "migrations" / "phase52_security_definer_and_trigger_hardening.sql"
 

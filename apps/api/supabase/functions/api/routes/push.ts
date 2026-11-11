@@ -147,62 +147,67 @@ interface EscalationCandidate {
   overridden_triage: string | null;
 }
 
-push.post("/api/push/check-emergency-escalations", rateLimit(6, 60), requireRole("admin", "supervisor", "super_admin"), async (c) => {
-  const user = c.get("user");
-  verifySchedulerToken(c);
+push.post(
+  "/api/push/check-emergency-escalations",
+  rateLimit(6, 60),
+  requireRole("admin", "supervisor", "super_admin"),
+  async (c) => {
+    const user = c.get("user");
+    verifySchedulerToken(c);
 
-  const threshold = new Date(Date.now() - ESCALATION_THRESHOLD_MINUTES * 60 * 1000).toISOString();
-  const svc = getSupabaseAdmin();
+    const threshold = new Date(Date.now() - ESCALATION_THRESHOLD_MINUTES * 60 * 1000).toISOString();
+    const svc = getSupabaseAdmin();
 
-  let query = svc
-    .from("case_records")
-    .select(
-      "id, facility_id, chief_complaint, risk_driver, created_at, last_escalated_at, triage_level, overridden_triage",
-    )
-    .or("triage_level.eq.EMERGENCY,overridden_triage.eq.EMERGENCY")
-    .is("reviewed_at", null)
-    .is("deleted_at", null)
-    .lt("created_at", threshold);
-
-  // Scope query by facility for facility-scoped admin; supervisors scan all facilities
-  if (!isGlobalScope(user.resolvedRole) && user.resolvedFacilityId) {
-    query = query.eq("facility_id", user.resolvedFacilityId);
-  }
-
-  const { data, error } = await query;
-  if (error) throw error;
-
-  const candidates = (data ?? []) as EscalationCandidate[];
-  const escalated: string[] = [];
-
-  for (const candidate of candidates) {
-    const effectiveTriage = candidate.overridden_triage ?? candidate.triage_level;
-    if (effectiveTriage !== "EMERGENCY") {
-      continue;
-    }
-    if (candidate.last_escalated_at && candidate.last_escalated_at > threshold) {
-      continue; // already escalated within this threshold window
-    }
-
-    await pushEmergencyAlert(
-      candidate.facility_id,
-      "EMERGENCY case still unreviewed",
-      `${candidate.chief_complaint ?? ""} — ${candidate.risk_driver ?? ""}`.slice(0, 150),
-      candidate.id,
-    );
-
-    const { error: updateError } = await svc
+    let query = svc
       .from("case_records")
-      .update({ last_escalated_at: new Date().toISOString() })
-      .eq("id", candidate.id);
-    if (updateError) throw updateError;
+      .select(
+        "id, facility_id, chief_complaint, risk_driver, created_at, last_escalated_at, triage_level, overridden_triage",
+      )
+      .or("triage_level.eq.EMERGENCY,overridden_triage.eq.EMERGENCY")
+      .is("reviewed_at", null)
+      .is("deleted_at", null)
+      .lt("created_at", threshold);
 
-    escalated.push(candidate.id);
-  }
+    // Scope query by facility for facility-scoped admin; supervisors scan all facilities
+    if (!isGlobalScope(user.resolvedRole) && user.resolvedFacilityId) {
+      query = query.eq("facility_id", user.resolvedFacilityId);
+    }
 
-  if (escalated.length) {
-    console.info(`Escalated ${escalated.length} unreviewed EMERGENCY case(s): ${escalated.join(", ")}`);
-  }
+    const { data, error } = await query;
+    if (error) throw error;
 
-  return c.json({ checked: candidates.length, escalated: escalated.length });
-});
+    const candidates = (data ?? []) as EscalationCandidate[];
+    const escalated: string[] = [];
+
+    for (const candidate of candidates) {
+      const effectiveTriage = candidate.overridden_triage ?? candidate.triage_level;
+      if (effectiveTriage !== "EMERGENCY") {
+        continue;
+      }
+      if (candidate.last_escalated_at && candidate.last_escalated_at > threshold) {
+        continue; // already escalated within this threshold window
+      }
+
+      await pushEmergencyAlert(
+        candidate.facility_id,
+        "EMERGENCY case still unreviewed",
+        `${candidate.chief_complaint ?? ""} — ${candidate.risk_driver ?? ""}`.slice(0, 150),
+        candidate.id,
+      );
+
+      const { error: updateError } = await svc
+        .from("case_records")
+        .update({ last_escalated_at: new Date().toISOString() })
+        .eq("id", candidate.id);
+      if (updateError) throw updateError;
+
+      escalated.push(candidate.id);
+    }
+
+    if (escalated.length) {
+      console.info(`Escalated ${escalated.length} unreviewed EMERGENCY case(s): ${escalated.join(", ")}`);
+    }
+
+    return c.json({ checked: candidates.length, escalated: escalated.length });
+  },
+);

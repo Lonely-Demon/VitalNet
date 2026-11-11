@@ -198,7 +198,13 @@ Deno.test("M4 BUG-28: Facilities sort according to 5-level hierarchy", () => {
   const callerDistrict = "Kolar";
   const facilities = [
     { id: "f_phc_kolar", name: "Zeta PHC", type: "phc", district: "Kolar", capacity_status: "available" },
-    { id: "f_dh_other", name: "District Hospital North", type: "district_hospital", district: "Bangalore", capacity_status: "available" },
+    {
+      id: "f_dh_other",
+      name: "District Hospital North",
+      type: "district_hospital",
+      district: "Bangalore",
+      capacity_status: "available",
+    },
     { id: "f_chc_kolar_busy", name: "Alpha CHC", type: "chc", district: "Kolar", capacity_status: "available" },
     { id: "f_chc_kolar_idle", name: "Beta CHC", type: "chc", district: "Kolar", capacity_status: "available" },
     { id: "f_chc_other", name: "Delta CHC", type: "chc", district: "Bangalore", capacity_status: "available" },

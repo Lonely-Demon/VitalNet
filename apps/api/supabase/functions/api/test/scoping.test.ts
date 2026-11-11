@@ -1,6 +1,12 @@
 // Ported from backend/tests/test_scoping.py
 import { assertEquals, assertThrows } from "@std/assert";
-import { GLOBAL_SCOPE_ROLE, GLOBAL_SCOPE_ROLES, isGlobalScope, resolveFacilityScope, resolveScope } from "../_shared/scoping.ts";
+import {
+  GLOBAL_SCOPE_ROLE,
+  GLOBAL_SCOPE_ROLES,
+  isGlobalScope,
+  resolveFacilityScope,
+  resolveScope,
+} from "../_shared/scoping.ts";
 import { HttpError } from "../_shared/database.ts";
 
 Deno.test("GLOBAL_SCOPE_ROLES includes supervisor and super_admin", () => {
