@@ -99,3 +99,19 @@ Deno.test("case with multiple symptoms contributes to each", () => {
   const symptomsFlagged = new Set(signals.map((s) => s.symptom));
   assertEquals(symptomsFlagged, new Set(["high_fever", "severe_headache"]));
 });
+
+Deno.test("unconditional guard band [t-9 .. t-3] prevents outbreak self-masking on sparse ramp-up data (BUG-14)", () => {
+  // Outbreak ramp-up: cases only at t-1 (yesterday) and t-2 (2 days ago), no prior cases in [t-9..t-3]
+  let rows: EarsRow[] = [];
+  rows = rows.concat(repeat(row(dayNDaysBeforeToday(1), "watery_diarrhea"), 6));
+  rows = rows.concat(repeat(row(dayNDaysBeforeToday(2), "watery_diarrhea"), 5));
+  rows = rows.concat(repeat(row(TODAY, "watery_diarrhea"), 12));
+
+  // With guard band, [t-9 .. t-3] are all 0 (padded), so baseline_mean=0, baseline_stddev=0 -> flags!
+  const signals = computeEarsSignals(rows, TODAY, true);
+  assertEquals(signals.length, 1);
+  assertEquals(signals[0]?.symptom, "watery_diarrhea");
+  assertEquals(signals[0]?.baseline_mean, 0);
+  assertEquals(signals[0]?.baseline_stddev, 0);
+  assertEquals(signals[0]?.today_count, 12);
+});

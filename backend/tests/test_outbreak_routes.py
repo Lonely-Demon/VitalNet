@@ -141,3 +141,20 @@ def test_ist_day_bucketing():
     # 2026-11-04 18:00 UTC is 2026-11-04 23:30 IST
     assert _day_bucket("2026-11-04T18:00:00Z") == "2026-11-04"
 
+
+def test_dense_contiguous_sequence_zero_filled_days():
+    # BUG-14: If history only has cases on t-2 and t-1 (ramp up), but zero cases
+    # on [t-9..t-3], EARS C2 guard band must still skip [t-2, t-1] and calculate
+    # baseline over [t-9..t-3] yielding mean=0, stddev=0 (dense 0-filled).
+    rows = [
+        _row(_day_n_days_before_today(2), "high_fever"),
+        _row(_day_n_days_before_today(1), "high_fever"),
+    ] + [_row(TODAY, "high_fever")] * 10
+
+    signals = _compute_ears_signals(rows, TODAY, use_guard_band=True)
+    assert len(signals) == 1
+    assert signals[0]["baseline_mean"] == 0.0
+    assert signals[0]["baseline_stddev"] == 0.0
+    assert signals[0]["today_count"] == 10
+
+

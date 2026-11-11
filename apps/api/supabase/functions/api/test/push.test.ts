@@ -174,3 +174,15 @@ Deno.test("check-emergency-escalations verifies scheduler token via Hono request
   });
   assertEquals(resDisabled.status, 503);
 });
+
+// ── constantTimeEqual (BUG-58) ───────────────────────────────────────────────
+
+import { constantTimeEqual } from "../routes/push.ts";
+
+Deno.test("constantTimeEqual: handles identical and differing strings safely", () => {
+  assertEquals(constantTimeEqual("secret-token-123", "secret-token-123"), true);
+  assertEquals(constantTimeEqual("secret-token-123", "secret-token-124"), false);
+  assertEquals(constantTimeEqual("short", "longer-string"), false);
+  assertEquals(constantTimeEqual("", ""), true);
+  assertEquals(constantTimeEqual("", "non-empty"), false);
+});

@@ -144,3 +144,14 @@ def test_erase_case_row_purges_attachments_and_client_events(monkeypatch):
     delete_calls = admin.table.return_value.delete.call_args_list
     assert len(delete_calls) >= 2, "Must delete from case_attachments and client_events"
 
+
+def test_erase_case_row_invokes_fn_erase_case_pii_rpc(monkeypatch):
+    # BUG-29, BUG-30: Must invoke atomic fn_erase_case_pii RPC
+    admin = _mock_supabase_admin()
+    monkeypatch.setattr("app.api.routes.dsr_routes.supabase_admin", admin)
+
+    _erase_case_row("case-123", {"deleted_at": None})
+
+    admin.rpc.assert_called_with("fn_erase_case_pii", {"p_case_id": "case-123"})
+
+

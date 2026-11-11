@@ -124,11 +124,11 @@ def test_admin_users_bounded_concurrency_and_full_name_masking():
             assert max_concurrent <= 10
             assert max_concurrent > 1
 
-            # Verify full_name and email and asha_id were masked
+            # Verify full_name and email and asha_id are UNMASKED in REST JSON response (BUG-55)
             for item in resp["data"]:
                 if item["full_name"].startswith("=DANGEROUS"):
-                    assert item["full_name"].startswith("'=DANGEROUS")
-                assert item["email"].startswith("'=email_")
+                    assert not item["full_name"].startswith("'")
+                assert not item["email"].startswith("'")
 
     asyncio.run(_run())
 
@@ -208,7 +208,7 @@ def test_analytics_export_chunked_pagination():
         mock_db.table.return_value = MockCaseQuery()
 
         fake_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc"
-        user_context = {"sub": "admin-1", "resolved_role": "admin", "resolved_facility_id": None}
+        user_context = {"sub": "admin-1", "resolved_role": "super_admin", "resolved_facility_id": None}
 
         with patch("app.api.routes.analytics_routes.get_supabase_for_user", return_value=mock_db), \
              patch("app.api.routes.analytics_routes.log_phi_access"):

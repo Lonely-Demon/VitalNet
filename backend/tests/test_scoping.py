@@ -15,10 +15,12 @@ from app.core.scoping import resolve_facility_scope
 
 def test_supervisor_defaults_to_system_wide():
     assert resolve_facility_scope("supervisor", None, None) is None
+    assert resolve_facility_scope("super_admin", None, None) is None
 
 
 def test_supervisor_can_narrow_to_one_facility():
     assert resolve_facility_scope("supervisor", None, "fac-9") == "fac-9"
+    assert resolve_facility_scope("super_admin", None, "fac-9") == "fac-9"
 
 
 def test_phc_admin_and_staff_roles_are_scoped_to_own_facility():

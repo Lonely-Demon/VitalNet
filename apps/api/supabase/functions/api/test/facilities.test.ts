@@ -32,3 +32,24 @@ Deno.test("mergeOpenCaseCounts: null facility_id rows are ignored", () => {
   const result = mergeOpenCaseCounts([facility("f1", "Facility A")], counts);
   assertEquals(result[0]?.open_case_count, 0);
 });
+
+Deno.test("mergeOpenCaseCounts: sorts by 5-level priority (Tier -> District -> Capacity -> Open Cases -> Name)", () => {
+  const fSubCentre = { id: "f1", name: "Alpha", type: "sub_centre", district: "District A", capacity_status: "available" };
+  const fDistrictHosp = { id: "f2", name: "Beta", type: "district_hospital", district: "District B", capacity_status: "at_capacity" };
+  const fChcMatchingDist = { id: "f3", name: "Gamma", type: "chc", district: "District A", capacity_status: "available" };
+  const fChcOtherDist = { id: "f4", name: "Delta", type: "chc", district: "District B", capacity_status: "available" };
+
+  // Tier rank wins: district_hospital (rank 0) > chc (rank 2) > sub_centre (rank 4)
+  const resultTier = mergeOpenCaseCounts([fSubCentre, fDistrictHosp, fChcMatchingDist], [], "District A");
+  assertEquals(resultTier.map((f) => f.id), ["f2", "f3", "f1"]);
+
+  // Same tier (chc): matching district wins over other district
+  const resultDist = mergeOpenCaseCounts([fChcOtherDist, fChcMatchingDist], [], "District A");
+  assertEquals(resultDist.map((f) => f.id), ["f3", "f4"]);
+
+  // Same tier and district: capacity status wins (available < near_capacity < at_capacity)
+  const fChcNear = { id: "f5", name: "Epsilon", type: "chc", district: "District A", capacity_status: "near_capacity" };
+  const resultCap = mergeOpenCaseCounts([fChcNear, fChcMatchingDist], [], "District A");
+  assertEquals(resultCap.map((f) => f.id), ["f3", "f5"]);
+});
+

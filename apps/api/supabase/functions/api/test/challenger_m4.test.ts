@@ -282,10 +282,9 @@ Deno.test("CHALLENGE 4.1: CSV formula triggers neutralization across all vectors
   const injectionPayloads = [
     "=1+2",
     "=cmd|' /C calc'!A0",
-    "+12345",
     "+SUM(A1:B10)",
-    "-42",
     "-2+3*[1]!A1",
+    "-cmd|' /C calc'!A0",
     "@SUM(C1:C5)",
     "\tpowershell.exe -enc ...",
     "\rnotepad.exe",
@@ -295,6 +294,11 @@ Deno.test("CHALLENGE 4.1: CSV formula triggers neutralization across all vectors
     const sanitized = sanitizeCsvValue(payload);
     assertEquals(sanitized.startsWith("'"), true, `Failed to prepend quote for: ${payload}`);
   }
+
+  // Pure signed numbers should NOT be prepended (BUG-55)
+  assertEquals(sanitizeCsvValue("+12345"), "+12345");
+  assertEquals(sanitizeCsvValue("-42"), "-42");
+  assertEquals(sanitizeCsvValue("-15.2"), "-15.2");
 
   // Safe values should NOT be prepended
   assertEquals(sanitizeCsvValue("Normal Patient Name"), "Normal Patient Name");

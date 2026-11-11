@@ -28,7 +28,10 @@ Deno.test("toCsv: no rows still emits the header", () => {
 Deno.test("sanitizeCsvValue: neutralizes formula triggers (=, +, -, @, \\t, \\r) with single quote", () => {
   assertEquals(sanitizeCsvValue("=1+1"), "'=1+1");
   assertEquals(sanitizeCsvValue("+cmd|' /C calc'!A0"), "'+cmd|' /C calc'!A0");
-  assertEquals(sanitizeCsvValue("-123"), "'-123");
+  assertEquals(sanitizeCsvValue("-cmd|' /C calc'!A0"), "'-cmd|' /C calc'!A0");
+  assertEquals(sanitizeCsvValue("-123"), "-123");
+  assertEquals(sanitizeCsvValue("+100"), "+100");
+  assertEquals(sanitizeCsvValue("-15.2"), "-15.2");
   assertEquals(sanitizeCsvValue("@SUM(A1:A10)"), "'@SUM(A1:A10)");
   assertEquals(sanitizeCsvValue("\tTAB"), "'\tTAB");
   assertEquals(sanitizeCsvValue("\rCR"), "'\rCR");
@@ -44,6 +47,6 @@ Deno.test("toCsv: neutralizes formula injection cells in rows", () => {
   const csv = toCsv(["id", "formula", "cmd", "note"], rows);
   assertEquals(
     csv,
-    "id,formula,cmd,note\n1,'=1+1,'+calc,'@admin\n2,'-50,'\ttabbed,normal text\n",
+    "id,formula,cmd,note\n1,'=1+1,'+calc,'@admin\n2,-50,'\ttabbed,normal text\n",
   );
 });
