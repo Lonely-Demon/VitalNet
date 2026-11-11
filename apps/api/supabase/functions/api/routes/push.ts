@@ -11,8 +11,26 @@ import { extractBearerToken, getSupabaseAdmin, getSupabaseForUser, HttpError } f
 import { getConfig } from "../_shared/config.ts";
 import { ALLOWED_PUSH_HOST_SUFFIXES, pushEmergencyAlert, validatePushEndpoint } from "../_shared/webpush.ts";
 import type { AppEnv } from "../_shared/types.ts";
+import { isGlobalScope } from "../_shared/scoping.ts";
 
 export { ALLOWED_PUSH_HOST_SUFFIXES, validatePushEndpoint };
+
+export function constantTimeEqual(a: string, b: string): boolean {
+  if (typeof a !== "string" || typeof b !== "string") {
+    return false;
+  }
+  const encoder = new TextEncoder();
+  const aBuf = encoder.encode(a);
+  const bBuf = encoder.encode(b);
+  const len = Math.max(aBuf.byteLength, bBuf.byteLength);
+  let diff = aBuf.byteLength ^ bBuf.byteLength;
+  for (let i = 0; i < len; i++) {
+    const aByte = i < aBuf.byteLength ? aBuf[i]! : 0;
+    const bByte = i < bBuf.byteLength ? bBuf[i]! : 0;
+    diff |= aByte ^ bByte;
+  }
+  return diff === 0;
+}
 
 export function verifySchedulerToken(c: { req: { header: (name: string) => string | undefined } }): void {
   const config = getConfig();
@@ -25,7 +43,7 @@ export function verifySchedulerToken(c: { req: { header: (name: string) => strin
   }
 
   const schedulerToken = c.req.header("x-internal-scheduler-token");
-  if (!schedulerToken || schedulerToken !== expectedToken) {
+  if (!schedulerToken || !constantTimeEqual(schedulerToken, expectedToken)) {
     throw new HttpError(403, "Invalid or missing scheduler token");
   }
 }
@@ -83,6 +101,21 @@ push.post("/api/push/subscribe", rateLimit(10, 60), requireRole("doctor", "admin
   );
   if (error) throw error;
 
+  // Bound active subscriptions per user to 5, pruning oldest on insert (BUG-33)
+  const MAX_ACTIVE_SUBSCRIPTIONS = 5;
+  const { data: userSubs } = await db
+    .from("push_subscriptions")
+    .select("id, created_at")
+    .eq("user_id", user.sub)
+    .order("created_at", { ascending: false });
+
+  if (userSubs && userSubs.length > MAX_ACTIVE_SUBSCRIPTIONS) {
+    const toPrune = userSubs.slice(MAX_ACTIVE_SUBSCRIPTIONS).map((s: { id: string }) => s.id);
+    if (toPrune.length > 0) {
+      await db.from("push_subscriptions").delete().in("id", toPrune);
+    }
+  }
+
   return c.json({ status: "subscribed" });
 });
 
@@ -110,9 +143,11 @@ interface EscalationCandidate {
   risk_driver: string | null;
   created_at: string;
   last_escalated_at: string | null;
+  triage_level: string;
+  overridden_triage: string | null;
 }
 
-push.post("/api/push/check-emergency-escalations", rateLimit(6, 60), requireRole("admin", "supervisor"), async (c) => {
+push.post("/api/push/check-emergency-escalations", rateLimit(6, 60), requireRole("admin", "supervisor", "super_admin"), async (c) => {
   const user = c.get("user");
   verifySchedulerToken(c);
 
@@ -121,14 +156,16 @@ push.post("/api/push/check-emergency-escalations", rateLimit(6, 60), requireRole
 
   let query = svc
     .from("case_records")
-    .select("id, facility_id, chief_complaint, risk_driver, created_at, last_escalated_at")
-    .eq("triage_level", "EMERGENCY")
+    .select(
+      "id, facility_id, chief_complaint, risk_driver, created_at, last_escalated_at, triage_level, overridden_triage",
+    )
+    .or("triage_level.eq.EMERGENCY,overridden_triage.eq.EMERGENCY")
     .is("reviewed_at", null)
     .is("deleted_at", null)
     .lt("created_at", threshold);
 
   // Scope query by facility for facility-scoped admin; supervisors scan all facilities
-  if (user.resolvedRole !== "supervisor" && user.resolvedFacilityId) {
+  if (!isGlobalScope(user.resolvedRole) && user.resolvedFacilityId) {
     query = query.eq("facility_id", user.resolvedFacilityId);
   }
 
@@ -139,6 +176,10 @@ push.post("/api/push/check-emergency-escalations", rateLimit(6, 60), requireRole
   const escalated: string[] = [];
 
   for (const candidate of candidates) {
+    const effectiveTriage = candidate.overridden_triage ?? candidate.triage_level;
+    if (effectiveTriage !== "EMERGENCY") {
+      continue;
+    }
     if (candidate.last_escalated_at && candidate.last_escalated_at > threshold) {
       continue; // already escalated within this threshold window
     }

@@ -9,12 +9,22 @@
 import { Hono } from "hono";
 import { z } from "zod";
 // @deno-types="../../../../../../packages/clinical-core/dist/index.d.ts"
-import { intakeFormSchema, PATIENT_KEY_RE, stripControlChars, triage } from "@vitalnet/clinical-core";
-import { requireRole } from "../_shared/auth.ts";
+import {
+  ALLOWED_SYMPTOMS_SET,
+  decodeEmergencySms,
+  intakeFormSchema,
+  PATIENT_KEY_RE,
+  stripControlChars,
+  type Symptom,
+  triage,
+} from "@vitalnet/clinical-core";
+import { getCurrentUser, requireRole, type AuthedUser } from "../_shared/auth.ts";
+import { getConfig } from "../_shared/config.ts";
 import { idempotent } from "../_shared/idempotency.ts";
 import { rateLimit } from "../_shared/rateLimit.ts";
-import { extractBearerToken, getSupabaseForUser, HttpError } from "../_shared/database.ts";
+import { extractBearerToken, getSupabaseAdmin, getSupabaseForUser, HttpError } from "../_shared/database.ts";
 import { resolveFacilityScope } from "../_shared/scoping.ts";
+import { constantTimeEqual } from "./push.ts";
 import { AuditEventType, getClientIp, logPhiAccess } from "../_shared/audit.ts";
 import {
   authorizeCaseRowAccess,
@@ -33,6 +43,13 @@ import { buildPaediatricAdvisory } from "../_shared/paediatric.ts";
 import type { AppEnv } from "../_shared/types.ts";
 
 export const cases = new Hono<AppEnv>();
+
+cases.onError((err, c) => {
+  if (err instanceof HttpError) {
+    return c.json({ detail: err.message }, err.status as 400 | 401 | 403 | 404 | 429 | 500);
+  }
+  return c.json({ detail: "Internal Server Error" }, 500);
+});
 
 // supabase-js infers .select(...) column types from a literal select
 // string; a concatenated one (below, for readability) loses that
@@ -70,11 +87,23 @@ function runInBackground(promise: Promise<unknown>): void {
   }
 }
 
+/**
+ * Strips control characters in doctor notes/reasons before storage (REG-09).
+ * HTML entity escaping is omitted so React text rendering and exports do not
+ * display raw entities like &gt; or &amp;.
+ */
+export function sanitizeDoctorNotes(value: string | null | undefined, maxLength = 1000): string | null {
+  if (value === null || value === undefined) return null;
+  const cleaned = stripControlChars(value).trim();
+  if (!cleaned) return null;
+  return cleaned.slice(0, maxLength);
+}
+
 const triageOverrideSchema = z.object({
   overridden_triage: z.enum(["ROUTINE", "URGENT", "EMERGENCY"]),
   override_reason: z
     .string()
-    .transform(stripControlChars)
+    .transform((val) => sanitizeDoctorNotes(val, 500) ?? "")
     .pipe(
       z.string().trim().min(1, "Reason cannot be empty or whitespace-only").max(
         500,
@@ -92,7 +121,11 @@ const caseOutcomeSchema = z.object({
     "deceased",
     "unknown",
   ]),
-  outcome_notes: z.string().max(1000).transform(stripControlChars).optional(),
+  outcome_notes: z
+    .string()
+    .max(1000)
+    .optional()
+    .transform((val) => sanitizeDoctorNotes(val, 1000)),
 });
 
 async function readJsonBody(c: { req: { json: () => Promise<unknown> } }): Promise<unknown> {
@@ -165,9 +198,11 @@ cases.post(
         : form.current_medications;
 
       // Step 1: rules-first triage (always runs — LLM-independent, network-independent).
+      // Forward age_months so PALS pediatric rules accurately resolve fractional years (BUG-03).
       const result = triage(
         {
           patient_age: form.patient_age,
+          age_months: form.age_months ?? null,
           patient_sex: form.patient_sex,
           bp_systolic: form.bp_systolic ?? null,
           bp_diastolic: form.bp_diastolic ?? null,
@@ -189,6 +224,41 @@ cases.post(
       const triageConfidence = result.model?.confidence ?? 1.0;
       const lowConfidence = result.model?.lowConfidence ?? false;
 
+      const rawToken = extractBearerToken(c.req.header("authorization"));
+      const db = getSupabaseForUser(rawToken);
+
+      // Pre-fetch cross-visit deterioration pattern and longitudinal trajectory (BUG-54)
+      const { alert: deteriorationAlert, visitCount: deteriorationVisitCount } = await checkDeteriorationPattern(
+        db,
+        form.patient_key,
+        result.tier,
+      );
+
+      let priorVisits: Array<Record<string, unknown>> = [];
+      if (form.patient_key) {
+        try {
+          const { data, error } = await db.rpc("fn_patient_recent_trajectory", {
+            p_patient_key: form.patient_key,
+            p_limit: 3,
+          });
+          if (!error && Array.isArray(data)) {
+            priorVisits = data;
+          } else {
+            const { data: rows } = await db
+              .from("case_records")
+              .select("created_at, triage_level, chief_complaint, bp_systolic, bp_diastolic, heart_rate, temperature, spo2")
+              .eq("patient_key", form.patient_key)
+              .order("created_at", { ascending: false })
+              .limit(3);
+            if (Array.isArray(rows)) {
+              priorVisits = rows;
+            }
+          }
+        } catch (_e) {
+          // Fallback gracefully without longitudinal trajectory
+        }
+      }
+
       const briefing = await generateBriefing(
         {
           patient_age: form.patient_age,
@@ -205,30 +275,28 @@ cases.post(
           observations,
           known_conditions: knownConditions,
           current_medications: currentMedications,
+          is_pregnant: form.is_pregnant,
         },
         {
           triage_level: result.tier,
           confidence_score: triageConfidence,
           risk_driver: riskDriver,
           low_confidence: lowConfidence,
+          deterioration_alert: deteriorationAlert,
+          deterioration_visit_count: deteriorationVisitCount,
+          prior_visits: priorVisits,
+          contraindication_flags: result.contraindicationFlags,
         },
-      );
-
-      const rawToken = extractBearerToken(c.req.header("authorization"));
-      const db = getSupabaseForUser(rawToken);
-
-      const { alert: deteriorationAlert, visitCount: deteriorationVisitCount } = await checkDeteriorationPattern(
-        db,
-        form.patient_key,
-        result.tier,
       );
 
       const paediatricAdvisory = buildPaediatricAdvisory(
         { patient_age: form.patient_age, age_months: form.age_months, muac_mm: form.muac_mm },
         Deno.env.get("PAEDIATRIC_ADVISORY_ENABLED") === "true",
       );
-      const record = {
-        client_id: form.client_id ?? crypto.randomUUID(),
+
+      const clientUuidStr = form.client_id ?? crypto.randomUUID();
+      const record: Record<string, unknown> = {
+        client_id: clientUuidStr,
         submitted_by: user.sub,
         facility_id: facilityId,
         patient_name: patientName,
@@ -240,8 +308,6 @@ cases.post(
         spo2: form.spo2 ?? null,
         heart_rate: form.heart_rate ?? null,
         temperature: form.temperature ?? null,
-        // Governance-gated paediatric capture; intentionally excluded from
-        // the rules-first triage and briefing payloads above.
         age_months: form.age_months ?? null,
         muac_mm: form.muac_mm ?? null,
         paediatric_advisory: paediatricAdvisory,
@@ -282,28 +348,90 @@ cases.post(
         model_tier: result.model?.tier ?? null,
         rules_fired: result.firedRules ?? [],
         model_agreed: result.modelAgreed ?? null,
+        is_sms_stub: false,
       };
 
-      const { data: upserted, error: upsertError } = await db
+      // Check existing record by client_id to detect SMS stubs or duplicate submissions (BUG-52, BUG-53)
+      const { data: existingRows, error: fetchErr } = await db
         .from("case_records")
-        .upsert(record, { onConflict: "client_id", ignoreDuplicates: true })
-        .select();
-      if (upsertError) throw upsertError;
+        .select(
+          "id, is_sms_stub, submitted_by, facility_id, created_at, reviewed_at, overridden_triage, triage_level, triage_priority, needs_review",
+        )
+        .eq("client_id", clientUuidStr);
 
-      const isNewSubmission = Boolean(upserted && upserted.length > 0);
+      if (fetchErr) throw fetchErr;
+      const existingRow = existingRows && existingRows.length > 0 ? existingRows[0] : null;
+
       let response: Record<string, unknown>;
-      if (!isNewSubmission) {
-        // Upsert ignored the duplicate; fetch the existing row to return to the client.
-        const { data: existing, error: existingError } = await db
+      let isNewOrPromoted = false;
+
+      if (existingRow && existingRow.is_sms_stub) {
+        // BUG-52: Verify submitter authorization before promoting stub
+        if (existingRow.submitted_by && existingRow.submitted_by !== user.sub) {
+          throw new HttpError(403, "Not authorized to promote this SMS stub");
+        }
+
+        // BUG-52, REG-05: Preserve clinician review if already conducted on the emergency stub
+        if (existingRow.reviewed_at !== null || existingRow.overridden_triage !== null) {
+          record.triage_level = existingRow.triage_level ?? record.triage_level;
+          record.triage_priority = existingRow.triage_priority ?? (result.tier === "EMERGENCY" ? 0 : result.tier === "URGENT" ? 1 : 2);
+          record.needs_review = existingRow.needs_review ?? false;
+        }
+
+        // Exclude immutables from update payload (BUG-02, BUG-52)
+        const updatePayload: Record<string, unknown> = {};
+        const immutables = new Set(["id", "client_id", "submitted_by", "facility_id"]);
+        for (const [k, v] of Object.entries(record)) {
+          if (!immutables.has(k)) {
+            updatePayload[k] = v;
+          }
+        }
+        updatePayload.is_sms_stub = false;
+        updatePayload.updated_at = new Date().toISOString();
+
+        const { data: updatedRows, error: updateErr } = await db
+          .from("case_records")
+          .update(updatePayload)
+          .eq("client_id", clientUuidStr)
+          .select();
+
+        if (updateErr) throw updateErr;
+        response = (updatedRows && updatedRows[0]) || record;
+        isNewOrPromoted = true;
+      } else if (existingRow) {
+        // Existing complete submission — idempotent duplicate response (BUG-01)
+        const { data: existingFetch, error: existingFetchErr } = await db
           .from("case_records")
           .select(
-            "id, client_id, triage_level, triage_confidence, risk_driver, created_at, created_offline, facility_id",
+            "id, client_id, triage_level, triage_confidence, risk_driver, created_at, created_offline, facility_id, is_sms_stub",
           )
-          .eq("client_id", record.client_id);
-        if (existingError) throw existingError;
-        response = (existing && existing[0]) || record;
+          .eq("client_id", clientUuidStr);
+
+        if (existingFetchErr) throw existingFetchErr;
+        response = (existingFetch && existingFetch[0]) || record;
+        isNewOrPromoted = false;
       } else {
-        response = upserted![0]!;
+        // Clean new submission
+        const { data: upserted, error: upsertError } = await db
+          .from("case_records")
+          .upsert(record, { onConflict: "client_id", ignoreDuplicates: true })
+          .select();
+
+        if (upsertError) throw upsertError;
+
+        if (!upserted || upserted.length === 0) {
+          const { data: existingFetch } = await db
+            .from("case_records")
+            .select(
+              "id, client_id, triage_level, triage_confidence, risk_driver, created_at, created_offline, facility_id, is_sms_stub",
+            )
+            .eq("client_id", clientUuidStr);
+          response = (existingFetch && existingFetch[0]) || record;
+          isNewOrPromoted = false;
+        } else {
+          response = upserted[0]!;
+          isNewOrPromoted = true;
+        }
       }
 
       await logPhiAccess({
@@ -317,11 +445,8 @@ cases.post(
         details: { created_offline: Boolean(form.created_offline), needs_review: Boolean(record.needs_review) },
       });
 
-      // Genuinely new EMERGENCY case (not a retried duplicate) — notify the
-      // facility's subscribed doctors. Backgrounded: never adds latency to
-      // the ASHA worker's submission response; pushEmergencyAlert() itself
-      // no-ops safely if VAPID isn't configured.
-      if (isNewSubmission && result.tier === "EMERGENCY") {
+      // Genuinely new or promoted EMERGENCY case (not a retried duplicate) — notify doctors
+      if (isNewOrPromoted && result.tier === "EMERGENCY") {
         const caseId = typeof response.id === "string" ? response.id : undefined;
         runInBackground(
           pushEmergencyAlert(
@@ -341,6 +466,183 @@ cases.post(
     }
   },
 );
+
+// ── Inbound SMS Gateway Ingest (BUG-23) ───────────────────────────────────
+
+cases.post("/api/cases/sms-gateway", rateLimit(60, 60), async (c) => {
+  const contentType = c.req.header("content-type") ?? "";
+  let bodyText = "";
+  let facilityId: string | null = null;
+
+  if (contentType.includes("application/json")) {
+    try {
+      const data = (await c.req.json()) as Record<string, unknown>;
+      bodyText = String(data.body ?? data.message ?? data.text ?? "");
+      facilityId = typeof data.facility_id === "string" ? data.facility_id : null;
+    } catch {
+      bodyText = "";
+    }
+  } else {
+    try {
+      bodyText = (await c.req.text()).trim();
+    } catch {
+      bodyText = "";
+    }
+  }
+
+  if (!bodyText) {
+    throw new HttpError(400, "Empty SMS body");
+  }
+
+  const rawAuth = c.req.header("authorization");
+  const webhookToken = c.req.header("x-sms-webhook-token") ?? c.req.header("x-webhook-token");
+  const config = getConfig();
+
+  let user: AuthedUser | null = null;
+  let isWebhook = false;
+
+  if (rawAuth) {
+    user = await getCurrentUser(rawAuth);
+    const allowed = ["asha_worker", "doctor", "admin", "super_admin"];
+    if (!allowed.includes(user.resolvedRole)) {
+      throw new HttpError(403, `Role '${user.resolvedRole}' is not permitted for SMS gateway`);
+    }
+  } else if (webhookToken && config.internalSchedulerToken && constantTimeEqual(webhookToken, config.internalSchedulerToken)) {
+    isWebhook = true;
+  } else {
+    throw new HttpError(401, "Authentication required: valid JWT bearer token or webhook token required");
+  }
+
+  const rawToken = rawAuth ? extractBearerToken(rawAuth) : null;
+  const db = rawToken ? getSupabaseForUser(rawToken) : getSupabaseAdmin();
+
+  let decoded: {
+    client_id?: string;
+    clientId?: string;
+    patient_age: number;
+    age_months?: number | null;
+    patient_sex: string;
+    symptoms: string[];
+    triage_level?: string;
+    tier?: string;
+    bp_systolic?: number | null;
+    bp_diastolic?: number | null;
+    spo2?: number | null;
+    heart_rate?: number | null;
+    temperature?: number | null;
+    is_pregnant?: boolean | null;
+  };
+
+  if (bodyText.includes("VN1:")) {
+    try {
+      const decodedFrame = decodeEmergencySms(bodyText);
+      decoded = {
+        client_id: decodedFrame.clientId,
+        patient_age: decodedFrame.patientAge,
+        age_months: decodedFrame.ageMonths,
+        patient_sex: decodedFrame.patientSex,
+        symptoms: decodedFrame.symptoms as string[],
+        triage_level: decodedFrame.triageTier,
+        bp_systolic: decodedFrame.bpSystolic,
+        bp_diastolic: decodedFrame.bpDiastolic,
+        spo2: decodedFrame.spo2,
+        heart_rate: decodedFrame.heartRate,
+        temperature: decodedFrame.temperature,
+        is_pregnant: decodedFrame.isPregnant,
+      };
+    } catch (e) {
+      throw new HttpError(400, `Invalid VN1 frame: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  } else {
+    const match = bodyText.match(/^\s*TRIAGE\s+(?<age>\d{1,3})\s+(?<sex>[MFmf])\s+(?<symptoms>[a-zA-Z_,]+)\s*$/i);
+    if (!match || !match.groups) {
+      throw new HttpError(400, "Invalid plain text SMS format. Expected: TRIAGE <age> <sex:M|F> <symptoms_comma_separated>");
+    }
+    const ageNum = Number.parseInt(match.groups.age!, 10);
+    if (ageNum < 0 || ageNum > 120) {
+      throw new HttpError(400, "Invalid patient age in SMS (must be between 0 and 120)");
+    }
+    const sexStr = match.groups.sex!.toUpperCase() === "F" ? "female" : "male";
+    const rawSymptoms = match.groups.symptoms!
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    for (const sym of rawSymptoms) {
+      if (!ALLOWED_SYMPTOMS_SET.has(sym as Symptom)) {
+        throw new HttpError(400, `Unrecognized symptom in SMS: ${sym}`);
+      }
+    }
+
+    decoded = {
+      client_id: crypto.randomUUID(),
+      patient_age: ageNum,
+      patient_sex: sexStr,
+      symptoms: rawSymptoms,
+      triage_level: "ROUTINE",
+    };
+  }
+
+  const clientId = decoded.client_id ?? decoded.clientId ?? crypto.randomUUID();
+  const patientKey = `sms_${clientId}`;
+  const triageLevel = decoded.triage_level ?? decoded.tier ?? "ROUTINE";
+  const triagePriority = triageLevel === "EMERGENCY" ? 0 : triageLevel === "URGENT" ? 1 : 2;
+
+  const stubRecord = {
+    client_id: clientId,
+    is_sms_stub: true,
+    submitted_by: user?.sub ?? (facilityId ? facilityId : "00000000-0000-0000-0000-000000000000"),
+    facility_id: facilityId ?? user?.resolvedFacilityId ?? "00000000-0000-0000-0000-000000000001",
+    patient_name: "Emergency Patient (SMS)",
+    patient_location: "Community (SMS Intake)",
+    complaint_duration: "acute (<24h)",
+    patient_key: patientKey,
+    patient_age: decoded.patient_age,
+    age_months: decoded.age_months ?? null,
+    patient_sex: decoded.patient_sex,
+    symptoms: decoded.symptoms ?? [],
+    bp_systolic: decoded.bp_systolic ?? null,
+    bp_diastolic: decoded.bp_diastolic ?? null,
+    spo2: decoded.spo2 ?? null,
+    heart_rate: decoded.heart_rate ?? null,
+    temperature: decoded.temperature ?? null,
+    is_pregnant: decoded.is_pregnant ?? false,
+    triage_level: triageLevel,
+    triage_priority: triagePriority,
+    triage_confidence: 0.85,
+    risk_driver: "SMS Gateway Emergency Stub Intake",
+    needs_review: true,
+    chief_complaint: "[SMS Emergency Alert Stub — Pending Full Sync]",
+    consent_captured: true,
+    consent_captured_at: new Date().toISOString(),
+    created_offline: true,
+    briefing: {
+      triage_level: triageLevel,
+      primary_risk_driver: "Emergency SMS Alert Stub",
+      recommended_immediate_actions: ["[Rule-Mandated] Await complete HTTPS transmission; monitor patient."],
+      llm_status: "sms_stub",
+    },
+  };
+
+  try {
+    const { error: stubError } = await db
+      .from("case_records")
+      .upsert(stubRecord, { onConflict: "client_id", ignoreDuplicates: true });
+    if (stubError) {
+      console.warn("Could not persist SMS stub to database:", stubError);
+    }
+  } catch (err) {
+    console.warn("SMS stub DB persistence failed:", err);
+  }
+
+  return c.json({
+    status: "queued",
+    client_id: clientId,
+    patient_key: patientKey,
+    triage_level: stubRecord.triage_level,
+    is_sms_stub: true,
+  });
+});
 
 // ── Get Cases ──────────────────────────────────────────────────────────────
 
@@ -580,9 +882,37 @@ cases.patch("/api/cases/:case_id/review", rateLimit(60, 60), requireRole("doctor
 
   const caseRow = await fetchAuthorizedCase(db, caseUuid, user);
 
+  let note = "Marked reviewed via API";
+  let doctorNotes: string | null = null;
+  try {
+    const rawBody = await c.req.json();
+    if (rawBody && typeof rawBody === "object") {
+      const bodyObj = rawBody as Record<string, unknown>;
+      const userNote = (typeof bodyObj.note === "string" ? bodyObj.note : null) ??
+        (typeof bodyObj.doctor_notes === "string" ? bodyObj.doctor_notes : null);
+      if (userNote) {
+        const sanitized = sanitizeDoctorNotes(userNote, 1000);
+        if (sanitized) {
+          note = sanitized;
+          doctorNotes = sanitized;
+        }
+      }
+    }
+  } catch {
+    // Body optional on review
+  }
+
+  const updatePayload: Record<string, unknown> = {
+    reviewed_by: user.sub,
+    reviewed_at: new Date().toISOString(),
+  };
+  if (doctorNotes) {
+    updatePayload.doctor_notes = doctorNotes;
+  }
+
   const { data: updated, error: updateError } = await db
     .from("case_records")
-    .update({ reviewed_by: user.sub, reviewed_at: new Date().toISOString() })
+    .update(updatePayload)
     .eq("id", caseUuid)
     .is("deleted_at", null)
     .select();
@@ -594,7 +924,7 @@ cases.patch("/api/cases/:case_id/review", rateLimit(60, 60), requireRole("doctor
   const { error: reviewInsertError } = await db.from("case_reviews").insert({
     case_id: caseUuid,
     reviewer_id: user.sub,
-    note: "Marked reviewed via API",
+    note,
   });
   if (reviewInsertError) throw reviewInsertError;
 
@@ -711,6 +1041,119 @@ cases.patch("/api/cases/:case_id/outcome", rateLimit(30, 60), requireRole("docto
 
   return c.json(inserted[0]);
 });
+
+// ── Get Cases Due For Follow-up (BUG-35, BUG-53) ───────────────────────────
+
+cases.get(
+  "/api/cases/followups/due",
+  rateLimit(60, 60),
+  requireRole("asha_worker", "doctor", "admin", "supervisor", "super_admin"),
+  async (c) => {
+    const user = c.get("user");
+    const rawToken = extractBearerToken(c.req.header("authorization"));
+    const db = getSupabaseForUser(rawToken);
+    const role = user.resolvedRole;
+
+    const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
+    const limit = Math.max(1, Math.min(Number.isFinite(limitParam) ? limitParam : 50, 100));
+    const dueBefore = c.req.query("due_before");
+
+    let query = db
+      .from("case_records")
+      .select(
+        "id, client_id, patient_name, patient_age, patient_sex, patient_location, chief_complaint, " +
+          "triage_level, follow_up_required, follow_up_due_at, facility_id, submitted_by, created_at",
+      )
+      .eq("follow_up_required", true)
+      .is("follow_up_completed_at", null)
+      .is("deleted_at", null)
+      .order("follow_up_due_at", { ascending: true })
+      .limit(limit);
+
+    if (dueBefore) {
+      query = query.lte("follow_up_due_at", normalizedIsoTs(dueBefore, "due_before"));
+    }
+
+    if (role === "asha_worker") {
+      query = query.eq("submitted_by", user.sub);
+    } else {
+      const facilityScope = resolveFacilityScope(role, user.resolvedFacilityId, c.req.query("facility_id") ?? null);
+      if (facilityScope !== null) {
+        query = query.eq("facility_id", facilityScope);
+      }
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.warn("followups/due query failed:", error);
+      throw new HttpError(502, "Follow-up cases query failed — try again");
+    }
+    const rows = data ?? [];
+
+    await logPhiAccess({
+      eventType: AuditEventType.PHI_READ,
+      userId: user.sub ?? "unknown",
+      userRole: role,
+      resourceType: "case_records",
+      resourceId: null,
+      facilityId: user.resolvedFacilityId,
+      ipAddress: getClientIp(c),
+      details: { view: "followups_due", count: rows.length },
+    });
+
+    return c.json({ cases: rows, count: rows.length });
+  },
+);
+
+// ── Complete Case Follow-up (REG-06) ───────────────────────────────────────
+
+cases.post(
+  "/api/cases/:case_id/followup-complete",
+  rateLimit(30, 60),
+  requireRole("asha_worker", "doctor", "admin", "super_admin"),
+  async (c) => {
+    const user = c.get("user");
+    const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
+    const rawToken = extractBearerToken(c.req.header("authorization"));
+    const db = getSupabaseForUser(rawToken);
+    const role = user.resolvedRole;
+
+    const caseRow = await fetchAuthorizedCase(db, caseUuid, user);
+
+    const completedAt = new Date().toISOString();
+    const { data: updated, error } = await db
+      .from("case_records")
+      .update({
+        follow_up_completed_at: completedAt,
+        follow_up_required: false,
+      })
+      .eq("id", caseUuid)
+      .is("deleted_at", null)
+      .select();
+    if (error) throw error;
+    if (!updated || updated.length === 0) {
+      throw new HttpError(404, "Case not found or already deleted");
+    }
+
+    await logPhiAccess({
+      eventType: AuditEventType.PHI_UPDATE,
+      userId: user.sub ?? "unknown",
+      userRole: role,
+      resourceType: "case_records",
+      resourceId: caseUuid,
+      facilityId: caseRow.facility_id,
+      ipAddress: getClientIp(c),
+      details: { action: "followup_complete", follow_up_completed_at: completedAt },
+    });
+
+    return c.json({
+      status: "followup_completed",
+      case_id: caseUuid,
+      follow_up_completed_at: completedAt,
+      follow_up_required: false,
+    });
+  },
+);
 
 // ── Get Case Detail ────────────────────────────────────────────────────────
 

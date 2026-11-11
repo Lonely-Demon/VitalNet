@@ -45,7 +45,7 @@ function resolveScope(user: { resolvedRole: string; resolvedFacilityId: string |
 
 // ── /summary ──────────────────────────────────────────────────────────────────
 
-analytics.get("/api/analytics/summary", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/summary", rateLimit(60, 60), requireRole("doctor", "admin", "supervisor", "super_admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
   const { facilityId, scoped } = resolveScope(user);
@@ -175,7 +175,7 @@ analytics.get("/api/analytics/summary", rateLimit(60, 60), requireRole("doctor",
 
 // ── /emergency-rate ───────────────────────────────────────────────────────────
 
-analytics.get("/api/analytics/emergency-rate", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/emergency-rate", rateLimit(60, 60), requireRole("doctor", "admin", "supervisor", "super_admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
   const { facilityId, scoped } = resolveScope(user);
@@ -209,7 +209,7 @@ analytics.get("/api/analytics/emergency-rate", rateLimit(60, 60), requireRole("d
 
 // ── /response-times ───────────────────────────────────────────────────────────
 
-analytics.get("/api/analytics/response-times", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/response-times", rateLimit(60, 60), requireRole("doctor", "admin", "supervisor", "super_admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
   const { facilityId, scoped } = resolveScope(user);
@@ -243,7 +243,7 @@ analytics.get("/api/analytics/response-times", rateLimit(60, 60), requireRole("d
 
 // ── /ml-agreement ─────────────────────────────────────────────────────────────
 
-analytics.get("/api/analytics/ml-agreement", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/ml-agreement", rateLimit(60, 60), requireRole("doctor", "admin", "supervisor", "super_admin"), async (c) => {
   const user = c.get("user");
   const db = getSupabaseForUser(user.token);
   const { facilityId, scoped } = resolveScope(user);
@@ -297,7 +297,7 @@ const EXPORT_COLUMNS = [
   "triage_model_version",
 ];
 
-analytics.get("/api/analytics/export", rateLimit(10, 60), requireRole("doctor", "admin"), async (c) => {
+analytics.get("/api/analytics/export", rateLimit(10, 60), requireRole("doctor", "admin", "supervisor", "super_admin"), async (c) => {
   const user = c.get("user");
   const dateFrom = c.req.query("date_from");
   const dateTo = c.req.query("date_to");
@@ -335,6 +335,7 @@ analytics.get("/api/analytics/export", rateLimit(10, 60), requireRole("doctor", 
           .gte("created_at", parsedFrom.toISOString())
           .lte("created_at", parsedTo.toISOString())
           .order("created_at", { ascending: true })
+          .order("id", { ascending: true })
           .range(currentStart, currentEnd);
         if (scoped) q = q.eq("facility_id", facilityId);
         // Same as /summary: supabase-js does NOT throw on PostgREST errors.

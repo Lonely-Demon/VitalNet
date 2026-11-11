@@ -169,18 +169,103 @@ async function callGeminiJson(
   return parseLlmJson(text);
 }
 
-// ─── Prompt-injection defense (untrusted free-text fields) ──────────────
+// ─── Prompt-injection defense (untrusted free-text fields) (BUG-13) ──────────────
 
-// deno-lint-ignore no-control-regex -- intentional: strips control chars from untrusted LLM prompt input.
-const PROMPT_CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/g;
+// deno-lint-ignore no-control-regex -- intentional: strips control chars, zero-width, and BiDi controls from untrusted LLM prompt input.
+const PROMPT_CONTROL_CHARS_RE = /[\x00-\x1f\x7f\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+const SCRIPT_TAG_RE = /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi;
+const HTML_TAG_RE = /<[^>]+>/g;
+
+const INJECTION_PATTERNS = [
+  /(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|system)\s+(?:instructions?|directions?|commands?|rules?|prompts?)/gi,
+  /(?:^|[\s\[\(\{])(?:system|human|assistant|user|ai|developer)\s*[\]\)\}]?\s*:/gi,
+  /(?:you are now|pretend you are|act as)\s+(?:a|an)\b/gi,
+  /\b(?:jailbreak|dan mode|developer mode)\b/gi,
+];
+
+export function sanitizeForPrompt(value: unknown, maxLength = 300): string {
+  if (value === null || value === undefined) return "";
+  let s = String(value).replace(PROMPT_CONTROL_CHARS_RE, "");
+  s = s.replace(SCRIPT_TAG_RE, "");
+  s = s.replace(HTML_TAG_RE, " ");
+  s = s.replaceAll("```", "");
+  for (const pattern of INJECTION_PATTERNS) {
+    s = s.replace(pattern, "[REDACTED]");
+  }
+  s = s.replaceAll("<", "[").replaceAll(">", "]");
+  s = s.replace(/\s+/g, " ").trim();
+  return s.slice(0, maxLength);
+}
 
 function sanitizeField(value: unknown, maxLen = 300): string {
-  if (value === null || value === undefined) return "";
-  let s = String(value).replace(PROMPT_CONTROL_CHARS_RE, " ");
-  s = s.replaceAll("```", "").replaceAll("<", "[").replaceAll(">", "]");
-  s = s.replace(/\s+/g, " ").trim();
-  return s.slice(0, maxLen);
+  return sanitizeForPrompt(value, maxLen);
 }
+
+// ─── Shared Cross-Request Circuit Breaker (BUG-26, BUG-64) ───────────────────
+
+export enum CircuitState {
+  CLOSED = "CLOSED",
+  OPEN = "OPEN",
+  HALF_OPEN = "HALF_OPEN",
+}
+
+export class LlmCircuitBreaker {
+  failureThreshold: number;
+  recoveryTimeoutMs: number;
+  state: CircuitState;
+  consecutiveFailures: number;
+  lastFailureTime: number;
+
+  constructor(failureThreshold = 3, recoveryTimeoutMs = 30_000) {
+    this.failureThreshold = failureThreshold;
+    this.recoveryTimeoutMs = recoveryTimeoutMs;
+    this.state = CircuitState.CLOSED;
+    this.consecutiveFailures = 0;
+    this.lastFailureTime = 0;
+  }
+
+  isOpen(): boolean {
+    if (this.state === CircuitState.OPEN) {
+      if (Date.now() - this.lastFailureTime >= this.recoveryTimeoutMs) {
+        this.state = CircuitState.HALF_OPEN;
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  canExecute(): boolean {
+    return !this.isOpen();
+  }
+
+  getState(): CircuitState {
+    this.isOpen();
+    return this.state;
+  }
+
+  recordSuccess(): void {
+    this.state = CircuitState.CLOSED;
+    this.consecutiveFailures = 0;
+  }
+
+  recordFailure(isUpstream = true): void {
+    if (!isUpstream) return;
+    this.consecutiveFailures += 1;
+    this.lastFailureTime = Date.now();
+    if (this.consecutiveFailures >= this.failureThreshold || this.state === CircuitState.HALF_OPEN) {
+      this.state = CircuitState.OPEN;
+    }
+  }
+
+  reset(): void {
+    this.state = CircuitState.CLOSED;
+    this.consecutiveFailures = 0;
+    this.lastFailureTime = 0;
+  }
+}
+
+export const llmCircuitBreaker = new LlmCircuitBreaker();
 
 // ─── Briefing generation ──────────────────────────────────────────────────
 
@@ -221,6 +306,8 @@ export interface Briefing {
   differential_diagnoses: string[];
   red_flags: string[];
   recommended_immediate_actions: string[];
+  rule_mandated_actions?: string[];
+  symptom_inferred_actions?: string[];
   recommended_tests: string[];
   uncertainty_flags: string;
   disclaimer: string;
@@ -355,18 +442,58 @@ export function fallbackBriefing(triageResult: BriefingTriageInput, form?: Brief
     redFlags.push(`Contraindication warning: ${flag}`);
   }
 
-  let actions: string[];
+  // Separate rule-mandated vs symptom-inferred actions (BUG-27)
+  const ruleMandatedActions: string[] = [];
   if (level === "EMERGENCY") {
-    actions = [
+    ruleMandatedActions.push(
       "ABCDE resuscitation, high-flow oxygen, IV access, urgent 108 referral, do not discharge without Medical Officer sign-off.",
-    ];
+    );
   } else if (level === "URGENT") {
-    actions = [
+    ruleMandatedActions.push(
       "Prioritize Medical Officer consultation, re-measure vitals in 30 minutes, symptomatic management.",
-    ];
+    );
   } else {
-    actions = ["Refer patient to PHC doctor for in-person evaluation and routine follow-up."];
+    ruleMandatedActions.push(
+      "Refer patient to PHC doctor for in-person evaluation and routine follow-up.",
+    );
   }
+
+  const symptomInferredActions: string[] = [];
+  if (symptoms.includes("chest_pain")) {
+    symptomInferredActions.push(
+      "Obtain 12-lead ECG immediately; prepare sublingual nitrates/aspirin if not contraindicated.",
+    );
+  }
+  if (symptoms.includes("breathlessness")) {
+    symptomInferredActions.push(
+      "Keep patient in propped-up sitting position; initiate nebulization if wheezing.",
+    );
+  }
+  if (symptoms.includes("altered_consciousness")) {
+    symptomInferredActions.push(
+      "Check point-of-care capillary blood glucose immediately; secure airway.",
+    );
+  }
+  if (symptoms.includes("severe_bleeding")) {
+    symptomInferredActions.push(
+      "Apply direct pressure with sterile dressing; elevate bleeding limb if feasible.",
+    );
+  }
+  if (symptoms.includes("seizure")) {
+    symptomInferredActions.push(
+      "Position patient in recovery lateral position; prevent injury, do not place anything in mouth.",
+    );
+  }
+  if (symptoms.includes("high_fever")) {
+    symptomInferredActions.push(
+      "Cold sponging, oral rehydration, and prepare paracetamol as per age/weight guidelines.",
+    );
+  }
+
+  const actions = [
+    ...ruleMandatedActions.map((a) => `[Rule-Mandated] ${a}`),
+    ...symptomInferredActions.map((a) => `[Symptom-Inferred] ${a}`),
+  ];
 
   return {
     triage_level: level,
@@ -374,6 +501,8 @@ export function fallbackBriefing(triageResult: BriefingTriageInput, form?: Brief
     differential_diagnoses: differentials,
     red_flags: redFlags,
     recommended_immediate_actions: actions,
+    rule_mandated_actions: ruleMandatedActions,
+    symptom_inferred_actions: symptomInferredActions,
     recommended_tests: ["12-lead ECG", "continuous SpO2", "POC glucose", "RDT malaria/dengue"],
     uncertainty_flags: "Synthesized deterministically from VitalNet clinical rules engine (Tier-5 fallback).",
     disclaimer: FIXED_DISCLAIMER,
@@ -388,14 +517,18 @@ const BRIEFING_TOTAL_BUDGET_MS = 6_500;
 
 /**
  * Generate a clinical briefing using the 4-tier fallback chain, bounded by
- * BRIEFING_TOTAL_BUDGET_MS overall. Never throws — always returns a usable
- * briefing. The triage_level is enforced on every output path
- * (enforceSchema), regardless of which tier (or neither) produced the rest.
+ * BRIEFING_TOTAL_BUDGET_MS overall and protected by cross-request circuit breaker.
+ * Never throws — always returns a usable briefing.
  */
 export async function generateBriefing(
   form: BriefingFormInput,
   triageResult: BriefingTriageInput,
 ): Promise<Briefing> {
+  if (llmCircuitBreaker.isOpen()) {
+    console.warn("LLM circuit breaker is OPEN — fast-failing to Tier-5 clinical synthesizer (<10ms)");
+    return fallbackBriefing(triageResult, form);
+  }
+
   // ReturnType<typeof setTimeout>, not number: under the edge function's type
   // resolution setTimeout returns a Timeout object (same idiom as
   // queryTimeout.ts), so typing this as number fails `deno check`.
@@ -405,11 +538,19 @@ export async function generateBriefing(
       console.warn(
         `LLM briefing exceeded ${BRIEFING_TOTAL_BUDGET_MS}ms budget — returning Tier-5 clinical synthesizer.`,
       );
+      llmCircuitBreaker.recordFailure(true);
       resolve(fallbackBriefing(triageResult, form));
     }, BRIEFING_TOTAL_BUDGET_MS);
   });
   try {
-    return await Promise.race([generateBriefingInner(form, triageResult), budget]);
+    const res = await Promise.race([generateBriefingInner(form, triageResult), budget]);
+    if (res.llm_status !== "fallback") {
+      llmCircuitBreaker.recordSuccess();
+    }
+    return res;
+  } catch (_e) {
+    llmCircuitBreaker.recordFailure(true);
+    return fallbackBriefing(triageResult, form);
   } finally {
     clearTimeout(budgetTimer);
   }
@@ -425,7 +566,7 @@ async function generateBriefingInner(
 
   if (!hasGroq && !hasGemini) {
     console.warn("No LLM API keys configured — returning fallback briefing.");
-    return fallbackBriefing(triageResult);
+    return fallbackBriefing(triageResult, form);
   }
 
   const patientContext = buildPatientContext(form, triageResult);
@@ -489,7 +630,7 @@ async function generateBriefingInner(
   }
 
   console.warn("All LLM tiers exhausted — returning fallback briefing. Triage badge intact.");
-  return fallbackBriefing(triageResult);
+  return fallbackBriefing(triageResult, form);
 }
 
 // ─── Patient-facing plain-language summary ────────────────────────────────

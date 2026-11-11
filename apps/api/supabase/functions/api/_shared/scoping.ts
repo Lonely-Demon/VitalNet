@@ -4,7 +4,8 @@
 // widen that scope via a query parameter.
 import { HttpError } from "./database.ts";
 
-export const GLOBAL_SCOPE_ROLE = "supervisor";
+export const GLOBAL_SCOPE_ROLES = ["supervisor", "super_admin"] as const;
+export const GLOBAL_SCOPE_ROLE = "supervisor"; // backward compat alias
 
 export interface FacilityScopeResult {
   facilityId: string | null;
@@ -12,13 +13,13 @@ export interface FacilityScopeResult {
 }
 
 export function isGlobalScope(role: string): boolean {
-  return role === GLOBAL_SCOPE_ROLE;
+  return role === "supervisor" || role === "super_admin";
 }
 
 /**
  * Returns the facility_id to filter a query on, or null for system-wide
- * (GLOBAL_SCOPE_ROLE only). A non-global role's own facility always wins
- * — requestedFacilityId is only honoured for the global role, so a
+ * (GLOBAL_SCOPE_ROLES only). A non-global role's own facility always wins
+ * — requestedFacilityId is only honoured for global roles, so a
  * facility-scoped account can never widen their own scope by passing a
  * different id. Throws HTTP 400 if a non-global role has no facility
  * assigned (an account that was never fully provisioned).
@@ -28,7 +29,7 @@ export function resolveFacilityScope(
   ownFacilityId: string | null,
   requestedFacilityId: string | null,
 ): string | null {
-  if (role === GLOBAL_SCOPE_ROLE) {
+  if (isGlobalScope(role)) {
     return requestedFacilityId;
   }
   if (!ownFacilityId) {
@@ -48,6 +49,6 @@ export function resolveScope(
   const facilityId = resolveFacilityScope(role, ownFacilityId, requestedFacilityId);
   return {
     facilityId,
-    is_global: role === GLOBAL_SCOPE_ROLE && requestedFacilityId === null,
+    is_global: isGlobalScope(role) && requestedFacilityId === null,
   };
 }

@@ -128,7 +128,27 @@ referral.get("/api/facilities", rateLimit(60, 60), requireRole("doctor", "admin"
     throw new HttpError(502, "Facilities query failed — try again");
   }
 
-  const merged = mergeOpenCaseCounts((facilities ?? []) as Facility[], (openCounts ?? []) as OpenCaseCountRow[]);
+  let callerDistrict: string | null = null;
+  if (user.resolvedFacilityId) {
+    try {
+      const { data: callerFac } = await db
+        .from("facilities")
+        .select("district")
+        .eq("id", user.resolvedFacilityId)
+        .maybeSingle();
+      if (callerFac && callerFac.district) {
+        callerDistrict = callerFac.district;
+      }
+    } catch (e) {
+      console.debug("Could not resolve caller facility district:", e);
+    }
+  }
+
+  const merged = mergeOpenCaseCounts(
+    (facilities ?? []) as Facility[],
+    (openCounts ?? []) as OpenCaseCountRow[],
+    callerDistrict,
+  );
   return c.json(merged);
 });
 
@@ -244,6 +264,27 @@ referral.post("/api/cases/:case_id/refer", rateLimit(20, 60), requireRole("docto
   }
   if (receivingFacilityUuid === referringFacilityId) {
     throw new HttpError(400, "Cannot refer a case to its own facility");
+  }
+
+  // Deduplicate active referrals (BUG-36)
+  try {
+    const { data: existingActive } = await db
+      .from("referrals")
+      .select("id, status")
+      .eq("case_id", caseUuid)
+      .in("status", ["pending", "acknowledged", "patient_arrived"])
+      .limit(1);
+
+    if (existingActive && existingActive.length > 0) {
+      const activeRef = existingActive[0]!;
+      throw new HttpError(
+        409,
+        `An active referral already exists for this case (id: ${activeRef.id}, status: ${activeRef.status})`,
+      );
+    }
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    console.warn("Could not query existing active referrals:", e);
   }
 
   const sbarDraft = buildSbar(caseRow as unknown as Record<string, unknown>, { reason, urgency });
@@ -378,10 +419,13 @@ referral.patch(
     // 48-hour follow-up task for the originating community worker.
     if (body.status === "completed" && row.case_id) {
       try {
-        await db.rpc("fn_mark_referral_followup_due", {
+        const { error: rpcErr } = await db.rpc("fn_mark_referral_followup_due", {
           p_case_id: row.case_id,
           p_referral_id: referralUuid,
         });
+        if (rpcErr) {
+          console.warn("Could not execute fn_mark_referral_followup_due RPC:", rpcErr);
+        }
       } catch (e) {
         console.warn("Could not execute fn_mark_referral_followup_due RPC:", e);
       }

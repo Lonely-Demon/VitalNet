@@ -9,7 +9,8 @@
 import { Hono } from "hono";
 import { type AuthedUser, requireRole } from "../_shared/auth.ts";
 import { rateLimit } from "../_shared/rateLimit.ts";
-import { getSupabaseAdmin, HttpError } from "../_shared/database.ts";
+import { getSupabaseAdmin, getSupabaseForUser, HttpError } from "../_shared/database.ts";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { getConfig } from "../_shared/config.ts";
 import { AuditEventType, getClientIp, logPhiAccess } from "../_shared/audit.ts";
 import { parseUuid } from "../_shared/cases.ts";
@@ -17,6 +18,7 @@ import type { AppEnv } from "../_shared/types.ts";
 
 export const dsr = new Hono<AppEnv>();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REDACTED = "[REDACTED — see docs/COMPLIANCE_DPDP.md]";
 
 // Direct-identifier / free-text fields on case_records that plausibly carry
@@ -113,7 +115,24 @@ dsr.get("/api/admin/cases/:case_id/export", rateLimit(10, 60), requireRole("admi
  * are replaced with a redaction marker, and the case is soft-deleted if not already.
  * Associated records in case_attachments and client_events are purged.
  */
-async function eraseCaseRow(caseUuid: string, caseRecord: CaseRecord): Promise<void> {
+async function eraseCaseRow(
+  caseUuid: string,
+  caseRecord: CaseRecord,
+  dbClient?: SupabaseClient,
+): Promise<void> {
+  const client = dbClient ?? getSupabaseAdmin();
+
+  // BUG-29, BUG-30: Atomic transaction via fn_erase_case_pii RPC
+  try {
+    const { error: rpcErr } = await client.rpc("fn_erase_case_pii", { p_case_id: caseUuid });
+    if (!rpcErr) {
+      return;
+    }
+    console.warn("fn_erase_case_pii RPC error, falling back to table update:", rpcErr);
+  } catch (e) {
+    console.warn("fn_erase_case_pii RPC threw, falling back to table update:", e);
+  }
+
   const admin = getSupabaseAdmin();
   const updateBody: Record<string, unknown> = {};
   for (const field of ERASABLE_CASE_FIELDS) updateBody[field] = REDACTED;
@@ -161,7 +180,8 @@ dsr.post("/api/admin/cases/:case_id/erase", rateLimit(10, 60), requireRole("admi
 
   const caseRecord = await fetchCaseOr404(caseUuid);
   authorizeDsrAccess(user, caseRecord);
-  await eraseCaseRow(caseUuid, caseRecord);
+  const db = getSupabaseForUser(user.token);
+  await eraseCaseRow(caseUuid, caseRecord, db);
 
   await logPhiAccess({
     eventType: AuditEventType.PHI_ERASURE,
@@ -200,9 +220,10 @@ dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin"
   const { data: candidates, error } = await query;
   if (error) throw error;
 
+  const db = getSupabaseForUser(user.token);
   const purged: string[] = [];
   for (const row of (candidates ?? []) as CaseRecord[]) {
-    await eraseCaseRow(row.id, row);
+    await eraseCaseRow(row.id, row, db);
     await logPhiAccess({
       eventType: AuditEventType.PHI_ERASURE,
       userId: user.sub ?? "unknown",
@@ -228,16 +249,16 @@ dsr.post(
   async (c) => {
     const user = c.get("user");
     const clientId = c.req.param("client_id")!;
-    const admin = getSupabaseAdmin();
+    const db = getSupabaseForUser(user.token);
 
-    let { data: caseRecord } = await admin
+    let { data: caseRecord } = await db
       .from("case_records")
       .select("*")
       .eq("client_id", clientId)
       .maybeSingle();
 
-    if (!caseRecord) {
-      const { data: byId } = await admin
+    if (!caseRecord && UUID_RE.test(clientId)) {
+      const { data: byId } = await db
         .from("case_records")
         .select("*")
         .eq("id", clientId)
@@ -251,11 +272,14 @@ dsr.post(
 
     const row = caseRecord as CaseRecord;
     if (user.resolvedRole === "asha_worker") {
-      if (row.submitted_by !== user.sub && (!user.resolvedFacilityId || row.facility_id !== user.resolvedFacilityId)) {
+      if (row.submitted_by !== user.sub) {
         throw new HttpError(403, "Not authorized to revoke consent for this case");
       }
+      if (user.resolvedFacilityId && row.facility_id && row.facility_id !== user.resolvedFacilityId) {
+        throw new HttpError(403, "Not authorized to access cases outside your facility");
+      }
     } else if (user.resolvedRole === "doctor" || user.resolvedRole === "admin") {
-      if (user.resolvedFacilityId && row.facility_id !== user.resolvedFacilityId) {
+      if (!user.resolvedFacilityId || row.facility_id !== user.resolvedFacilityId) {
         throw new HttpError(403, "Not authorized to access cases outside your facility");
       }
     }
@@ -264,7 +288,18 @@ dsr.post(
       return c.json({ status: "already_revoked", client_id: clientId, case_id: row.id });
     }
 
-    await eraseCaseRow(row.id, row);
+    try {
+      const { data: rpcRes, error: rpcErr } = await db.rpc("fn_erase_case_pii", { p_case_id: row.id });
+      if (rpcErr) {
+        throw rpcErr;
+      }
+      if (rpcRes && typeof rpcRes === "object" && (rpcRes as Record<string, unknown>).status === "already_revoked") {
+        return c.json({ status: "already_revoked", client_id: clientId, case_id: row.id });
+      }
+    } catch (e) {
+      console.warn("fn_erase_case_pii RPC call failed, falling back to eraseCaseRow:", e);
+      await eraseCaseRow(row.id, row, db);
+    }
 
     await logPhiAccess({
       eventType: AuditEventType.PHI_ERASURE,

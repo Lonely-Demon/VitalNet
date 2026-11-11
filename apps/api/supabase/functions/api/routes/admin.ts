@@ -24,20 +24,7 @@ function validatePassword(password: string): void {
   }
 }
 
-/**
- * Neutralise CSV/spreadsheet formula injection: if this admin data is ever
- * exported and opened in Excel/Sheets, a value starting with =, +, -, @ or a
- * control character can execute as a formula. Prefixing with a quote forces
- * it to be read as literal text.
- */
-function maskCsvValue(value: string | null | undefined): string | null {
-  if (value === null || value === undefined) return null;
-  const text = String(value);
-  if (text && ["=", "+", "-", "@", "\t", "\r", "\n"].includes(text[0]!)) {
-    return "'" + text;
-  }
-  return text;
-}
+
 
 const ROLE_ENUM = z.enum(["asha_worker", "doctor", "admin", "supervisor"]);
 
@@ -132,12 +119,12 @@ admin.get("/api/admin/users", rateLimit(60, 60), requireRole("admin"), async (c)
     const profile = profilesById.get(au.id);
     return {
       id: au.id,
-      email: maskCsvValue(au.email),
+      email: au.email ?? null,
       full_name: profile?.full_name ?? "",
       role: profile?.role ?? "asha_worker",
       facility_id: profile?.facility_id ?? null,
       facility_name: profile?.facilities?.name ?? null,
-      asha_id: maskCsvValue(profile?.asha_id),
+      asha_id: profile?.asha_id ?? null,
       is_active: profile?.is_active ?? true,
       created_at: au.created_at,
       last_sign_in: au.last_sign_in_at ?? null,

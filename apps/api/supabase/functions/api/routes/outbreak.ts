@@ -14,7 +14,7 @@ import type { AppEnv } from "../_shared/types.ts";
 
 export const outbreak = new Hono<AppEnv>();
 
-outbreak.get("/api/outbreak/signals", rateLimit(60, 60), requireRole("doctor", "supervisor", "admin"), async (c) => {
+outbreak.get("/api/outbreak/signals", rateLimit(60, 60), requireRole("doctor", "supervisor", "admin", "super_admin"), async (c) => {
   const user = c.get("user");
   const requestedFacilityId = c.req.query("facility_id") ?? null;
   const scopedFacilityId = resolveFacilityScope(user.resolvedRole, user.resolvedFacilityId, requestedFacilityId);

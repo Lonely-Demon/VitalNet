@@ -5,13 +5,20 @@
 // correct quoting.
 
 const FORMULA_TRIGGERS = new Set(["=", "+", "-", "@", "\t", "\r"]);
+const PURE_NUMERIC_RE = /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 
 /**
  * Safely neutralizes CSV formula injection trigger characters (=, +, -, @, \t, \r).
  * If a value starts with any of these characters, prepends a single quote (').
+ * Valid signed numbers (+100, -15.2) are preserved without prepending a quote (BUG-55).
  */
 export function sanitizeCsvValue(value: string): string {
-  if (value.length > 0 && FORMULA_TRIGGERS.has(value[0]!)) {
+  if (value.length === 0) return value;
+  const firstChar = value[0]!;
+  if (FORMULA_TRIGGERS.has(firstChar)) {
+    if ((firstChar === "+" || firstChar === "-") && PURE_NUMERIC_RE.test(value.trim())) {
+      return value;
+    }
     return `'${value}`;
   }
   return value;

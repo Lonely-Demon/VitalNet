@@ -70,21 +70,24 @@ export function computeEarsC2Signal(
   options: { useGuardBand?: boolean; minStdDevFloor?: number } = {},
 ) {
   const useGuardBand = options.useGuardBand !== false;
-  const historyLen = dailyHistory.length;
+  const requiredDays = useGuardBand ? BASELINE_DAYS + GUARD_BAND_DAYS : BASELINE_DAYS;
+  const paddedHistory = dailyHistory.length < requiredDays
+    ? Array(requiredDays - dailyHistory.length).fill(0).concat(dailyHistory)
+    : dailyHistory;
 
   let baselineWindow: number[];
   let effectiveGuardBand = 0;
 
-  if (useGuardBand && historyLen >= BASELINE_DAYS + GUARD_BAND_DAYS) {
+  if (useGuardBand) {
     // Window [t-9 .. t-3] (skipping t-2 and t-1)
-    const startIdx = historyLen - (BASELINE_DAYS + GUARD_BAND_DAYS);
-    const endIdx = historyLen - GUARD_BAND_DAYS;
-    baselineWindow = dailyHistory.slice(startIdx, endIdx);
+    const startIdx = paddedHistory.length - (BASELINE_DAYS + GUARD_BAND_DAYS);
+    const endIdx = paddedHistory.length - GUARD_BAND_DAYS;
+    baselineWindow = paddedHistory.slice(startIdx, endIdx);
     effectiveGuardBand = GUARD_BAND_DAYS;
   } else {
     // Fallback window [t-7 .. t-1] (skipping 0 days)
-    const startIdx = Math.max(0, historyLen - BASELINE_DAYS);
-    baselineWindow = dailyHistory.slice(startIdx, historyLen);
+    const startIdx = Math.max(0, paddedHistory.length - BASELINE_DAYS);
+    baselineWindow = paddedHistory.slice(startIdx, paddedHistory.length);
     effectiveGuardBand = 0;
   }
 
@@ -135,19 +138,10 @@ interface Bucket {
 export function computeEarsSignals(rows: EarsRow[], today: string, useGuardBand = true): EarsSignal[] {
   const buckets: Bucket[] = [];
   const bucketIndex = new Map<string, Map<string, Bucket>>();
-  let earliestDate: Date | null = null;
-
   for (const row of rows) {
     const facilityId = row.facility_id;
     const day = row.created_at ? toIstDayBucket(row.created_at) : "";
     if (!facilityId || !day) continue;
-
-    const d = new Date(day + "T00:00:00Z");
-    if (!isNaN(d.getTime())) {
-      if (!earliestDate || d < earliestDate) {
-        earliestDate = d;
-      }
-    }
 
     let bySymptom = bucketIndex.get(facilityId);
     if (!bySymptom) {
@@ -167,16 +161,11 @@ export function computeEarsSignals(rows: EarsRow[], today: string, useGuardBand 
   }
 
   const todayDate = new Date(today + "T00:00:00Z");
-  const historyLenDays = earliestDate
-    ? Math.round((todayDate.getTime() - earliestDate.getTime()) / (24 * 3600 * 1000))
-    : 0;
 
-  const effectiveGuard = (useGuardBand && historyLenDays >= BASELINE_DAYS + GUARD_BAND_DAYS) ? GUARD_BAND_DAYS : 0;
+  const startOffset = useGuardBand ? 1 + GUARD_BAND_DAYS : 1;
+  const endOffset = useGuardBand ? BASELINE_DAYS + GUARD_BAND_DAYS : BASELINE_DAYS;
 
   const baselineDays: string[] = [];
-  const startOffset = effectiveGuard === GUARD_BAND_DAYS ? 1 + GUARD_BAND_DAYS : 1;
-  const endOffset = effectiveGuard === GUARD_BAND_DAYS ? BASELINE_DAYS + GUARD_BAND_DAYS : BASELINE_DAYS;
-
   for (let i = startOffset; i <= endOffset; i++) {
     const d = new Date(todayDate);
     d.setUTCDate(d.getUTCDate() - i);
