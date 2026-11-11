@@ -93,6 +93,21 @@ async def list_active_facilities(
 
     facilities = query.execute().data or []
 
+    caller_district = None
+    if facility_id:
+        try:
+            caller_fac_res = (
+                db.table("facilities")
+                .select("district")
+                .eq("id", facility_id)
+                .maybe_single()
+                .execute()
+            )
+            if caller_fac_res and caller_fac_res.data:
+                caller_district = caller_fac_res.data.get("district")
+        except Exception as e:
+            logger.debug("Could not resolve caller facility district: %s", e)
+
     # Open (unreviewed) case load per facility — a decision-support ranking
     # signal, not authoritative bed availability (docs/DECISIONS.md §20).
     # A doctor's own RLS-scoped token can only see their OWN facility's
@@ -102,22 +117,40 @@ async def list_active_facilities(
     # instead of supabase_admin. It is deliberately limited to a
     # facility_id count — no patient data, no free text, no individual
     # case rows ever leave the database.
-    open_cases = db.rpc("fn_open_case_counts", {}).execute()
-    load_by_facility: dict[str, int] = {}
-    for row in open_cases.data or []:
-        fid = row.get("facility_id")
-        if fid:
-            load_by_facility[fid] = row.get("open_count", 0)
+    try:
+        open_cases = db.rpc("fn_open_case_counts", {}).execute()
+        load_by_facility: dict[str, int] = {}
+        for row in (open_cases.data if open_cases else []) or []:
+            fid = row.get("facility_id")
+            if fid:
+                load_by_facility[fid] = row.get("open_count", 0)
+    except Exception as e:
+        logger.debug("Could not fetch open case counts: %s", e)
+        load_by_facility = {}
 
     for f in facilities:
         f["open_case_count"] = load_by_facility.get(f["id"], 0)
 
-    # ADR §53: Lexicographic capacity-tier scoring deprioritizing full facilities.
-    # Capacity status rank: available (0) < limited/null (1) < full (2),
-    # with ties broken by open_case_count ascending, then name.
+    # Ordering prioritized by:
+    # 1. Tier hierarchy: district_hospital (0) < chc (2) < phc (3) (BUG-28)
+    # 2. District proximity: same district as caller facility prioritized
+    # 3. Capacity status rank: available (0) < limited/null (1) < full (2)
+    # 4. Open case load ascending
+    # 5. Name alphabetically
+    tier_rank = {
+        "district_hospital": 0,
+        "sdh": 1,
+        "sub_district_hospital": 1,
+        "chc": 2,
+        "phc": 3,
+        "sub_centre": 4,
+    }
     capacity_rank = {"available": 0, "limited": 1, "full": 2}
+
     facilities.sort(
         key=lambda f: (
+            tier_rank.get((f.get("type") or "").lower(), 99),
+            0 if (caller_district and f.get("district") == caller_district) else 1,
             capacity_rank.get(f.get("capacity_status") or "limited", 1),
             f.get("open_case_count", 0),
             f.get("name") or "",
@@ -229,6 +262,27 @@ async def create_referral(
         raise HTTPException(status_code=400, detail="Case has no facility to refer from")
     if receiving_facility_uuid == referring_facility_id:
         raise HTTPException(status_code=400, detail="Cannot refer a case to its own facility")
+
+    # Check for existing active referral on the same case (BUG-36)
+    try:
+        existing_active = (
+            db.table("referrals")
+            .select("id, status")
+            .eq("case_id", case_uuid)
+            .in_("status", ["pending", "acknowledged", "patient_arrived"])
+            .limit(1)
+            .execute()
+        )
+        if existing_active and existing_active.data:
+            active_ref = existing_active.data[0]
+            raise HTTPException(
+                status_code=409,
+                detail=f"An active referral already exists for this case (id: {active_ref.get('id')}, status: {active_ref.get('status')})",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("Could not query existing active referrals: %s", e)
 
     sbar_draft = build_sbar(case_row, {"reason": body.reason, "urgency": body.urgency})
     result = (

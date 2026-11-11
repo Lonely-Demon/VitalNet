@@ -120,16 +120,21 @@ async def export_case_data(
     }
 
 
-def _erase_case_row(case_uuid: str, case: dict) -> None:
+def _erase_case_row(case_uuid: str, case: dict, client=None) -> None:
     """
-    Anonymises rather than hard-deletes: identifying free-text fields on
-    `case_records`, narrative fields in `case_records.briefing`, and
-    `referrals.reason` / `referrals.sbar_draft` are replaced with a redaction marker,
-    and the case is soft-deleted (`deleted_at`) if not already.
-    Associated records in `case_attachments` and `client_events` are purged.
-    Vitals/symptoms/triage output/timestamps survive so aggregate reporting and
-    model retraining keep working on de-identified data.
+    Anonymises rather than hard-deletes: calls atomic fn_erase_case_pii RPC
+    (BUG-29, BUG-30, REG-03) to perform atomic redaction of case_records, referrals,
+    attachments, and client events. Returns immediately upon success without
+    redundant manual table updates. Falls back to manual table updates if RPC fails.
     """
+    target = client or supabase_admin
+    try:
+        rpc_res = target.rpc("fn_erase_case_pii", {"p_case_id": case_uuid}).execute()
+        if rpc_res and not getattr(rpc_res, "error", None):
+            return
+    except Exception as e:
+        logger.warning("fn_erase_case_pii RPC execution failed or not mocked: %s", e)
+
     update_body = {field: REDACTED for field in _ERASABLE_CASE_FIELDS}
     if case.get("deleted_at") is None:
         update_body["deleted_at"] = datetime.now(timezone.utc).isoformat()
@@ -151,13 +156,13 @@ def _erase_case_row(case_uuid: str, case: dict) -> None:
             "needs_review": False,
         }
 
-    supabase_admin.table("case_records").update(update_body).eq("id", case_uuid).execute()
-    supabase_admin.table("referrals").update({"reason": REDACTED, "sbar_draft": REDACTED}).eq("case_id", case_uuid).execute()
-    supabase_admin.table("case_attachments").delete().eq("case_id", case_uuid).execute()
+    target.table("case_records").update(update_body).eq("id", case_uuid).execute()
+    target.table("referrals").update({"reason": REDACTED, "sbar_draft": REDACTED}).eq("case_id", case_uuid).execute()
+    target.table("case_attachments").delete().eq("case_id", case_uuid).execute()
 
     client_id = case.get("client_id")
     if client_id:
-        supabase_admin.table("client_events").delete().eq("event_id", client_id).execute()
+        target.table("client_events").delete().eq("event_id", client_id).execute()
 
 
 @router.post("/{case_id}/erase")
@@ -173,7 +178,9 @@ async def erase_case_data(
     case = _fetch_case_or_404(case_uuid)
     _authorize_dsr_access(user, case)
 
-    _erase_case_row(case_uuid, case)
+    raw_token = extract_bearer_token(authorization)
+    db = get_supabase_for_user(raw_token) if raw_token else supabase_admin
+    _erase_case_row(case_uuid, case, client=db)
 
     log_phi_access(
         event_type=AuditEventType.PHI_ERASURE,

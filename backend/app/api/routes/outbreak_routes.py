@@ -95,21 +95,14 @@ def _compute_ears_signals(rows: list[dict], today: str, use_guard_band: bool = T
 
     today_date = datetime.fromisoformat(today).date() if isinstance(today, str) else today
 
-    # Determine history span in days
-    history_len_days = 0
-    if all_days:
-        try:
-            earliest_date = min(datetime.fromisoformat(d).date() for d in all_days)
-            history_len_days = (today_date - earliest_date).days
-        except Exception:
-            history_len_days = 0
-
-    if use_guard_band and history_len_days >= (BASELINE_DAYS + GUARD_BAND_DAYS):
-        # 2-day guard band window: [t-9 .. t-3] (skipping t-2 and t-1)
+    # Dense contiguous calendar date sequence in IST for EARS baseline calculation (BUG-14)
+    # When use_guard_band is enabled (EARS C2), baseline is strictly over the 7 historical
+    # calendar days [t-9 .. t-3], skipping the 2-day guard band [t-2, t-1].
+    # Days with zero cases are naturally evaluated as 0 via day_counts.get(d, 0).
+    if use_guard_band:
         start_offset = 1 + GUARD_BAND_DAYS
         end_offset = BASELINE_DAYS + GUARD_BAND_DAYS
     else:
-        # Fallback window: [t-7 .. t-1] (skipping 0 days)
         start_offset = 1
         end_offset = BASELINE_DAYS
 

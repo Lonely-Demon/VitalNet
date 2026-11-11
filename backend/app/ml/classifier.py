@@ -361,6 +361,75 @@ def _safety_net_check(form_data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+CORE_VITALS = [
+    "bp_systolic",
+    "bp_diastolic",
+    "heart_rate",
+    "spo2",
+    "temperature",
+]
+
+
+def assess_feature_completeness(form_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Assesses completeness of vital measurements on an intake form (BUG-19).
+    Matches packages/clinical-core::assessFeatureCompleteness:
+    - COMPLETE: All core vitals measured (age-appropriate: BP exempt for age < 5).
+    - PARTIAL_VITALS: 1–2 missing vitals, or >=3 missing vitals with at least 1 symptom.
+    - SPARSE_CONTEXT: >=3 missing vitals AND zero symptoms (forces lowConfidence = True).
+    Guards is_missing against NaN, None, non-finite, or <= 0.
+    Rejects whitespace-only chief complaints from COMPLETE status.
+    """
+    def _is_missing_vital(v: Any) -> bool:
+        if v is None:
+            return True
+        try:
+            val = float(v)
+            return not np.isfinite(val) or val <= 0
+        except (ValueError, TypeError):
+            return True
+
+    raw_age = form_data.get("patient_age") if form_data.get("patient_age") is not None else form_data.get("age")
+    raw_months = form_data.get("age_months") if form_data.get("age_months") is not None else form_data.get("ageMonths")
+
+    effective_age = resolve_effective_age(raw_age, raw_months)
+    is_pediatric = effective_age is not None and effective_age < 5
+
+    missing_vitals = []
+    missing_critical_vitals = []
+    for v in CORE_VITALS:
+        val = form_data.get(v)
+        if _is_missing_vital(val):
+            missing_vitals.append(v)
+            if not is_pediatric or (v != "bp_systolic" and v != "bp_diastolic"):
+                missing_critical_vitals.append(v)
+
+    raw_complaint = form_data.get("chief_complaint") or form_data.get("chiefComplaint")
+    is_whitespace_only_complaint = (
+        isinstance(raw_complaint, str) and len(raw_complaint) > 0 and len(raw_complaint.strip()) == 0
+    )
+
+    symptoms = form_data.get("symptoms") or []
+    if not isinstance(symptoms, (list, tuple, set)):
+        symptoms = []
+    missing_count = len(missing_critical_vitals)
+
+    if missing_count == 0 and not is_whitespace_only_complaint:
+        status = "COMPLETE"
+    elif missing_count <= 2 or len(symptoms) >= 1 or (missing_count == 0 and is_whitespace_only_complaint):
+        status = "PARTIAL_VITALS"
+    else:
+        status = "SPARSE_CONTEXT"
+
+    return {
+        "status": status,
+        "state": status,
+        "missing_critical_vitals": missing_critical_vitals,
+        "missing_vitals": missing_vitals,
+        "low_confidence": status == "SPARSE_CONTEXT",
+    }
+
+
 def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Run triage prediction for a patient.
@@ -382,6 +451,8 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
         [[features[name] for name in _feature_names]], dtype=np.float32
     )
 
+    completeness = assess_feature_completeness(form_data)
+
     # Contraindication/interaction flags (app/ml/contraindications.py) — an
     # independent, additive check that never changes the triage tier itself;
     # the caller (cases.py) folds any flag into needs_review. Computed
@@ -400,6 +471,9 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
             "safety_net_triggered": True,
             "low_confidence": False,
             "contraindication_flags": contraindication_flags,
+            "completeness_status": completeness["status"],
+            "completeness_state": completeness["status"],
+            "missing_vitals": completeness["missing_critical_vitals"],
         }
 
     # Layer 2 — trained model.
@@ -408,10 +482,14 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
     triage_level = _label_map[predicted_class]
     confidence = float(proba[predicted_class])
 
-    # Abstention flag (C2): weak decisions are surfaced as tentative.
+    # Abstention flag (C2): weak decisions or sparse context are surfaced as tentative.
     sorted_p = sorted(proba, reverse=True)
     margin = float(sorted_p[0] - sorted_p[1]) if len(sorted_p) > 1 else 1.0
-    low_confidence = confidence < LOW_CONFIDENCE_PROBA or margin < LOW_CONFIDENCE_MARGIN
+    low_confidence = (
+        confidence < LOW_CONFIDENCE_PROBA
+        or margin < LOW_CONFIDENCE_MARGIN
+        or completeness["status"] == "SPARSE_CONTEXT"
+    )
 
     # Layer 3 — NEWS2 concerning-vital floor (C1): never leave a concerning
     # single vital as ROUTINE. Deterministic, so it also resolves the
@@ -421,7 +499,7 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
         floor_reason = _news2_concerning_vital(form_data)
         if floor_reason:
             triage_level = "URGENT"
-            low_confidence = False
+            low_confidence = False if completeness["status"] != "SPARSE_CONTEXT" else True
 
     risk_driver = _generate_shap_explanation(feature_vector, predicted_class, "ROUTINE" if floor_reason else triage_level, form_data)
     if floor_reason:
@@ -440,6 +518,9 @@ def predict_triage(form_data: Dict[str, Any]) -> Dict[str, Any]:
         "news2_floor_triggered": bool(floor_reason),
         "low_confidence": low_confidence,
         "contraindication_flags": contraindication_flags,
+        "completeness_status": completeness["status"],
+        "completeness_state": completeness["status"],
+        "missing_vitals": completeness["missing_critical_vitals"],
     }
 
 
@@ -477,8 +558,33 @@ def _generate_shap_explanation(
             key=lambda kv: abs(kv[1]),
             reverse=True,
         )
-        # Keep only features that meaningfully pushed toward this class
-        top = [(name, val) for name, val in ranked if abs(val) > 1e-4][:3]
+        # Suppress unmeasured vitals and their derived metrics from risk drivers (BUG-19)
+        unmeasured_features = set()
+        def _is_unmeasured(v):
+            if v is None:
+                return True
+            try:
+                val = float(v)
+                return not np.isfinite(val) or val <= 0
+            except (ValueError, TypeError):
+                return True
+
+        if _is_unmeasured(form_data.get("bp_systolic")):
+            unmeasured_features.update(["bp_systolic", "pulse_pressure", "mean_arterial_pressure", "shock_index"])
+        if _is_unmeasured(form_data.get("bp_diastolic")):
+            unmeasured_features.update(["bp_diastolic", "pulse_pressure", "mean_arterial_pressure"])
+        if _is_unmeasured(form_data.get("heart_rate")):
+            unmeasured_features.update(["heart_rate", "shock_index"])
+        if _is_unmeasured(form_data.get("spo2")):
+            unmeasured_features.update(["spo2", "spo2_age_ratio"])
+        if _is_unmeasured(form_data.get("temperature")):
+            unmeasured_features.update(["temperature", "temp_deviation"])
+
+        # Keep only features that meaningfully pushed toward this class and were measured
+        top = [
+            (name, val) for name, val in ranked
+            if abs(val) > 1e-4 and name not in unmeasured_features
+        ][:3]
 
         if not top:
             return f"No single dominant factor identified. Classified as {triage_level}."

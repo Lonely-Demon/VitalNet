@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from slowapi import Limiter
 
-from app.core.auth import require_role, verify_sub_for_rate_limit
+from app.core.auth import require_role, verify_sub_for_rate_limit, _verify_token, _resolve_profile
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
 from app.core.database import get_supabase_for_user, extract_bearer_token
@@ -71,6 +71,23 @@ def _parse_uuid(value: str, field: str = "id") -> str:
         return str(UUID(value))
     except Exception:
         raise HTTPException(status_code=400, detail=f"Invalid {field}")
+
+
+UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+SYSTEM_SUBMITTER_UUID = "00000000-0000-0000-0000-000000000000"
+SYSTEM_FACILITY_UUID = "00000000-0000-0000-0000-000000000001"
+
+
+def _triage_priority_from_tier(tier: str | None) -> int:
+    """
+    Aligns with PostgreSQL check constraint case_records_triage_priority_map_check:
+    EMERGENCY = 0, URGENT = 1, ROUTINE = 2.
+    """
+    if tier == "EMERGENCY":
+        return 0
+    elif tier == "URGENT":
+        return 1
+    return 2
 
 
 def _normalized_iso_ts(value: str, field: str) -> str:
@@ -206,25 +223,33 @@ async def submit_case(
         triage_result["deterioration_alert"] = deterioration_alert
         triage_result["deterioration_visit_count"] = deterioration_visit_count
 
-        # ADR §52: Pre-fetch trailing 3-visit longitudinal trajectory before briefing generation
+        # Trajectory query via fn_patient_recent_trajectory RPC (BUG-54) with query fallback
         prior_visits = []
         if form.patient_key:
             try:
-                pv_res = (
-                    db.table("case_records")
-                    .select(
-                        "created_at, triage_level, bp_systolic, bp_diastolic, "
-                        "spo2, heart_rate, temperature, chief_complaint"
-                    )
-                    .eq("patient_key", form.patient_key)
-                    .is_("deleted_at", "null")
-                    .order("created_at", desc=True)
-                    .limit(3)
-                    .execute()
-                )
-                prior_visits = pv_res.data or []
+                traj_res = db.rpc(
+                    "fn_patient_recent_trajectory",
+                    {"p_patient_key": form.patient_key, "p_limit": 3},
+                ).execute()
+                prior_visits = traj_res.data or []
             except Exception as e:
-                logger.warning("Could not pre-fetch longitudinal trajectory: %s", e)
+                logger.warning("fn_patient_recent_trajectory RPC failed, falling back to query: %s", e)
+                try:
+                    pv_res = (
+                        db.table("case_records")
+                        .select(
+                            "created_at, triage_level, bp_systolic, bp_diastolic, "
+                            "spo2, heart_rate, temperature, chief_complaint"
+                        )
+                        .eq("patient_key", form.patient_key)
+                        .is_("deleted_at", "null")
+                        .order("created_at", desc=True)
+                        .limit(3)
+                        .execute()
+                    )
+                    prior_visits = pv_res.data or []
+                except Exception as e2:
+                    logger.warning("Could not pre-fetch longitudinal trajectory: %s", e2)
         triage_result["prior_visits"] = prior_visits
 
         briefing = await generate_briefing(form_data, triage_result)
@@ -269,6 +294,7 @@ async def submit_case(
             if form.consent_captured_at
             else datetime.now(timezone.utc).isoformat(),
             "triage_level": triage_result["triage_level"],
+            "triage_priority": _triage_priority_from_tier(triage_result["triage_level"]),
             "triage_confidence": triage_result["confidence_score"],
             "risk_driver": triage_result["risk_driver"],
             "triage_model_version": triage_result.get("model_version"),
@@ -296,25 +322,48 @@ async def submit_case(
         # If an earlier emergency SMS alert created an offline stub (is_sms_stub = true),
         # promote the record with the complete HTTPS submission instead of dropping it.
         client_uuid_str = record["client_id"]
+        is_new_or_promoted = False
         existing_res = (
             db.table("case_records")
-            .select("id, is_sms_stub, submitted_by, facility_id, created_at")
+            .select(
+                "id, is_sms_stub, submitted_by, facility_id, created_at, "
+                "reviewed_at, overridden_triage, triage_level, triage_priority, needs_review"
+            )
             .eq("client_id", client_uuid_str)
             .maybe_single()
             .execute()
         )
         existing_row = (existing_res.data if existing_res else None) or {}
+        if isinstance(existing_row, list):
+            existing_row = existing_row[0] if existing_row else {}
 
         if existing_row and existing_row.get("is_sms_stub"):
-            record["is_sms_stub"] = False
-            record["updated_at"] = datetime.now(timezone.utc).isoformat()
+            # Verify submitter authorization before promoting stub (BUG-52)
+            if existing_row.get("submitted_by") and existing_row.get("submitted_by") != user["sub"]:
+                raise HTTPException(status_code=403, detail="Not authorized to promote this SMS stub")
+
+            # Preserve clinician review if already conducted on the emergency stub (BUG-52)
+            if existing_row.get("reviewed_at") is not None or existing_row.get("overridden_triage") is not None:
+                record["triage_level"] = existing_row.get("triage_level", record["triage_level"])
+                record["triage_priority"] = existing_row.get("triage_priority") if existing_row.get("triage_priority") is not None else record["triage_priority"]
+                record["needs_review"] = existing_row.get("needs_review", False)
+
+            # Exclude immutables from update payload
+            update_payload = {
+                k: v for k, v in record.items()
+                if k not in {"id", "client_id", "submitted_by", "facility_id"}
+            }
+            update_payload["is_sms_stub"] = False
+            update_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+
             update_res = (
                 db.table("case_records")
-                .update(record)
+                .update(update_payload)
                 .eq("client_id", client_uuid_str)
                 .execute()
             )
             response = update_res.data[0] if (update_res and update_res.data) else record
+            is_new_or_promoted = True
         elif existing_row:
             existing_fetch = (
                 db.table("case_records")
@@ -326,6 +375,7 @@ async def submit_case(
                 .execute()
             )
             response = existing_fetch.data[0] if (existing_fetch and existing_fetch.data) else record
+            is_new_or_promoted = False
         else:
             result = (
                 db.table("case_records")
@@ -343,8 +393,10 @@ async def submit_case(
                     .execute()
                 )
                 response = existing_fetch.data[0] if (existing_fetch and existing_fetch.data) else record
+                is_new_or_promoted = False
             else:
                 response = result.data[0]
+                is_new_or_promoted = True
 
         log_phi_access(
             event_type=AuditEventType.PHI_CREATE,
@@ -364,14 +416,14 @@ async def submit_case(
 
         # Genuinely new submission (not a retried duplicate) — record the
         # business metric once, not on every retry (docs/SLO.md).
-        if bool(result.data):
+        if is_new_or_promoted:
             record_triage_classification(triage_result["triage_level"])
 
         # Genuinely new EMERGENCY case (not a retried duplicate) — notify the
         # facility's subscribed doctors. Background task: never adds latency
         # to the ASHA worker's submission response, and push_emergency_alert()
         # itself no-ops safely if VAPID isn't configured.
-        if bool(result.data) and triage_result["triage_level"] == "EMERGENCY":
+        if is_new_or_promoted and triage_result["triage_level"] == "EMERGENCY":
             background_tasks.add_task(
                 push_emergency_alert,
                 facility_id,
@@ -774,6 +826,159 @@ async def get_cases_by_patient_key(
     return {"cases": rows}
 
 
+# ── Due Case Follow-ups (REG-06) ───────────────────────────────────────────────
+
+
+@router.get("/api/cases/followups/due")
+@limiter.limit("60/minute")
+async def get_due_followups(
+    request: Request,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin", "supervisor", "super_admin")),
+    due_before: str | None = None,
+    facility_id: str | None = None,
+    limit: int = 50,
+):
+    """
+    R5 (REG-06): Parity endpoint for due follow-up cases.
+    Queries cases where follow_up_required is True, deleted_at is null,
+    and follow_up_completed_at is null.
+    Facility-scoped for doctor and admin; submitter-scoped for asha_worker.
+    """
+    raw_token = extract_bearer_token(authorization)
+    db = get_supabase_for_user(raw_token)
+    role = _resolved_role(user)
+    user_facility = _resolved_facility(user)
+
+    bounded_limit = max(1, min(limit, 100))
+
+    query = (
+        db.table("case_records")
+        .select(
+            "id, client_id, patient_name, patient_age, patient_sex, patient_location, chief_complaint, "
+            "triage_level, follow_up_required, follow_up_due_at, facility_id, submitted_by, created_at"
+        )
+        .eq("follow_up_required", True)
+        .is_("deleted_at", "null")
+        .is_("follow_up_completed_at", "null")
+        .order("follow_up_due_at", desc=False)
+        .limit(bounded_limit)
+    )
+
+    if due_before:
+        query = query.lte("follow_up_due_at", _normalized_iso_ts(due_before, "due_before"))
+
+    if role == "asha_worker":
+        query = query.eq("submitted_by", user.get("sub"))
+    elif role in ("doctor", "admin"):
+        # Scoped strictly to doctor/admin's assigned facility
+        scope_facility = user_facility or facility_id
+        if scope_facility:
+            query = query.eq("facility_id", scope_facility)
+    else:
+        # super_admin or supervisor: can optionally filter by facility_id query param
+        if facility_id:
+            query = query.eq("facility_id", facility_id)
+
+    try:
+        res = query.execute()
+        rows = res.data or []
+    except Exception as e:
+        logger.warning("followups/due query failed: %s", e)
+        raise HTTPException(status_code=502, detail="Follow-up cases query failed — try again")
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_READ,
+        user_id=user.get("sub", "unknown"),
+        user_role=role,
+        resource_type="case_records",
+        resource_id=None,
+        facility_id=user_facility,
+        ip_address=get_client_ip(request),
+        details={"view": "followups_due", "count": len(rows)},
+    )
+
+    return {"cases": rows, "count": len(rows)}
+
+
+# ── Complete Case Follow-up (REG-06) ───────────────────────────────────────────
+
+
+@router.post("/api/cases/{case_id}/followup-complete")
+@limiter.limit("30/minute")
+async def complete_case_followup(
+    request: Request,
+    case_id: str,
+    authorization: str = Header(None),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin", "super_admin")),
+):
+    """
+    R5 (REG-06): Mark a case follow-up as completed.
+    Guards case_id with UUID regex, facility-scopes doctor and admin,
+    and updates follow_up_completed_at and follow_up_required = False.
+    """
+    if not UUID_REGEX.match(case_id):
+        raise HTTPException(status_code=400, detail="Invalid case ID format; UUID required")
+
+    raw_token = extract_bearer_token(authorization)
+    db = get_supabase_for_user(raw_token)
+    role = _resolved_role(user)
+    user_facility = _resolved_facility(user)
+
+    res = (
+        db.table("case_records")
+        .select("id, facility_id, submitted_by, deleted_at")
+        .eq("id", case_id)
+        .maybe_single()
+        .execute()
+    )
+    case_row = (res.data if res else None) or {}
+    if not case_row or case_row.get("deleted_at") is not None:
+        raise HTTPException(status_code=404, detail="Case not found or already deleted")
+
+    if role == "asha_worker":
+        if case_row.get("submitted_by") != user.get("sub"):
+            raise HTTPException(status_code=403, detail="Not authorized for this case")
+    elif role in ("doctor", "admin"):
+        if not user_facility or user_facility != case_row.get("facility_id"):
+            raise HTTPException(status_code=403, detail="Not authorized to access cases outside your facility")
+    elif role == "super_admin":
+        pass
+    else:
+        raise HTTPException(status_code=403, detail="Not authorized for this case")
+
+    completed_at = datetime.now(timezone.utc).isoformat()
+    update_res = (
+        db.table("case_records")
+        .update({
+            "follow_up_completed_at": completed_at,
+            "follow_up_required": False,
+        })
+        .eq("id", case_id)
+        .is_("deleted_at", "null")
+        .execute()
+    )
+    if not update_res or not update_res.data:
+        raise HTTPException(status_code=404, detail="Case not found or already deleted")
+
+    log_phi_access(
+        event_type=AuditEventType.PHI_UPDATE,
+        user_id=user.get("sub", "unknown"),
+        user_role=role,
+        resource_type="case_records",
+        resource_id=case_id,
+        facility_id=case_row.get("facility_id"),
+        ip_address=get_client_ip(request),
+        details={"action": "followup_complete", "follow_up_completed_at": completed_at},
+    )
+
+    return {
+        "status": "followup_completed",
+        "case_id": case_id,
+        "follow_up_completed_at": completed_at,
+    }
+
+
 # ── Get Case Detail ───────────────────────────────────────────────────────────────
 
 
@@ -877,7 +1082,7 @@ async def revoke_case_consent(
     request: Request,
     client_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("admin", "doctor", "asha_worker")),
+    user: dict = Depends(require_role("admin", "doctor", "asha_worker", "super_admin")),
 ):
     """
     ADR §55: Offline consent revocation tombstone drain.
@@ -885,44 +1090,65 @@ async def revoke_case_consent(
     narratives and associated attachments/events.
     Returns 200 on success, or 404/409 which cleanly dequeue from client outbox.
     """
-    from app.api.routes.dsr_routes import _erase_case_row, REDACTED
-    from app.core.database import supabase_admin
+    if not UUID_REGEX.match(client_id):
+        raise HTTPException(status_code=400, detail="Invalid case ID format; UUID required")
+
+    raw_token = extract_bearer_token(authorization)
+    db = get_supabase_for_user(raw_token)
+    role = _resolved_role(user)
+    facility_id = _resolved_facility(user)
 
     res = (
-        supabase_admin.table("case_records")
+        db.table("case_records")
         .select("*")
         .eq("client_id", client_id)
         .maybe_single()
         .execute()
     )
-    case_row = res.data if res else None
+    case_row = (res.data if res else None) or {}
     if not case_row:
         res = (
-            supabase_admin.table("case_records")
+            db.table("case_records")
             .select("*")
             .eq("id", client_id)
             .maybe_single()
             .execute()
         )
-        case_row = res.data if res else None
+        case_row = (res.data if res else None) or {}
 
     if not case_row:
         raise HTTPException(status_code=404, detail="Case not found for revocation")
-
-    role = _resolved_role(user)
-    facility_id = _resolved_facility(user)
+    # De Morgan's Law fix (BUG-09):
+    # asha_worker may only revoke their own submitted case within their facility
     if role == "asha_worker":
-        if case_row.get("submitted_by") != user.get("sub") and case_row.get("facility_id") != facility_id:
+        if case_row.get("submitted_by") != user.get("sub"):
             raise HTTPException(status_code=403, detail="Not authorized to revoke consent for this case")
-    elif role == "doctor":
-        if facility_id and case_row.get("facility_id") != facility_id:
+        if facility_id and case_row.get("facility_id") and case_row.get("facility_id") != facility_id:
             raise HTTPException(status_code=403, detail="Not authorized to access cases outside your facility")
+    elif role in ("doctor", "admin"):
+        if not facility_id or facility_id != case_row.get("facility_id"):
+            raise HTTPException(status_code=403, detail="Not authorized to access cases outside your facility")
+    elif role == "super_admin":
+        pass
+    else:
+        raise HTTPException(status_code=403, detail="Not authorized for this case")
 
     # If already erased, return idempotently
-    if case_row.get("deleted_at") is not None and case_row.get("patient_name") == REDACTED:
+    REDACTED_TEXT = "[REDACTED — DSR ERASURE]"
+    if case_row.get("deleted_at") is not None and case_row.get("patient_name") == REDACTED_TEXT:
         return {"status": "already_revoked", "client_id": client_id, "case_id": case_row["id"]}
 
-    _erase_case_row(case_row["id"], case_row)
+    # Call atomic stored procedure fn_erase_case_pii directly (BUG-10)
+    try:
+        rpc_res = db.rpc("fn_erase_case_pii", {"p_case_id": case_row["id"]}).execute()
+        if rpc_res and getattr(rpc_res, "data", None) and isinstance(rpc_res.data, dict):
+            if rpc_res.data.get("status") == "already_revoked":
+                return {"status": "already_revoked", "client_id": client_id, "case_id": case_row["id"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("fn_erase_case_pii RPC call in revoke_case_consent failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"DSR erasure failed: {str(e)}")
 
     log_phi_access(
         event_type=AuditEventType.PHI_ERASURE,
@@ -936,4 +1162,140 @@ async def revoke_case_consent(
     )
 
     return {"status": "consent_revoked", "client_id": client_id, "case_id": case_row["id"]}
+
+
+# ── Inbound SMS Gateway Ingest (BUG-23) ───────────────────────────────────────
+
+
+@router.post("/api/cases/sms-gateway")
+@limiter.limit("60/minute")
+async def ingest_sms_gateway(
+    request: Request,
+    authorization: str = Header(None),
+):
+    """
+    Inbound SMS gateway endpoint (BUG-23). Accepts inbound emergency SMS payloads,
+    resolves or creates an offline stub in case_records (is_sms_stub = True),
+    and queues case for clinician review.
+    """
+    from app.services.sms import decode_emergency_sms, parse_inbound_sms, SmsParseError, validate_e164_phone_number
+
+    content_type = request.headers.get("content-type", "")
+    body_text = ""
+    sender = None
+    facility_id = None
+    if "application/json" in content_type:
+        try:
+            data = await request.json()
+            body_text = data.get("body") or data.get("message") or data.get("text") or ""
+            sender = data.get("sender") or data.get("from")
+            facility_id = data.get("facility_id")
+        except Exception:
+            body_text = ""
+    else:
+        raw_body = await request.body()
+        body_text = raw_body.decode("utf-8", errors="ignore").strip()
+
+    if not body_text:
+        raise HTTPException(status_code=400, detail="Empty SMS body")
+
+    if sender and not validate_e164_phone_number(sender):
+        logger.warning("SMS gateway received message from non-E.164 sender: %s", sender)
+
+    raw_token = extract_bearer_token(authorization)
+    user = None
+    if raw_token:
+        try:
+            user = _verify_token(raw_token)
+            if user and user.get("sub"):
+                _, _, u_fac = _resolve_profile(user["sub"], raw_token)
+                if u_fac:
+                    user["resolved_facility_id"] = u_fac
+        except Exception:
+            user = None
+
+    db = get_supabase_for_user(raw_token) if raw_token else None
+
+    decoded = None
+    if "VN1:" in body_text:
+        try:
+            decoded = decode_emergency_sms(body_text)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid VN1 frame: {e}")
+    else:
+        try:
+            parsed = parse_inbound_sms(body_text)
+            decoded = {
+                "client_id": str(uuid_lib.uuid4()),
+                "patient_age": parsed.patient_age,
+                "patient_sex": parsed.patient_sex,
+                "symptoms": parsed.symptoms,
+                "triage_level": "ROUTINE",
+                "tier": "ROUTINE",
+            }
+        except SmsParseError as spe:
+            raise HTTPException(status_code=400, detail=spe.reason)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid SMS: {e}")
+
+    client_id = decoded.get("client_id") or str(uuid_lib.uuid4())
+    patient_key = f"sms_{client_id}"
+    triage_level = decoded.get("triage_level") or decoded.get("tier") or "ROUTINE"
+    triage_priority = _triage_priority_from_tier(triage_level)
+    submitted_by = (user.get("sub") if user else None) or SYSTEM_SUBMITTER_UUID
+    resolved_facility_id = (
+        facility_id
+        or decoded.get("facility_id")
+        or (user.get("resolved_facility_id") if user else None)
+        or SYSTEM_FACILITY_UUID
+    )
+
+    stub_record = {
+        "client_id": client_id,
+        "is_sms_stub": True,
+        "submitted_by": submitted_by,
+        "facility_id": resolved_facility_id,
+        "patient_name": "Emergency Patient (SMS)",
+        "patient_location": "Community (SMS Intake)",
+        "complaint_duration": "acute (<24h)",
+        "patient_key": patient_key,
+        "patient_age": decoded.get("patient_age"),
+        "patient_sex": decoded.get("patient_sex"),
+        "symptoms": decoded.get("symptoms") or [],
+        "bp_systolic": decoded.get("bp_systolic"),
+        "bp_diastolic": decoded.get("bp_diastolic"),
+        "spo2": decoded.get("spo2"),
+        "heart_rate": decoded.get("heart_rate"),
+        "temperature": decoded.get("temperature"),
+        "is_pregnant": decoded.get("is_pregnant", False),
+        "triage_level": triage_level,
+        "triage_priority": triage_priority,
+        "triage_confidence": 0.85,
+        "risk_driver": "SMS Gateway Emergency Stub Intake",
+        "needs_review": True,
+        "chief_complaint": "[SMS Emergency Alert Stub — Pending Full Sync]",
+        "consent_captured": True,
+        "consent_captured_at": datetime.now(timezone.utc).isoformat(),
+        "created_offline": True,
+        "briefing": {
+            "triage_level": triage_level,
+            "primary_risk_driver": "Emergency SMS Alert Stub",
+            "recommended_immediate_actions": ["[Rule-Mandated] Await complete HTTPS transmission; monitor patient."],
+            "llm_status": "sms_stub",
+        },
+    }
+
+    if db:
+        try:
+            db.table("case_records").upsert(stub_record, on_conflict="client_id", ignore_duplicates=True).execute()
+        except Exception as e:
+            logger.warning("Could not persist SMS stub to database: %s", e)
+
+    return {
+        "status": "queued",
+        "client_id": client_id,
+        "patient_key": patient_key,
+        "triage_level": stub_record["triage_level"],
+        "is_sms_stub": True,
+    }
 

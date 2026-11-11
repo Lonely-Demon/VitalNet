@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Optional, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -145,12 +146,12 @@ async def list_users(
         profile = profiles_by_id.get(str(au.id), {})
         result.append({
             'id':            str(au.id),
-            'email':         _mask_csv_value(au.email),
-            'full_name':     _mask_csv_value(profile.get('full_name', '')),
+            'email':         au.email,
+            'full_name':     profile.get('full_name', ''),
             'role':          profile.get('role', 'asha_worker'),
             'facility_id':   profile.get('facility_id'),
             'facility_name': (profile.get('facilities') or {}).get('name'),
-            'asha_id':       _mask_csv_value(profile.get('asha_id')),
+            'asha_id':       profile.get('asha_id'),
             'is_active':     profile.get('is_active', True),
             'created_at':    str(au.created_at),
             'last_sign_in':  str(au.last_sign_in_at) if au.last_sign_in_at else None,

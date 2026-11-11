@@ -7,10 +7,12 @@ Tier 4: Gemini 2.5 Flash-Lite (on Gemini Flash rate limit)
 All tiers share the same output schema enforcement.
 The triage_level from the ML classifier is locked — no LLM can override it.
 """
+import asyncio
 import json
 import logging
-import asyncio
 import re
+import time
+from enum import Enum
 from pathlib import Path
 
 import groq
@@ -101,7 +103,26 @@ def _parse_llm_json(raw: str) -> dict:
 
 # ─── Patient context builder ──────────────────────────────────────────────────
 
-_PROMPT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+_PROMPT_CONTROL_CHARS_RE = re.compile(
+    r"[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]"
+)
+_SCRIPT_TAG_RE = re.compile(
+    r"<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>", re.IGNORECASE
+)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+_INJECTION_PATTERNS = [
+    re.compile(
+        r"(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|system)\s+(?:instructions?|directions?|commands?|rules?|prompts?)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|[\s\[\(\{])(?:system|human|assistant|user|ai|developer)\s*[\]\)\}]?\s*:",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:you are now|pretend you are|act as)\s+(?:a|an)\b", re.IGNORECASE),
+    re.compile(r"\b(?:jailbreak|dan mode|developer mode)\b", re.IGNORECASE),
+]
 
 
 def _sanitize_field(val, max_len: int = 300) -> str:
@@ -109,16 +130,26 @@ def _sanitize_field(val, max_len: int = 300) -> str:
     Neutralise prompt-injection attempts in free-text fields before they
     are interpolated into the LLM context. ASHA-entered text (observations,
     chief complaint, known conditions) is patient DATA, never instructions —
-    strip control characters, neutralise markdown/tag delimiters that could
-    fake message/role boundaries, and hard-cap length so a single field
-    cannot dominate the prompt budget.
+    strip Unicode zero-width, formatting, and BiDi control characters,
+    neutralise script/HTML tags and markdown delimiters, evaluate prompt
+    injection patterns (including bracketed role tags), and hard-cap length
+    so a single field cannot dominate the prompt budget (REG-04).
     """
     if val is None:
         return ""
-    s = _PROMPT_CONTROL_CHARS_RE.sub(" ", str(val))
-    s = s.replace("```", "").replace("<", "[").replace(">", "]")
+    # Strip Unicode zero-width, formatting, and BiDi control characters with "" before evaluating prompt injection rules
+    s = _PROMPT_CONTROL_CHARS_RE.sub("", str(val))
+    s = _SCRIPT_TAG_RE.sub("", s)
+    s = _HTML_TAG_RE.sub(" ", s)
+    s = s.replace("```", "")
+    for pattern in _INJECTION_PATTERNS:
+        s = pattern.sub("[REDACTED]", s)
+    s = s.replace("<", "[").replace(">", "]")
     s = re.sub(r"\s+", " ", s).strip()
     return s[:max_len]
+
+
+sanitize_for_prompt = _sanitize_field
 
 
 def _build_patient_context(form_data: dict, triage_result: dict) -> str:
@@ -238,7 +269,66 @@ async def _call_gemini(model_name: str, patient_context: str) -> dict:
 
 # ─── Main entry point — fully async with 6.5s circuit breaker ────────────────
 
-CIRCUIT_BREAKER_TIMEOUT = 6.5  # ADR §52: 6.5s circuit-breaker deadline
+# ─── Shared Cross-Request Circuit Breaker (BUG-26, BUG-64) ───────────────────
+
+class CircuitState(str, Enum):
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
+
+
+class LlmCircuitBreaker:
+    """
+    Cross-request circuit breaker state machine (BUG-26, BUG-64).
+    Trips to OPEN on 3 consecutive upstream failures (5xx, 429, timeouts).
+    Client 4xx validation errors do NOT increment failure count.
+    Recovery cooldown: 30 seconds before testing HALF_OPEN.
+    """
+
+    def __init__(self, failure_threshold: int = 3, recovery_timeout: float = 30.0):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.state = CircuitState.CLOSED
+        self.consecutive_failures = 0
+        self.last_failure_time = 0.0
+
+    def is_open(self) -> bool:
+        if self.state == CircuitState.OPEN:
+            if time.monotonic() - self.last_failure_time >= self.recovery_timeout:
+                self.state = CircuitState.HALF_OPEN
+                logger.info("LLM Circuit breaker transition: OPEN -> HALF_OPEN (probing upstream)")
+                return False
+            return True
+        return False
+
+    def record_success(self) -> None:
+        if self.state != CircuitState.CLOSED or self.consecutive_failures > 0:
+            logger.info("LLM Circuit breaker reset to CLOSED (success recorded)")
+        self.state = CircuitState.CLOSED
+        self.consecutive_failures = 0
+
+    def record_failure(self, is_upstream: bool = True) -> None:
+        if not is_upstream:
+            # Client errors (e.g. malformed request/validation) do NOT count as upstream failure (BUG-26)
+            return
+
+        self.consecutive_failures += 1
+        self.last_failure_time = time.monotonic()
+        if self.consecutive_failures >= self.failure_threshold or self.state == CircuitState.HALF_OPEN:
+            self.state = CircuitState.OPEN
+            logger.warning(
+                "LLM Circuit breaker TRIPPED to OPEN (%d consecutive upstream failures)",
+                self.consecutive_failures,
+            )
+
+    def reset(self) -> None:
+        self.state = CircuitState.CLOSED
+        self.consecutive_failures = 0
+        self.last_failure_time = 0.0
+
+
+llm_circuit_breaker = LlmCircuitBreaker()
+CIRCUIT_BREAKER_TIMEOUT = 6.5  # ADR §52: 6.5s per-request deadline
 
 
 async def _attempt_provider_chain(patient_context: str, triage_result: dict) -> dict:
@@ -299,29 +389,36 @@ async def _attempt_provider_chain(patient_context: str, triage_result: dict) -> 
 async def generate_briefing(form_data: dict, triage_result: dict) -> dict:
     """
     Generate a clinical briefing using the 4-tier fallback chain protected by
-    ADR §52's 6.5s circuit-breaker budget. If external tiers time out or fail,
-    executes Tier-5 Deterministic Clinical Synthesizer (_fallback_briefing).
-    Never raises — always returns a usable, clinically grounded briefing.
+    cross-request circuit breaker (BUG-26, BUG-64) and per-request 6.5s budget.
+    If circuit is OPEN or external tiers fail, fast-fails to Tier-5 clinical synthesizer.
     """
     if not _groq_client and not _gemini_configured:
         logger.warning("No LLM API keys configured — returning Tier-5 clinical synthesizer.")
         return _fallback_briefing(triage_result, form_data)
 
+    if llm_circuit_breaker.is_open():
+        logger.warning("LLM Circuit breaker is OPEN — fast-failing to Tier-5 clinical synthesizer.")
+        return _fallback_briefing(triage_result, form_data)
+
     patient_context = _build_patient_context(form_data, triage_result)
 
     try:
-        return await asyncio.wait_for(
+        res = await asyncio.wait_for(
             _attempt_provider_chain(patient_context, triage_result),
             timeout=CIRCUIT_BREAKER_TIMEOUT,
         )
+        llm_circuit_breaker.record_success()
+        return res
     except asyncio.TimeoutError:
         logger.warning(
-            "Circuit breaker tripped: LLM briefing exceeded %.1fs budget — returning Tier-5 clinical synthesizer.",
+            "Circuit breaker timeout: LLM briefing exceeded %.1fs budget — returning Tier-5 clinical synthesizer.",
             CIRCUIT_BREAKER_TIMEOUT,
         )
+        llm_circuit_breaker.record_failure(is_upstream=True)
         return _fallback_briefing(triage_result, form_data)
     except Exception as e:
         logger.warning("All LLM tiers exhausted (%s) — returning Tier-5 clinical synthesizer.", e)
+        llm_circuit_breaker.record_failure(is_upstream=True)
         return _fallback_briefing(triage_result, form_data)
 
 
@@ -332,6 +429,7 @@ def _fallback_briefing(triage_result: dict, form_data: dict | None = None) -> di
     Tier-5 Deterministic Rule-Cited SBAR Clinical Synthesizer (ADR §52).
     Constructs a structured, rule-cited clinical brief from VitalNet's deterministic
     engine when external LLMs fail or time out.
+    Separates rule-mandated vs symptom-inferred actions (BUG-27).
     """
     form_data = form_data or {}
     symptoms = form_data.get("symptoms") or []
@@ -364,18 +462,37 @@ def _fallback_briefing(triage_result: dict, form_data: dict | None = None) -> di
     for flag in triage_result.get("contraindication_flags") or []:
         red_flags.append(f"Contraindication warning: {flag}")
 
+    # Separate rule-mandated vs symptom-inferred actions (BUG-27)
+    rule_mandated_actions = []
     if level == "EMERGENCY":
-        actions = [
-            "ABCDE resuscitation, high-flow oxygen, IV access, urgent 108 referral, do not discharge without Medical Officer sign-off.",
-        ]
+        rule_mandated_actions.append(
+            "ABCDE resuscitation, high-flow oxygen, IV access, urgent 108 referral, do not discharge without Medical Officer sign-off."
+        )
     elif level == "URGENT":
-        actions = [
-            "Prioritize Medical Officer consultation, re-measure vitals in 30 minutes, symptomatic management.",
-        ]
+        rule_mandated_actions.append(
+            "Prioritize Medical Officer consultation, re-measure vitals in 30 minutes, symptomatic management."
+        )
     else:
-        actions = [
-            "Refer patient to PHC doctor for in-person evaluation and routine follow-up.",
-        ]
+        rule_mandated_actions.append(
+            "Refer patient to PHC doctor for in-person evaluation and routine follow-up."
+        )
+
+    symptom_inferred_actions = []
+    if "chest_pain" in symptoms:
+        symptom_inferred_actions.append("Obtain 12-lead ECG immediately; prepare sublingual nitrates/aspirin if not contraindicated.")
+    if "breathlessness" in symptoms:
+        symptom_inferred_actions.append("Keep patient in propped-up sitting position; initiate nebulization if wheezing.")
+    if "altered_consciousness" in symptoms:
+        symptom_inferred_actions.append("Check point-of-care capillary blood glucose immediately; secure airway.")
+    if "severe_bleeding" in symptoms:
+        symptom_inferred_actions.append("Apply direct pressure with sterile dressing; elevate bleeding limb if feasible.")
+    if "seizure" in symptoms:
+        symptom_inferred_actions.append("Position patient in recovery lateral position; prevent injury, do not place anything in mouth.")
+    if "high_fever" in symptoms:
+        symptom_inferred_actions.append("Cold sponging, oral rehydration, and prepare paracetamol as per age/weight guidelines.")
+
+    # Combined list with categorization prefixes, alongside distinct structured fields
+    actions = [f"[Rule-Mandated] {act}" for act in rule_mandated_actions] + [f"[Symptom-Inferred] {act}" for act in symptom_inferred_actions]
 
     recommended_tests = [
         "12-lead ECG",
@@ -390,6 +507,8 @@ def _fallback_briefing(triage_result: dict, form_data: dict | None = None) -> di
         "differential_diagnoses": differentials,
         "red_flags": red_flags,
         "recommended_immediate_actions": actions,
+        "rule_mandated_actions": rule_mandated_actions,
+        "symptom_inferred_actions": symptom_inferred_actions,
         "recommended_tests": recommended_tests,
         "uncertainty_flags": "Synthesized deterministically from VitalNet clinical rules engine (Tier-5 fallback).",
         "disclaimer": FIXED_DISCLAIMER,

@@ -53,8 +53,9 @@ supabase_anon: Client = create_client(
     settings.supabase_anon_key,
 )
 
-# Shared persistent HTTP connection pool transport to prevent TCP/TLS socket exhaustion under load
-_shared_transport = httpx.HTTPTransport(retries=3)
+# Shared persistent HTTP connection pool transport to prevent TCP/TLS socket exhaustion under load (BUG-43)
+_shared_limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+_shared_transport = httpx.HTTPTransport(retries=3, limits=_shared_limits)
 
 
 def get_supabase_for_user(raw_token: str) -> Client:

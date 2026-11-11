@@ -30,18 +30,23 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 # global-scope role — it is never restricted to a single facility, matching
 # the behaviour of GET /api/admin/stats. 'doctor' accounts are scoped to
 # their own facility_id.
-GLOBAL_SCOPE_ROLE = "supervisor"
+GLOBAL_SCOPE_ROLES = {"supervisor", "super_admin"}
+GLOBAL_SCOPE_ROLE = "supervisor"  # backward compat alias
 
 QUERY_TIMEOUT_SECONDS = 10
 
 
 def _resolve_scope(user: dict) -> tuple[str, str | None, bool]:
     """Returns (role, facility_id, scoped) — scoped is True unless the role
-    is global (admin) or has no facility_id, matching every analytics
-    endpoint's dashboard scoping."""
+    is in GLOBAL_SCOPE_ROLES. Raises HTTP 400 if a non-global role has no
+    facility assigned (fail-closed)."""
     role = _resolved_role(user)
     facility_id = _resolved_facility(user)
-    return role, facility_id, role != GLOBAL_SCOPE_ROLE and bool(facility_id)
+    if role in GLOBAL_SCOPE_ROLES:
+        return role, facility_id, False
+    if not facility_id:
+        raise HTTPException(status_code=400, detail="Account has no facility assigned")
+    return role, facility_id, True
 
 
 async def _run_query(query_fn, label: str, failures: list[str]):
@@ -65,7 +70,7 @@ async def _run_query(query_fn, label: str, failures: list[str]):
 async def get_summary(
     request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "admin")),
+    user: dict = Depends(require_role("doctor", "admin", "supervisor", "super_admin")),
 ):
     """
     Returns aggregate stats scoped to the user's facility.
@@ -159,7 +164,7 @@ async def get_summary(
 async def get_emergency_rate(
     request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "admin")),
+    user: dict = Depends(require_role("doctor", "admin", "supervisor", "super_admin")),
 ):
     """
     Returns EMERGENCY case rate over the last 30 days, grouped by week.
@@ -232,7 +237,7 @@ def _percentile(sorted_values: list[float], pct: float) -> float:
 async def get_response_times(
     request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "admin")),
+    user: dict = Depends(require_role("doctor", "admin", "supervisor", "super_admin")),
 ):
     """
     Per-tier response-time distribution (median/p90) over the last 30 days,
@@ -301,7 +306,7 @@ async def get_response_times(
 async def get_ml_agreement(
     request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "admin")),
+    user: dict = Depends(require_role("doctor", "admin", "supervisor", "super_admin")),
 ):
     """
     % of recorded outcomes where the doctor's actual_severity matches the
@@ -375,7 +380,7 @@ async def export_cases(
     date_from: str,
     date_to: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "admin")),
+    user: dict = Depends(require_role("doctor", "admin", "supervisor", "super_admin")),
 ):
     """
     Streams a CSV of case records in [date_from, date_to] for facility
@@ -418,6 +423,7 @@ async def export_cases(
                 .gte("created_at", parsed_from.isoformat())
                 .lte("created_at", parsed_to.isoformat())
                 .order("created_at", desc=False)
+                .order("id", desc=False)
                 .range(start, end)
             )
             return (q.eq("facility_id", facility_id) if scoped else q).execute()
