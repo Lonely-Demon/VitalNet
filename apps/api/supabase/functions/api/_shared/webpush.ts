@@ -119,7 +119,6 @@ export async function pushEmergencyAlert(
     body,
     ...(caseId ? { case_id: caseId } : {}),
   });
-  for (const sub of subscriptions) {
-    await sendOne(sub, payload);
-  }
+  // F-07: Bounded parallel fanout via Promise.allSettled eliminates serial head-of-line delay
+  await Promise.allSettled(subscriptions.map((sub) => sendOne(sub, payload)));
 }

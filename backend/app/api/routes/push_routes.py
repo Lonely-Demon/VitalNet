@@ -5,6 +5,7 @@ in app/services/push.py (called from cases.py as a background task, and
 from the escalation check below) — this module owns the endpoints.
 """
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -96,7 +97,7 @@ async def check_emergency_escalations(
             status_code=503,
             detail="Escalation scheduler endpoint disabled: INTERNAL_SCHEDULER_TOKEN not configured",
         )
-    if not x_internal_scheduler_token or x_internal_scheduler_token != expected_token:
+    if not x_internal_scheduler_token or not secrets.compare_digest(x_internal_scheduler_token, expected_token):
         raise HTTPException(status_code=403, detail="Invalid or missing scheduler token")
 
     threshold = (datetime.now(timezone.utc) - timedelta(minutes=ESCALATION_THRESHOLD_MINUTES)).isoformat()

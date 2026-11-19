@@ -498,7 +498,7 @@ cases.post("/api/cases/sms-gateway", rateLimit(60, 60), async (c) => {
   }
 
   const rawAuth = c.req.header("authorization");
-  const webhookToken = c.req.header("x-sms-webhook-token") ?? c.req.header("x-webhook-token");
+  const webhookToken = c.req.header("x-sms-webhook-token") ?? c.req.header("x-webhook-token") ?? c.req.header("x-internal-scheduler-token");
   const config = getConfig();
 
   let user: AuthedUser | null = null;
@@ -599,8 +599,12 @@ cases.post("/api/cases/sms-gateway", rateLimit(60, 60), async (c) => {
   const stubRecord = {
     client_id: clientId,
     is_sms_stub: true,
-    submitted_by: user?.sub ?? (facilityId ? facilityId : "00000000-0000-0000-0000-000000000000"),
-    facility_id: facilityId ?? user?.resolvedFacilityId ?? "00000000-0000-0000-0000-000000000001",
+    submitted_by: user?.sub ?? "00000000-0000-0000-0000-000000000000",
+    facility_id: user
+      ? (user.resolvedRole === "super_admin"
+          ? (facilityId ?? user.resolvedFacilityId ?? "00000000-0000-0000-0000-000000000001")
+          : (user.resolvedFacilityId ?? "00000000-0000-0000-0000-000000000001"))
+      : (facilityId ?? "00000000-0000-0000-0000-000000000001"),
     patient_name: "Emergency Patient (SMS)",
     patient_location: "Community (SMS Intake)",
     complaint_duration: "acute (<24h)",
@@ -1055,7 +1059,7 @@ cases.patch("/api/cases/:case_id/outcome", rateLimit(30, 60), requireRole("docto
 cases.get(
   "/api/cases/followups/due",
   rateLimit(60, 60),
-  requireRole("asha_worker", "doctor", "admin", "supervisor", "super_admin"),
+  requireRole("asha_worker", "doctor", "admin", "super_admin"),
   async (c) => {
     const user = c.get("user");
     const rawToken = extractBearerToken(c.req.header("authorization"));

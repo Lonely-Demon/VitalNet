@@ -35,16 +35,16 @@ const ERASABLE_CASE_FIELDS = [
   "human_review_reason",
 ] as const;
 
-interface CaseRecord {
+export interface CaseRecord {
   id: string;
   facility_id: string | null;
   deleted_at: string | null;
   [key: string]: unknown;
 }
 
-function authorizeDsrAccess(user: AuthedUser, caseRecord: CaseRecord): void {
-  // Super-admin or cross-facility supervisor can access any facility's case
-  if (user.resolvedRole === "super_admin" || user.resolvedRole === "supervisor") {
+export function authorizeDsrAccess(user: AuthedUser, caseRecord: CaseRecord): void {
+  // Super-admin can access any facility's case
+  if (user.resolvedRole === "super_admin") {
     return;
   }
   // PHC admin can ONLY access cases belonging to their own facility (VN-2026-08-VER-01)
@@ -245,7 +245,7 @@ dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin"
 dsr.post(
   "/api/security/cases/:client_id/revoke-consent",
   rateLimit(30, 60),
-  requireRole("admin", "doctor", "asha_worker"),
+  requireRole("admin", "doctor", "asha_worker", "super_admin"),
   async (c) => {
     const user = c.get("user");
     const clientId = c.req.param("client_id")!;

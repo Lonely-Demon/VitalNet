@@ -5,6 +5,7 @@ Extracted from main.py as part of Phase 12 architectural modularisation.
 import asyncio
 import logging
 import re
+import secrets
 import uuid as uuid_lib
 from datetime import datetime, timezone
 from uuid import UUID
@@ -15,7 +16,7 @@ from slowapi import Limiter
 from app.core.auth import require_role, verify_sub_for_rate_limit, _verify_token, _resolve_profile
 from app.core.audit import AuditEventType, get_client_ip, log_phi_access
 from app.core.config import settings
-from app.core.database import get_supabase_for_user, extract_bearer_token
+from app.core.database import get_supabase_for_user, supabase_admin, extract_bearer_token
 from app.core.metrics import record_triage_classification
 from app.models.schemas import IntakeForm, TriageOverride, CaseOutcomeInput, PATIENT_KEY_RE
 from app.ml.classifier import predict_triage
@@ -471,10 +472,9 @@ async def get_cases(
     Use before_time + before_priority + before_needs_review + before_id from
     the previous page's cursor fields to fetch the next page.
 
-    Scoping: 'admin' sees all facilities (global). 'doctor' accounts with a
-    facility_id are scoped to that facility only. Doctors without a
-    facility_id assigned see all cases (unscoped), same as before this
-    endpoint had scoping.
+    Scoping: 'admin' sees all facilities (global). 'doctor' accounts are
+    strictly scoped to their assigned facility_id (fail closed with HTTP 400
+    if no facility is assigned, VN-53-03).
     """
     raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
@@ -507,7 +507,9 @@ async def get_cases(
         .limit(limit + 1)                        # Fetch one extra to determine hasMore
     )
 
-    if role == "doctor" and facility_id:
+    if role == "doctor":
+        if not facility_id:
+            raise HTTPException(status_code=400, detail="Account has no facility assigned")
         query = query.eq("facility_id", facility_id)
 
     if normalized_before_time is not None and before_priority is not None:
@@ -834,7 +836,7 @@ async def get_cases_by_patient_key(
 async def get_due_followups(
     request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("asha_worker", "doctor", "admin", "supervisor", "super_admin")),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin", "super_admin")),
     due_before: str | None = None,
     facility_id: str | None = None,
     limit: int = 50,
@@ -844,6 +846,7 @@ async def get_due_followups(
     Queries cases where follow_up_required is True, deleted_at is null,
     and follow_up_completed_at is null.
     Facility-scoped for doctor and admin; submitter-scoped for asha_worker.
+    Supervisor is barred (HTTP 403, VN-53-04).
     """
     raw_token = extract_bearer_token(authorization)
     db = get_supabase_for_user(raw_token)
@@ -876,7 +879,7 @@ async def get_due_followups(
         if scope_facility:
             query = query.eq("facility_id", scope_facility)
     else:
-        # super_admin or supervisor: can optionally filter by facility_id query param
+        # super_admin: can optionally filter by facility_id query param
         if facility_id:
             query = query.eq("facility_id", facility_id)
 
@@ -1203,18 +1206,50 @@ async def ingest_sms_gateway(
         logger.warning("SMS gateway received message from non-E.164 sender: %s", sender)
 
     raw_token = extract_bearer_token(authorization)
+    webhook_token = (
+        request.headers.get("x-sms-webhook-token")
+        or request.headers.get("x-internal-scheduler-token")
+        or request.headers.get("x-webhook-token")
+    )
     user = None
+    is_webhook = False
+
     if raw_token:
         try:
             user = _verify_token(raw_token)
-            if user and user.get("sub"):
-                _, _, u_fac = _resolve_profile(user["sub"], raw_token)
-                if u_fac:
-                    user["resolved_facility_id"] = u_fac
+            if not user or not user.get("sub"):
+                raise HTTPException(status_code=401, detail="Invalid token")
+            u_active, u_role, u_fac = False, "", None
+            try:
+                u_active, u_role, u_fac = _resolve_profile(user["sub"], raw_token)
+            except Exception:
+                pass
+            u_role = u_role or user.get("role") or user.get("resolved_role")
+            if not u_role and user.get("sub") == SYSTEM_SUBMITTER_UUID:
+                u_role = "admin"
+            allowed_roles = {"asha_worker", "doctor", "admin", "super_admin"}
+            if not u_role or u_role not in allowed_roles:
+                raise HTTPException(status_code=403, detail=f"Role '{u_role}' is not permitted for SMS gateway")
+            user["resolved_role"] = u_role
+            if u_fac:
+                user["resolved_facility_id"] = u_fac
+        except HTTPException:
+            raise
         except Exception:
-            user = None
+            raise HTTPException(status_code=401, detail="Authentication failed")
+    elif (
+        webhook_token
+        and settings.internal_scheduler_token
+        and secrets.compare_digest(webhook_token, settings.internal_scheduler_token)
+    ):
+        is_webhook = True
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: valid JWT bearer token or webhook token required",
+        )
 
-    db = get_supabase_for_user(raw_token) if raw_token else None
+    db = get_supabase_for_user(raw_token) if raw_token else supabase_admin
 
     decoded = None
     if "VN1:" in body_text:
@@ -1243,12 +1278,22 @@ async def ingest_sms_gateway(
     triage_level = decoded.get("triage_level") or decoded.get("tier") or "ROUTINE"
     triage_priority = _triage_priority_from_tier(triage_level)
     submitted_by = (user.get("sub") if user else None) or SYSTEM_SUBMITTER_UUID
-    resolved_facility_id = (
-        facility_id
-        or decoded.get("facility_id")
-        or (user.get("resolved_facility_id") if user else None)
-        or SYSTEM_FACILITY_UUID
-    )
+    if user:
+        if user.get("resolved_role") == "super_admin":
+            resolved_facility_id = (
+                facility_id
+                or decoded.get("facility_id")
+                or user.get("resolved_facility_id")
+                or SYSTEM_FACILITY_UUID
+            )
+        else:
+            resolved_facility_id = user.get("resolved_facility_id") or SYSTEM_FACILITY_UUID
+    else:
+        resolved_facility_id = (
+            facility_id
+            or decoded.get("facility_id")
+            or SYSTEM_FACILITY_UUID
+        )
 
     stub_record = {
         "client_id": client_id,

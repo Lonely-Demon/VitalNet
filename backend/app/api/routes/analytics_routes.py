@@ -409,56 +409,66 @@ async def export_cases(
 
     role, facility_id, scoped = _resolve_scope(user)
 
-    rows: list[dict] = []
-    offset = 0
-    while True:
-        current_start = offset
-        current_end = offset + CHUNK_SIZE - 1
+    async def csv_stream():
+        total_rows = 0
+        try:
+            # Yield CSV header
+            header_buffer = io.StringIO()
+            writer = csv.DictWriter(header_buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
+            writer.writeheader()
+            yield header_buffer.getvalue()
 
-        def build_chunk_query(start=current_start, end=current_end):
-            q = (
-                db.table("case_records")
-                .select(",".join(EXPORT_COLUMNS))
-                .is_("deleted_at", "null")
-                .gte("created_at", parsed_from.isoformat())
-                .lte("created_at", parsed_to.isoformat())
-                .order("created_at", desc=False)
-                .order("id", desc=False)
-                .range(start, end)
+            offset = 0
+            while True:
+                current_start = offset
+                current_end = offset + CHUNK_SIZE - 1
+
+                def build_chunk_query(start=current_start, end=current_end):
+                    q = (
+                        db.table("case_records")
+                        .select(",".join(EXPORT_COLUMNS))
+                        .is_("deleted_at", "null")
+                        .gte("created_at", parsed_from.isoformat())
+                        .lte("created_at", parsed_to.isoformat())
+                        .order("created_at", desc=False)
+                        .order("id", desc=False)
+                        .range(start, end)
+                    )
+                    return (q.eq("facility_id", facility_id) if scoped else q).execute()
+
+                failures: list[str] = []
+                res = await _run_query(build_chunk_query, "export", failures)
+                if failures or res is None:
+                    break
+                chunk = res.data or []
+                if not chunk:
+                    break
+
+                total_rows += len(chunk)
+                row_buffer = io.StringIO()
+                chunk_writer = csv.DictWriter(row_buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
+                for row in chunk:
+                    chunk_writer.writerow(row)
+                yield row_buffer.getvalue()
+
+                if len(chunk) < CHUNK_SIZE:
+                    break
+                offset += CHUNK_SIZE
+        finally:
+            log_phi_access(
+                event_type=AuditEventType.PHI_EXPORT,
+                user_id=user.get("sub", "unknown"),
+                user_role=role,
+                resource_type="case_records",
+                resource_id=None,
+                facility_id=facility_id if scoped else None,
+                ip_address=get_client_ip(request),
+                details={"row_count": total_rows, "date_from": date_from, "date_to": date_to},
             )
-            return (q.eq("facility_id", facility_id) if scoped else q).execute()
-
-        failures: list[str] = []
-        res = await _run_query(build_chunk_query, "export", failures)
-        if failures or res is None:
-            raise HTTPException(status_code=502, detail="Export query failed — try a narrower date range")
-        chunk = res.data or []
-        rows.extend(chunk)
-        if len(chunk) < CHUNK_SIZE:
-            break
-        offset += CHUNK_SIZE
-
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(row)
-    buffer.seek(0)
-
-    log_phi_access(
-        event_type=AuditEventType.PHI_EXPORT,
-        user_id=user.get("sub", "unknown"),
-        user_role=role,
-        resource_type="case_records",
-        resource_id=None,
-        facility_id=facility_id if scoped else None,
-        ip_address=get_client_ip(request),
-        details={"row_count": len(rows), "date_from": date_from, "date_to": date_to},
-    )
 
     filename = f"vitalnet_cases_{parsed_from.date()}_{parsed_to.date()}.csv"
     return StreamingResponse(
-        buffer,
+        csv_stream(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
