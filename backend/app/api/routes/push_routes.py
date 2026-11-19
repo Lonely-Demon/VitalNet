@@ -81,7 +81,7 @@ async def check_emergency_escalations(
     request: Request,
     authorization: str = Header(None),
     x_internal_scheduler_token: str = Header(None, alias="X-Internal-Scheduler-Token"),
-    user: dict = Depends(require_role("admin", "supervisor")),
+    user: dict = Depends(require_role("admin", "supervisor", "super_admin")),
 ):
     """
     Meant to be called on a schedule (e.g. every 5 minutes) by an external
@@ -111,10 +111,13 @@ async def check_emergency_escalations(
         .lt("created_at", threshold)
     )
 
-    # Scope query by facility for PHC admins; supervisors can scan all facilities
+    # Scope query by facility for PHC admins; global roles (supervisor, super_admin) scan all facilities.
+    # Non-global accounts with no assigned facility fail closed (P53-B4).
     role = user.get("resolved_role", "")
     facility_id = user.get("resolved_facility_id")
-    if role != "supervisor" and facility_id:
+    if role not in ("supervisor", "super_admin"):
+        if not facility_id:
+            return {"checked": 0, "escalated": 0}
         query = query.eq("facility_id", facility_id)
 
     candidates = query.execute().data or []

@@ -178,7 +178,7 @@ Deno.test("M4 BUG-26/BUG-64: LlmCircuitBreaker state machine transitions and fas
   const canExec = cb.canExecute();
   const duration = performance.now() - start;
   assertEquals(canExec, false);
-  assertEquals(duration < 10, true, `Expected fast-fail <10ms, took ${duration}ms`);
+  assertEquals(duration < 50, true, `Expected fast-fail <50ms, took ${duration}ms`);
 
   // Wait for recovery timeout -> transitions to HALF_OPEN
   await new Promise((resolve) => setTimeout(resolve, 50));

@@ -68,7 +68,7 @@ async function fetchCaseOr404(caseUuid: string): Promise<CaseRecord> {
   return data as CaseRecord;
 }
 
-dsr.get("/api/admin/cases/:case_id/export", rateLimit(10, 60), requireRole("admin"), async (c) => {
+dsr.get("/api/admin/cases/:case_id/export", rateLimit(10, 60), requireRole("admin", "super_admin"), async (c) => {
   const user = c.get("user");
   const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
   const admin = getSupabaseAdmin();
@@ -174,7 +174,7 @@ async function eraseCaseRow(
   }
 }
 
-dsr.post("/api/admin/cases/:case_id/erase", rateLimit(10, 60), requireRole("admin"), async (c) => {
+dsr.post("/api/admin/cases/:case_id/erase", rateLimit(10, 60), requireRole("admin", "super_admin"), async (c) => {
   const user = c.get("user");
   const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
 
@@ -197,7 +197,7 @@ dsr.post("/api/admin/cases/:case_id/erase", rateLimit(10, 60), requireRole("admi
   return c.json({ status: "erased", case_id: caseUuid, redacted_fields: ERASABLE_CASE_FIELDS });
 });
 
-dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin"), async (c) => {
+dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin", "super_admin"), async (c) => {
   const user = c.get("user");
   const config = getConfig();
 

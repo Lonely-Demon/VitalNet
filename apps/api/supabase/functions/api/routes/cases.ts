@@ -663,7 +663,7 @@ cases.post("/api/cases/sms-gateway", rateLimit(60, 60), async (c) => {
 
 // ── Get Cases ──────────────────────────────────────────────────────────────
 
-cases.get("/api/cases", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
+cases.get("/api/cases", rateLimit(60, 60), requireRole("doctor", "admin", "super_admin"), async (c) => {
   const user = c.get("user");
   const rawToken = extractBearerToken(c.req.header("authorization"));
   const db = getSupabaseForUser(rawToken);
@@ -832,7 +832,7 @@ cases.get("/api/cases/mine", rateLimit(60, 60), requireRole("asha_worker", "admi
 cases.get(
   "/api/cases/by-patient-key/:patient_key",
   rateLimit(60, 60),
-  requireRole("asha_worker", "doctor", "admin"),
+  requireRole("asha_worker", "doctor", "admin", "super_admin"),
   async (c) => {
     const user = c.get("user");
     const key = (c.req.param("patient_key") || "").trim().toUpperCase();
@@ -890,174 +890,189 @@ cases.get(
 
 // ── Review Case ────────────────────────────────────────────────────────────
 
-cases.patch("/api/cases/:case_id/review", rateLimit(60, 60), requireRole("doctor", "admin"), async (c) => {
-  const user = c.get("user");
-  const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
-  const rawToken = extractBearerToken(c.req.header("authorization"));
-  const db = getSupabaseForUser(rawToken);
-  const role = user.resolvedRole;
+cases.patch(
+  "/api/cases/:case_id/review",
+  rateLimit(60, 60),
+  requireRole("doctor", "admin", "super_admin"),
+  async (c) => {
+    const user = c.get("user");
+    const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
+    const rawToken = extractBearerToken(c.req.header("authorization"));
+    const db = getSupabaseForUser(rawToken);
+    const role = user.resolvedRole;
 
-  const caseRow = await fetchAuthorizedCase(db, caseUuid, user);
+    const caseRow = await fetchAuthorizedCase(db, caseUuid, user);
 
-  let note = "Marked reviewed via API";
-  let doctorNotes: string | null = null;
-  try {
-    const rawBody = await c.req.json();
-    if (rawBody && typeof rawBody === "object") {
-      const bodyObj = rawBody as Record<string, unknown>;
-      const userNote = (typeof bodyObj.note === "string" ? bodyObj.note : null) ??
-        (typeof bodyObj.doctor_notes === "string" ? bodyObj.doctor_notes : null);
-      if (userNote) {
-        const sanitized = sanitizeDoctorNotes(userNote, 1000);
-        if (sanitized) {
-          note = sanitized;
-          doctorNotes = sanitized;
+    let note = "Marked reviewed via API";
+    let doctorNotes: string | null = null;
+    try {
+      const rawBody = await c.req.json();
+      if (rawBody && typeof rawBody === "object") {
+        const bodyObj = rawBody as Record<string, unknown>;
+        const userNote = (typeof bodyObj.note === "string" ? bodyObj.note : null) ??
+          (typeof bodyObj.doctor_notes === "string" ? bodyObj.doctor_notes : null);
+        if (userNote) {
+          const sanitized = sanitizeDoctorNotes(userNote, 1000);
+          if (sanitized) {
+            note = sanitized;
+            doctorNotes = sanitized;
+          }
         }
       }
+    } catch {
+      // Body optional on review
     }
-  } catch {
-    // Body optional on review
-  }
 
-  const updatePayload: Record<string, unknown> = {
-    reviewed_by: user.sub,
-    reviewed_at: new Date().toISOString(),
-  };
-  if (doctorNotes) {
-    updatePayload.doctor_notes = doctorNotes;
-  }
+    const updatePayload: Record<string, unknown> = {
+      reviewed_by: user.sub,
+      reviewed_at: new Date().toISOString(),
+    };
+    if (doctorNotes) {
+      updatePayload.doctor_notes = doctorNotes;
+    }
 
-  const { data: updated, error: updateError } = await db
-    .from("case_records")
-    .update(updatePayload)
-    .eq("id", caseUuid)
-    .is("deleted_at", null)
-    .select();
-  if (updateError) throw updateError;
-  if (!updated || updated.length === 0) {
-    throw new HttpError(409, "Case could not be reviewed or already deleted");
-  }
+    const { data: updated, error: updateError } = await db
+      .from("case_records")
+      .update(updatePayload)
+      .eq("id", caseUuid)
+      .is("deleted_at", null)
+      .select();
+    if (updateError) throw updateError;
+    if (!updated || updated.length === 0) {
+      throw new HttpError(409, "Case could not be reviewed or already deleted");
+    }
 
-  const { error: reviewInsertError } = await db.from("case_reviews").insert({
-    case_id: caseUuid,
-    reviewer_id: user.sub,
-    note,
-  });
-  if (reviewInsertError) throw reviewInsertError;
+    const { error: reviewInsertError } = await db.from("case_reviews").insert({
+      case_id: caseUuid,
+      reviewer_id: user.sub,
+      note,
+    });
+    if (reviewInsertError) throw reviewInsertError;
 
-  await logPhiAccess({
-    eventType: AuditEventType.PHI_UPDATE,
-    userId: user.sub ?? "unknown",
-    userRole: role,
-    resourceType: "case_records",
-    resourceId: caseUuid,
-    facilityId: caseRow.facility_id,
-    ipAddress: getClientIp(c),
-    details: { action: "review" },
-  });
+    await logPhiAccess({
+      eventType: AuditEventType.PHI_UPDATE,
+      userId: user.sub ?? "unknown",
+      userRole: role,
+      resourceType: "case_records",
+      resourceId: caseUuid,
+      facilityId: caseRow.facility_id,
+      ipAddress: getClientIp(c),
+      details: { action: "review" },
+    });
 
-  return c.json({ status: "reviewed", case_id: caseUuid, reviewed_by: user.sub });
-});
+    return c.json({ status: "reviewed", case_id: caseUuid, reviewed_by: user.sub });
+  },
+);
 
 // ── Triage Override ──────────────────────────────────────────────────────
 
-cases.patch("/api/cases/:case_id/triage-override", rateLimit(30, 60), requireRole("doctor", "admin"), async (c) => {
-  const user = c.get("user");
-  const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
-  const rawBody = await readJsonBody(c);
-  const parsed = triageOverrideSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
-  }
-  const body = parsed.data;
+cases.patch(
+  "/api/cases/:case_id/triage-override",
+  rateLimit(30, 60),
+  requireRole("doctor", "admin", "super_admin"),
+  async (c) => {
+    const user = c.get("user");
+    const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
+    const rawBody = await readJsonBody(c);
+    const parsed = triageOverrideSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
+    }
+    const body = parsed.data;
 
-  const rawToken = extractBearerToken(c.req.header("authorization"));
-  const db = getSupabaseForUser(rawToken);
-  const role = user.resolvedRole;
+    const rawToken = extractBearerToken(c.req.header("authorization"));
+    const db = getSupabaseForUser(rawToken);
+    const role = user.resolvedRole;
 
-  const caseRow = await fetchAuthorizedCase(db, caseUuid, user);
+    const caseRow = await fetchAuthorizedCase(db, caseUuid, user);
 
-  const { data: updated, error } = await db
-    .from("case_records")
-    .update({
+    const { data: updated, error } = await db
+      .from("case_records")
+      .update({
+        overridden_triage: body.overridden_triage,
+        override_reason: body.override_reason,
+        overridden_by: user.sub,
+        overridden_at: new Date().toISOString(),
+      })
+      .eq("id", caseUuid)
+      .is("deleted_at", null)
+      .select();
+    if (error) throw error;
+    if (!updated || updated.length === 0) {
+      throw new HttpError(409, "Case could not be updated or already deleted");
+    }
+
+    await logPhiAccess({
+      eventType: AuditEventType.PHI_UPDATE,
+      userId: user.sub ?? "unknown",
+      userRole: role,
+      resourceType: "case_records",
+      resourceId: caseUuid,
+      facilityId: caseRow.facility_id,
+      ipAddress: getClientIp(c),
+      details: { action: "triage_override", overridden_triage: body.overridden_triage },
+    });
+
+    return c.json({
+      status: "overridden",
+      case_id: caseUuid,
       overridden_triage: body.overridden_triage,
-      override_reason: body.override_reason,
       overridden_by: user.sub,
-      overridden_at: new Date().toISOString(),
-    })
-    .eq("id", caseUuid)
-    .is("deleted_at", null)
-    .select();
-  if (error) throw error;
-  if (!updated || updated.length === 0) {
-    throw new HttpError(409, "Case could not be updated or already deleted");
-  }
-
-  await logPhiAccess({
-    eventType: AuditEventType.PHI_UPDATE,
-    userId: user.sub ?? "unknown",
-    userRole: role,
-    resourceType: "case_records",
-    resourceId: caseUuid,
-    facilityId: caseRow.facility_id,
-    ipAddress: getClientIp(c),
-    details: { action: "triage_override", overridden_triage: body.overridden_triage },
-  });
-
-  return c.json({
-    status: "overridden",
-    case_id: caseUuid,
-    overridden_triage: body.overridden_triage,
-    overridden_by: user.sub,
-  });
-});
+    });
+  },
+);
 
 // ── Case Outcome ───────────────────────────────────────────────────────────
 
-cases.patch("/api/cases/:case_id/outcome", rateLimit(30, 60), requireRole("doctor", "admin"), async (c) => {
-  const user = c.get("user");
-  const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
-  const rawBody = await readJsonBody(c);
-  const parsed = caseOutcomeSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
-  }
-  const body = parsed.data;
+cases.patch(
+  "/api/cases/:case_id/outcome",
+  rateLimit(30, 60),
+  requireRole("doctor", "admin", "super_admin"),
+  async (c) => {
+    const user = c.get("user");
+    const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
+    const rawBody = await readJsonBody(c);
+    const parsed = caseOutcomeSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
+    }
+    const body = parsed.data;
 
-  const rawToken = extractBearerToken(c.req.header("authorization"));
-  const db = getSupabaseForUser(rawToken);
-  const role = user.resolvedRole;
+    const rawToken = extractBearerToken(c.req.header("authorization"));
+    const db = getSupabaseForUser(rawToken);
+    const role = user.resolvedRole;
 
-  const caseRow = await fetchAuthorizedCase(db, caseUuid, user);
+    const caseRow = await fetchAuthorizedCase(db, caseUuid, user);
 
-  const { data: inserted, error } = await db
-    .from("case_outcomes")
-    .insert({
-      case_id: caseUuid,
-      recorded_by: user.sub,
-      actual_severity: body.actual_severity,
-      patient_disposition: body.patient_disposition,
-      outcome_notes: body.outcome_notes ?? null,
-    })
-    .select();
-  if (error) throw error;
-  if (!inserted || inserted.length === 0) {
-    throw new HttpError(500, "Failed to record outcome");
-  }
+    const { data: inserted, error } = await db
+      .from("case_outcomes")
+      .insert({
+        case_id: caseUuid,
+        recorded_by: user.sub,
+        actual_severity: body.actual_severity,
+        patient_disposition: body.patient_disposition,
+        outcome_notes: body.outcome_notes ?? null,
+      })
+      .select();
+    if (error) throw error;
+    if (!inserted || inserted.length === 0) {
+      throw new HttpError(500, "Failed to record outcome");
+    }
 
-  await logPhiAccess({
-    eventType: AuditEventType.PHI_CREATE,
-    userId: user.sub ?? "unknown",
-    userRole: role,
-    resourceType: "case_outcomes",
-    resourceId: caseUuid,
-    facilityId: caseRow.facility_id,
-    ipAddress: getClientIp(c),
-    details: { actual_severity: body.actual_severity, patient_disposition: body.patient_disposition },
-  });
+    await logPhiAccess({
+      eventType: AuditEventType.PHI_CREATE,
+      userId: user.sub ?? "unknown",
+      userRole: role,
+      resourceType: "case_outcomes",
+      resourceId: caseUuid,
+      facilityId: caseRow.facility_id,
+      ipAddress: getClientIp(c),
+      details: { actual_severity: body.actual_severity, patient_disposition: body.patient_disposition },
+    });
 
-  return c.json(inserted[0]);
-});
+    return c.json(inserted[0]);
+  },
+);
 
 // ── Get Cases Due For Follow-up (BUG-35, BUG-53) ───────────────────────────
 
@@ -1174,41 +1189,46 @@ cases.post(
 
 // ── Get Case Detail ────────────────────────────────────────────────────────
 
-cases.get("/api/cases/:case_id", rateLimit(60, 60), requireRole("asha_worker", "doctor", "admin"), async (c) => {
-  const user = c.get("user");
-  const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
-  const rawToken = extractBearerToken(c.req.header("authorization"));
-  const db = getSupabaseForUser(rawToken);
+cases.get(
+  "/api/cases/:case_id",
+  rateLimit(60, 60),
+  requireRole("asha_worker", "doctor", "admin", "super_admin"),
+  async (c) => {
+    const user = c.get("user");
+    const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
+    const rawToken = extractBearerToken(c.req.header("authorization"));
+    const db = getSupabaseForUser(rawToken);
 
-  const { data, error } = await db
-    .from("case_records")
-    .select("*")
-    .eq("id", caseUuid)
-    .is("deleted_at", null)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) throw new HttpError(404, "Case not found");
+    const { data, error } = await db
+      .from("case_records")
+      .select("*")
+      .eq("id", caseUuid)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new HttpError(404, "Case not found");
 
-  authorizeCaseRowAccess(user, data as CaseRowAuth);
+    authorizeCaseRowAccess(user, data as CaseRowAuth);
 
-  await logPhiAccess({
-    eventType: AuditEventType.PHI_READ,
-    userId: user.sub ?? "unknown",
-    userRole: user.resolvedRole,
-    resourceType: "case_records",
-    resourceId: caseUuid,
-    facilityId: (data as CaseRowAuth).facility_id,
-    ipAddress: getClientIp(c),
-    details: { view: "detail" },
-  });
+    await logPhiAccess({
+      eventType: AuditEventType.PHI_READ,
+      userId: user.sub ?? "unknown",
+      userRole: user.resolvedRole,
+      resourceType: "case_records",
+      resourceId: caseUuid,
+      facilityId: (data as CaseRowAuth).facility_id,
+      ipAddress: getClientIp(c),
+      details: { view: "detail" },
+    });
 
-  return c.json(data);
-});
+    return c.json(data);
+  },
+);
 
 cases.post(
   "/api/cases/:case_id/patient-summary",
   rateLimit(20, 60),
-  requireRole("asha_worker", "doctor", "admin"),
+  requireRole("asha_worker", "doctor", "admin", "super_admin"),
   async (c) => {
     const user = c.get("user");
     const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");

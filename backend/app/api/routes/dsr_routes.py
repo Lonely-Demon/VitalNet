@@ -83,7 +83,7 @@ async def export_case_data(
     request: Request,
     case_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("admin")),
+    user: dict = Depends(require_role("admin", "super_admin")),
 ):
     """
     Right to access (docs/COMPLIANCE_DPDP.md): every row across every table
@@ -177,7 +177,7 @@ async def erase_case_data(
     request: Request,
     case_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("admin")),
+    user: dict = Depends(require_role("admin", "super_admin")),
 ):
     """Right to erasure (docs/COMPLIANCE_DPDP.md) for a single case."""
     case_uuid = _parse_uuid(case_id, "case_id")
@@ -207,7 +207,7 @@ async def erase_case_data(
 async def purge_expired_cases(
     request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("admin")),
+    user: dict = Depends(require_role("admin", "super_admin")),
 ):
     """
     Retention-policy sweep (docs/COMPLIANCE_DPDP.md) — meant to be called on

@@ -25,7 +25,6 @@ import { supabase } from '@/lib/supabase'
 import {
   enqueue,
   dequeue,
-  getPendingEvents,
   getPendingEventMetas,
   getEventPayload,
   markDead,
@@ -147,7 +146,7 @@ async function drainCaseSubmit(item, token) {
   }
   if (res.status === 429) {
     // F-02: Rate limit backoff — do NOT dead-letter 429 errors!
-    const retryAfterHeader = res.headers.get('Retry-After')
+    const retryAfterHeader = res.headers?.get ? res.headers.get('Retry-After') : null
     const retryAfterSec = parseInt(retryAfterHeader, 10)
     const backoffMs = Math.min(Math.max(Number.isFinite(retryAfterSec) ? retryAfterSec : 5, 1), 60) * 1000
     console.warn(`[VitalNet] HTTP 429 rate limited on case submit. Backing off for ${backoffMs}ms before next retry.`, item.event_id)
@@ -185,7 +184,7 @@ async function drainConsentRevoke(item, token) {
   }
   if (res.status === 429) {
     // F-02: Rate limit backoff — do NOT dead-letter 429 errors!
-    const retryAfterHeader = res.headers.get('Retry-After')
+    const retryAfterHeader = res.headers?.get ? res.headers.get('Retry-After') : null
     const retryAfterSec = parseInt(retryAfterHeader, 10)
     const backoffMs = Math.min(Math.max(Number.isFinite(retryAfterSec) ? retryAfterSec : 5, 1), 60) * 1000
     console.warn(`[VitalNet] HTTP 429 rate limited on consent revocation. Backing off for ${backoffMs}ms.`, item.event_id)

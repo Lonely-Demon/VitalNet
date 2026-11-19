@@ -60,7 +60,7 @@ def test_all_admin_routes_require_admin_only():
     failures = []
     for r in routes:
         roles = _enforced_roles(r)
-        if roles != {"admin"}:
+        if roles not in ({"admin"}, {"admin", "super_admin"}):
             failures.append((sorted(r.methods), r.path, sorted(roles) or "NONE"))
 
     assert not failures, (

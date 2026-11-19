@@ -147,17 +147,18 @@ def _check_deterioration_pattern(db, patient_key: str | None, current_triage_lev
 
 def _authorize_case_row_access(user: dict, row: dict) -> None:
     """
-    Fine-grained, row-level authorization for a single case, on top of the
-    endpoint's require_role() gate: 'admin' is global; 'doctor' is scoped to
-    their own facility_id; 'asha_worker' is scoped to cases they submitted.
+    Fine-grained, row-level authorization for a single case (parity with Deno
+    _shared/cases.ts:authorizeCaseRowAccess): 'super_admin' is global;
+    'admin', 'facility_admin', and 'doctor' are strictly scoped to their own
+    facility_id; 'asha_worker' is scoped to cases they submitted.
     """
     role = _resolved_role(user)
     user_id = user.get("sub")
     facility_id = _resolved_facility(user)
 
-    if role == "admin":
+    if role == "super_admin":
         return
-    if role == "doctor" and facility_id and facility_id == row.get("facility_id"):
+    if role in ("admin", "facility_admin", "doctor") and facility_id and facility_id == row.get("facility_id"):
         return
     if role == "asha_worker" and row.get("submitted_by") == user_id:
         return
@@ -455,7 +456,7 @@ async def submit_case(
 async def get_cases(
     request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "admin")),
+    user: dict = Depends(require_role("doctor", "admin", "super_admin")),
     before_time: str | None = None,       # ISO timestamp of the last seen case
     before_priority: int | None = None,   # triage_priority of the last seen case (0/1/2)
     before_needs_review: bool | None = None,  # needs_review of the last seen case
@@ -507,7 +508,7 @@ async def get_cases(
         .limit(limit + 1)                        # Fetch one extra to determine hasMore
     )
 
-    if role == "doctor":
+    if role in ("doctor", "admin", "facility_admin"):
         if not facility_id:
             raise HTTPException(status_code=400, detail="Account has no facility assigned")
         query = query.eq("facility_id", facility_id)
@@ -547,7 +548,7 @@ async def review_case(
     request: Request,
     case_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "admin")),
+    user: dict = Depends(require_role("doctor", "admin", "super_admin")),
 ):
     """
     Marks a case reviewed. Scoped the same way as GET /api/cases: 'admin'
@@ -606,7 +607,7 @@ async def override_triage(
     case_id: str,
     body: TriageOverride,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "admin")),
+    user: dict = Depends(require_role("doctor", "admin", "super_admin")),
 ):
     """
     Lets a reviewing doctor correct the ML triage tier with a required reason.
@@ -663,7 +664,7 @@ async def record_case_outcome(
     case_id: str,
     body: CaseOutcomeInput,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("doctor", "admin")),
+    user: dict = Depends(require_role("doctor", "admin", "super_admin")),
 ):
     """
     Records what actually happened to a patient after triage — the real-world
@@ -774,7 +775,7 @@ async def get_cases_by_patient_key(
     request: Request,
     patient_key: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("asha_worker", "doctor", "admin")),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin", "super_admin")),
 ):
     """
     Returns a summary of prior visits sharing the given patient continuity
@@ -808,7 +809,9 @@ async def get_cases_by_patient_key(
         .limit(50)
     )
 
-    if role == "doctor" and facility_id:
+    if role in ("doctor", "admin", "facility_admin"):
+        if not facility_id:
+            raise HTTPException(status_code=400, detail="Account has no facility assigned")
         query = query.eq("facility_id", facility_id)
 
     result = query.execute()
@@ -991,7 +994,7 @@ async def get_case_detail(
     request: Request,
     case_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("asha_worker", "doctor", "admin")),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin", "super_admin")),
 ):
     """Returns the full record including briefing JSONB for one case after ownership/facility authorization checks."""
     case_uuid = _parse_uuid(case_id, "case_id")
@@ -1042,7 +1045,7 @@ async def case_patient_summary(
     case_id: str,
     language: str = "en",
     authorization: str = Header(None),
-    user: dict = Depends(require_role("asha_worker", "doctor", "admin")),
+    user: dict = Depends(require_role("asha_worker", "doctor", "admin", "super_admin")),
 ):
     """
     On-demand, patient-facing plain-language restatement of an already-
