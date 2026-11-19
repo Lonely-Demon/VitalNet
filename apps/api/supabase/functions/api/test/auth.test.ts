@@ -7,7 +7,14 @@
 // correct for the path that doesn't need network: HS256.
 import { assertEquals, assertRejects } from "@std/assert";
 import { SignJWT } from "jose";
-import { verifyToken } from "../_shared/auth.ts";
+import {
+  verifyToken,
+  PROFILE_CACHE_MAX_ENTRIES,
+  _resetProfileCacheForTest,
+  _getProfileCacheSizeForTest,
+  _setProfileCacheForTest,
+  _hasProfileCacheKeyForTest,
+} from "../_shared/auth.ts";
 import { _setConfigForTest, type Config } from "../_shared/config.ts";
 import { HttpError } from "../_shared/database.ts";
 
@@ -80,6 +87,49 @@ Deno.test("verifyToken: wrong audience is rejected", async () => {
 Deno.test("verifyToken: malformed token is rejected without throwing an unhandled error", async () => {
   _setConfigForTest(testConfig());
   await assertRejects(() => verifyToken("not.a.jwt"), HttpError);
+});
+
+Deno.test("profileCache: enforces 10,000-entry upper bound and LRU eviction (A1-a)", () => {
+  _resetProfileCacheForTest();
+  assertEquals(_getProfileCacheSizeForTest(), 0);
+
+  // Populate exactly PROFILE_CACHE_MAX_ENTRIES items
+  for (let i = 0; i < PROFILE_CACHE_MAX_ENTRIES; i++) {
+    _setProfileCacheForTest(`user-${i}`, {
+      checkedAt: Date.now() / 1000,
+      isActive: true,
+      role: "doctor",
+      facilityId: null,
+    });
+  }
+  assertEquals(_getProfileCacheSizeForTest(), PROFILE_CACHE_MAX_ENTRIES);
+  assertEquals(_hasProfileCacheKeyForTest("user-0"), true);
+  assertEquals(_hasProfileCacheKeyForTest(`user-${PROFILE_CACHE_MAX_ENTRIES - 1}`), true);
+
+  // Refresh user-0 by re-inserting (simulating cache hit refresh)
+  _setProfileCacheForTest("user-0", {
+    checkedAt: Date.now() / 1000,
+    isActive: true,
+    role: "doctor",
+    facilityId: null,
+  });
+
+  // Adding one more entry triggers eviction of the OLDEST un-refreshed entry (user-1)
+  _setProfileCacheForTest("user-overflow-1", {
+    checkedAt: Date.now() / 1000,
+    isActive: true,
+    role: "doctor",
+    facilityId: null,
+  });
+
+  // Bound strictly preserved
+  assertEquals(_getProfileCacheSizeForTest(), PROFILE_CACHE_MAX_ENTRIES);
+  // user-0 was refreshed, so it survived!
+  assertEquals(_hasProfileCacheKeyForTest("user-0"), true);
+  // user-1 was oldest un-refreshed, so it was evicted!
+  assertEquals(_hasProfileCacheKeyForTest("user-1"), false);
+  // new entry exists
+  assertEquals(_hasProfileCacheKeyForTest("user-overflow-1"), true);
 });
 
 // Note: jwtLocalVerification=false and the JWKS/ES256 path both require a

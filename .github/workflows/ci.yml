@@ -118,6 +118,8 @@ jobs:
         # nothing left in apps/web that could drift from the server). If this
         # fails, a clinical rule regressed.
         run: pnpm --filter @vitalnet/clinical-core test
+      - name: Run offline and adversarial Node test suites
+        run: pnpm --filter @vitalnet/web test:unit
       - name: Build
         run: pnpm --filter @vitalnet/web run build
         env:
@@ -219,6 +221,8 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: clinical-core tests
         run: pnpm --filter @vitalnet/clinical-core test
+      - name: Run offline and adversarial Node test suites
+        run: pnpm --filter @vitalnet/web test:unit
       - name: Build
         run: pnpm --filter @vitalnet/web run build
         env:

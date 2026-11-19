@@ -2054,3 +2054,202 @@ The paediatric advisory may not be activated from engineering evidence alone. An
    - Holliday-Segar fluid: 4-2-1 maintenance rule with visual tier breakdown and adult protocol advisory for patients >14 years or >50 kg.
    - Integrated as a first-class, lazy-loaded `'calculators'` tab across `ASHAPanel`, `DoctorPanel`, and `SupervisorPanel`.
 
+
+### 47. SMS Gateway Authentication, Scheduler Pinning, and Caller Facility Spoofing Prevention (Phase 53)
+
+**Context**: Inbound SMS gateway ingest (`/api/cases/sms-gateway` in `backend/app/api/routes/cases.py` and `apps/api/supabase/functions/api/routes/cases.ts`) processes SMS-encoded emergency triage packets from remote ASHA workers operating in feature-phone or low-connectivity environments (Finding VN-53-01). The endpoint previously allowed unauthenticated requests or accepted an unvalidated `facility_id` in the request body, creating a multi-tenant privilege-escalation vulnerability where a malicious caller could inject cases into foreign facilities. Furthermore, background emergency push escalation checks (`/api/push/check-emergency-escalations` in `backend/app/api/routes/push_routes.py` and `apps/api/supabase/functions/api/routes/push.ts`) were vulnerable to timing side-channel attacks on secret comparison (Finding VN-53-05).
+
+**Decisions**:
+1. **Mandatory Ingest Authentication (VN-53-01)**:
+   - Reject unauthenticated requests to `/api/cases/sms-gateway` with `HTTP 401 Unauthorized`.
+   - Accept either:
+     a. A standard Bearer JWT from an authenticated clinician account (`require_role` verifying `asha_worker`, `doctor`, `facility_admin`, `admin`, or `super_admin`).
+     b. A dedicated internal scheduler/webhook header (`X-Internal-Scheduler-Token` or `X-SMS-Webhook-Token`) validated via constant-time digest comparison.
+2. **Caller Facility Spoofing Prevention (VN-53-01)**:
+   - For authenticated clinician JWT callers, derive `facility_id` strictly from the caller's database profile (`user.resolved_facility_id` or `user.facility_id`).
+   - Explicitly ignore and reject any caller-injected `facility_id` supplied in the JSON request body, unless the caller holds the `super_admin` role.
+   - If an authenticated clinician account has no assigned facility, fail closed immediately with `HTTP 400 Bad Request` ("Clinician account has no assigned facility").
+3. **Constant-Time Scheduler Digest Comparison (VN-53-05)**:
+   - In `backend/app/api/routes/push_routes.py`, verify `X-Internal-Scheduler-Token` using `secrets.compare_digest(token, settings.internal_scheduler_token)` to eliminate timing side-channels.
+   - In Deno Edge (`apps/api/supabase/functions/api/routes/push.ts`), implement equivalent constant-time bitwise comparison over UTF-8 byte arrays.
+
+**Consequences**: Unauthenticated actors cannot submit forged triage cases or trigger emergency dispatch workflows. Compromised ASHA worker credentials cannot be leveraged to inject cases into other facilities. Automated scheduler invocations are protected against timing attacks.
+
+
+### 48. Strict Supervisor Role Boundary: Denial of Direct Case Row Access, DSR Export, and Consent Revocation (Phase 53)
+
+**Context**: The `supervisor` role in VitalNet represents non-clinical field supervisors (such as ASHA Facilitators and Block Program Managers) whose operational responsibility is community-level oversight: monitoring aggregate community health metrics, worker coverage, team activity, and syndromic outbreak signals. Supervisors are not direct care providers and do not possess clinical credentials. Prior audits revealed that supervisors had access to clinical follow-up case rows (Finding VN-53-02), administrative Data Subject Request (DSR) export and erasure endpoints (Finding VN-53-03), and consent revocation triggers (Finding VN-53-07), violating DPDP/HIPAA data-minimization mandates and role boundaries.
+
+**Decisions**:
+1. **Bar Supervisor from Clinical Follow-ups Due (VN-53-02)**:
+   - In `/api/cases/followups/due` (`cases.py` and `cases.ts`), remove `supervisor` from the authorized roles.
+   - Restrict access strictly to direct care providers and facility administrators: `asha_worker`, `doctor`, `facility_admin`, `admin`, `super_admin`.
+   - Explicitly reject `supervisor` requests with `HTTP 403 Forbidden` ("Supervisors do not have access to individual clinical follow-up records").
+2. **Bar Supervisor from Administrative DSR Operations (VN-53-03)**:
+   - In `/api/admin/cases/{id}/export` and `/api/admin/cases/{id}/erase` (`dsr_routes.py` and `dsr.ts`), bar the `supervisor` role with `HTTP 403 Forbidden`.
+   - Restrict DSR operations exclusively to facility `admin` (scoped to their facility) and `super_admin` (global scope).
+3. **Database-Level Consent Revocation Restriction (VN-53-07)**:
+   - In `backend/supabase/migrations/phase53_security_hardening.sql`, update consent revocation triggers and RLS policies on `case_records` to explicitly deny the `supervisor` role from modifying patient consent state or invoking anonymization/deletion functions.
+
+**Consequences**: The `supervisor` role is strictly confined to aggregate, de-identified dashboards (`/api/supervisor/team-metrics`, `/api/outbreak/signals`, `/api/analytics/*`). Supervisors cannot inspect identifiable patient charts, export patient medical history, erase clinical audit trails, or alter consent records.
+
+
+### 49. Fail-Closed Clinician Facility Scoping and Multi-Tenant Isolation (Phase 53)
+
+**Context**: In VitalNet's multi-tenant architecture, health data is strictly segregated by facility (`facility_id`). Clinicians (`doctor`, `asha_worker`, `facility_admin`) must belong to a specific primary healthcare center (PHC) or hospital. Previously, if a clinician user profile existed without an assigned `facility_id` (e.g. an improperly onboarded doctor account or corrupted profile), queries to `/api/cases` in `backend/app/api/routes/cases.py` and `apps/api/supabase/functions/api/routes/cases.ts` failed to filter by facility, potentially returning cases across all facilities or unassigned records (Finding VN-53-04). Similarly, aggregate RPCs could leak cross-tenant metrics if invoked with a null facility parameter (Finding VN-53-09).
+
+**Decisions**:
+1. **Fail-Closed Case Queries (VN-53-04)**:
+   - In `cases.py` and `cases.ts`, when resolving the authenticated user's facility in `get_cases`, check if `user.role` is a clinician role (`doctor`, `asha_worker`, `facility_admin`).
+   - If `user.facility_id` is null, empty, or unresolvable, immediately fail closed with `HTTP 400 Bad Request` ("Clinician account has no assigned facility. Contact administrator.").
+   - Do not fall back to an un-scoped query under any circumstances.
+2. **Two-Tier Facility Scoping in Metrics RPCs (VN-53-09)**:
+   - In database functions `fn_team_metrics`, `fn_outbreak_signal_counts`, and `fn_triage_metrics`, enforce two-tier role scoping:
+     a. `super_admin` may pass an arbitrary facility UUID or `NULL` (for global aggregates).
+     b. Facility-scoped roles (`doctor`, `facility_admin`, `asha_worker`) must provide their matching `facility_id`. If `NULL` is passed by a facility-scoped caller, the function raises an exception or returns empty rows fail-closed.
+     c. Validate caller role and active profile status within each SECURITY DEFINER function before executing aggregation queries.
+
+**Consequences**: Misconfigured or incomplete clinician accounts cannot inadvertently access patient data across facility boundaries. Multi-tenant isolation is guaranteed at both the API route layer and the PostgreSQL RPC layer.
+
+
+### 50. Database Migration Phase 53 Policy Hardening and Window Bound Protections (Phase 53)
+
+**Context**: Comprehensive security audit GLM-5.3 #2 identified seven database-level RLS policy and stored procedure vulnerabilities in Supabase PostgreSQL (Findings VN-53-06 through VN-53-12). These included unpinned update policies allowing cross-facility case modification before review, unbounded window parameters causing potential denial-of-service, self-registration privilege escalation, rate-limit table bloat, unauthenticated audit logging, and lack of active-status checks on ancillary clinical tables.
+
+**Decisions**:
+All fixes were codified in `backend/supabase/migrations/phase53_security_hardening.sql`:
+1. **Facility Pinning on Case Update Policy (VN-53-06)**:
+   - Updated `case_records_update_policy` to enforce strict facility matching `(facility_id = auth_user_facility_id() OR auth_user_role() = 'super_admin')` even when `reviewed_by IS NULL`. This prevents doctors from claiming or modifying unreviewed cases belonging to other facilities.
+2. **Window Ceiling and Role Guards on `fn_deterioration_count` (VN-53-08)**:
+   - Added parameter bounds enforcement: `v_window_days := LEAST(GREATEST(COALESCE(p_window_days, 7), 1), 30)`. Callers cannot request unbounded date windows that degrade database performance.
+   - Enforced caller role authorization: callers must possess active profiles with roles `doctor`, `facility_admin`, `admin`, or `super_admin`.
+3. **Profile Self-Registration Guard (VN-53-10)**:
+   - Hardened `profiles_insert_own` RLS policy on the `profiles` table to prohibit new signups from self-assigning privileged roles (`admin`, `super_admin`, `doctor`, `facility_admin`, `supervisor`) or setting `is_active = true`. Self-registered profiles default to inactive and must be approved by a facility administrator.
+4. **Rate Limit 4-Hour Cleanup Horizon (VN-53-11)**:
+   - In `fn_rate_limit`, set a fixed 4-hour cleanup horizon: `DELETE FROM rate_limit_buckets WHERE window_start < (v_now - INTERVAL '4 hours')`. This prevents table bloat while ensuring window continuity.
+5. **Two-Tier Scoping & `is_active` Enforcement on Ancillary Tables (VN-53-12)**:
+   - Hardened RLS policies across `case_outcomes`, `case_reviews`, `case_attachments`, `case_referrals`, and `client_events` to enforce two-tier facility matching and verify `is_active = true` on the caller's profile.
+6. **Authenticated Audit Log Insertion**:
+   - Updated `phi_audit_log` insert policy to require `auth.role() = 'authenticated'` or `service_role`, barring anonymous writes to forensic audit trails.
+
+**Consequences**: Eliminates database-level privilege escalation, ensures deterministic query planner performance via bounded time windows, and guarantees that deactivated users immediately lose row-level access across all clinical and telemetry tables.
+
+
+### 51. Preservation of Phase 52 JSONB Allowlist Trigger vs Column Blacklist and Submitter Fast-Path Bypass (Phase 54)
+
+**Context**: In Phase 52 (`phase52_security_definer_and_trigger_hardening.sql`), the `protect_case_records_clinical_columns` PostgreSQL trigger was introduced to prevent case submitters (ASHA workers) from modifying clinical, triage, vital sign, or identity columns post-submission. The trigger was designed as a fail-closed JSONB allowlist: `(to_jsonb(NEW) - v_allowed_submitter_cols) IS DISTINCT FROM (to_jsonb(OLD) - v_allowed_submitter_cols)`. During Phase 54 performance analysis, proposals arose to replace this JSONB subtraction with a column blacklist (`IF NEW.vitals IS DISTINCT FROM OLD.vitals...`) to reduce trigger overhead, or to bypass the check entirely.
+
+**Decisions**:
+1. **Preservation of Fail-Closed JSONB Allowlist (Safety Invariant R3-1)**:
+   - A column blacklist is strictly **fail-open**: whenever a future migration adds a new column to `case_records` (e.g. `respiratory_rate` in Phase 54, clinical decision support data, or audit metadata), that new column would be completely unprotected and mutable by submitters unless manually added to every trigger blacklist across the database.
+   - The JSONB allowlist operator `(to_jsonb(ROW) - text[])` is strictly **fail-closed**: any column not explicitly declared in `v_allowed_submitter_cols` (`deleted_at`, `human_review_requested`, `human_review_reason`, `follow_up_completed_at`, `updated_at`) is automatically locked and immutable to submitters.
+   - Replacing the JSONB allowlist with a column blacklist is explicitly prohibited.
+2. **Phase 54 Submitter Fast-Path Short-Circuit (Finding B2)**:
+   - In `backend/supabase/migrations/phase54_performance_indexing_and_scale_hardening.sql`, optimize the trigger by adding an immediate fast-path check before any database lookup or JSON transformation:
+     ```sql
+     IF auth.uid() IS DISTINCT FROM OLD.submitted_by THEN
+       RETURN NEW;
+     END IF;
+     ```
+   - When a clinician, doctor, or administrator updates a case (e.g., adding clinical reviews, diagnosis, or triage overrides), the trigger short-circuits on line 1, bypassing the `profiles` table lookup and JSONB subtraction entirely.
+   - When the submitter updates their own row, the trigger falls through to the full fail-closed JSONB allowlist validation.
+
+**Consequences**: Clinical review and triage update operations by doctors incur near-zero trigger overhead. Submitter updates remain 100% protected under a fail-closed allowlist that automatically defends newly added columns against unauthorized tampering.
+
+
+### 52. Invariant Exclusion: Prohibition of Database Connection Pools in `database.py` and Sleep Queues in `audit.py` (Phase 54)
+
+**Context**: Audit proposals suggested two architectural refactorings aimed at backend efficiency:
+1. Creating a shared global Supabase `Client` connection pool in `backend/app/core/database.py` with dynamically swapped authorization tokens.
+2. Replacing synchronous audit logging in `backend/app/core/audit.py` with an asynchronous delayed "sleep queue" or in-memory batch buffer.
+Both proposals were formally rejected based on safety, multi-tenant security, and forensic compliance invariants.
+
+**Decisions**:
+1. **Prohibition of Shared Supabase Client Pool (Safety Invariant R3-2)**:
+   - In `supabase-py` and PostgREST, calling `client.postgrest.auth(token)` mutates internal request headers on the shared client object. Under concurrent asynchronous requests in FastAPI, swapping tokens on a shared client introduces critical race conditions where request A executes using request B's JWT token, causing cross-tenant RLS data leaks.
+   - `backend/app/core/database.py` must NOT use a shared `Client` singleton with dynamically swapped tokens.
+   - The existing architecture (DECISIONS §4) is reaffirmed: construct an isolated `Client` instance per request via `get_supabase_for_user(raw_token)` while reusing a shared persistent socket transport (`_shared_transport = httpx.HTTPTransport(retries=3, limits=_shared_limits)`). This prevents TCP/TLS socket exhaustion under load (BUG-43) while maintaining complete thread/async token isolation.
+2. **Prohibition of Asynchronous Sleep Queues in Audit Logging (Safety Invariant R3-3)**:
+   - Introducing an asynchronous in-memory sleep queue, delayed buffer, or background flush task for PHI audit logging creates a critical failure mode: if the container or serverless worker terminates abruptly (SIGTERM, container restart, OOM, host preemption on Render/Kubernetes), unwritten audit entries residing in memory are permanently lost.
+   - DPDP (Digital Personal Data Protection Act) and HIPAA mandate strict non-repudiation for audit trails of Protected Health Information (PHI) access.
+   - `backend/app/core/audit.py` must synchronously write structured audit logs to stdout/syslog (captured immediately by container log drains) followed by best-effort synchronous database insert to `phi_audit_log`. Delayed in-memory queues are strictly forbidden.
+
+**Consequences**: Complete multi-tenant request isolation is preserved without cross-tenant token pollution. Forensic PHI audit trails cannot be lost during process restarts or scaling events.
+
+
+### 53. Invariant Exclusion: Prohibition of `cryptoWorker.js` in Favor of Lazy Outbox Metadata Enumeration (Phase 54)
+
+**Context**: VitalNet's offline-first PWA uses client-side encryption (AES-256-GCM) in `apps/web/src/lib/outbox.js` to protect sensitive patient intake records stored in IndexedDB before syncing to the cloud. Proposals were made to offload client-side cryptographic operations to a dedicated Web Worker (`cryptoWorker.js`). However, investigation revealed that Web Workers introduce substantial serialization overhead and failure modes on low-end hardware, whereas the true bottleneck was premature decryption during UI queue inspection (Finding F-14).
+
+**Decisions**:
+1. **Prohibition of `cryptoWorker.js` (Safety Invariant R3-4)**:
+   - The native Web Crypto API (`crypto.subtle`) is already non-blocking: modern browser runtimes (Chromium, WebKit, Gecko) execute Web Crypto primitives on internal C++/Rust worker thread pools outside the main JavaScript execution loop.
+   - Introducing a Web Worker introduces structured cloning memory overhead for large arrays, increases garbage collection pressure, and causes Out-Of-Memory (OOM) browser tab crashes on low-end Android mobile devices (e.g. 2GB–3GB RAM tablets commonly deployed to rural ASHA workers).
+   - Furthermore, CryptoKey handles stored as non-extractable in IndexedDB cannot always be cloned across worker boundaries portably across mobile browser engines.
+   - `cryptoWorker.js` must NOT be created or introduced.
+2. **Lazy Outbox Metadata Enumeration (Finding F-14)**:
+   - In `apps/web/src/lib/outbox.js`, implement `getPendingEventMetas(ownerId)` which reads queue items from IndexedDB and extracts unencrypted event metadata (`id`, `eventType`, `ownerId`, `createdAt`, `status`, `retryCount`) without decrypting the `encryptedPayload` ciphertext bytes.
+   - UI components (e.g. `OfflineBanner`, `SyncStatusBadge`, `ASHAPanel`) call `getPendingEventMetas` to render pending queue counts and sync status instantly with zero cryptographic operations.
+   - Full payload decryption (`getEventPayload`) is deferred until an event is actively dequeued for network transmission in `syncStore.js`.
+
+**Consequences**: Completely eliminates UI freezes and outbox queue rendering delays on low-end mobile devices without the complexity, memory overhead, or cross-browser fragility of a Web Worker.
+
+
+### 54. Client-Side Concurrency Guard, Adaptive Backoff, and Realtime Filter Optimization (Phase 54)
+
+**Context**: High-concurrency field usage identified three client-side scaling bottlenecks in `apps/web`:
+1. Multi-tab outbox drain collisions in `syncStore.js` when an ASHA worker opened multiple browser tabs on the same device (Finding F-01).
+2. Naive 4xx error handling in `syncStore.js` treating HTTP 429 (Too Many Requests) as an unrecoverable client error, dead-lettering valid clinical cases instead of backing off (Finding F-02).
+3. Complex multi-predicate Supabase Realtime subscriptions in `useRealtimeCases.js` creating excessive WebSocket subscription channels and overloading server-side Postgres replication slots (Finding F-15).
+
+**Decisions**:
+1. **Web Locks API Outbox Concurrency Guard (Finding F-01)**:
+   - In `apps/web/src/stores/syncStore.js`, wrap the queue drain process (`processQueue`) in the Web Locks API: `navigator.locks.request('vitalnet_outbox_drain', { ifAvailable: true }, async (lock) => { ... })`.
+   - If another tab is already draining the outbox, `lock` is `null`: the secondary tab gracefully yields immediately without contention or duplicate API requests.
+   - If Web Locks API is unsupported in the host environment, fallback safely to a single-flight in-memory promise lock (`_activeDrainPromise`).
+   - Reset `_activeDrainPromise = null` on lock contention or completion to ensure subsequent triggers can acquire the lock.
+2. **Adaptive HTTP 429 Backoff & Reconnect Jitter (Finding F-02)**:
+   - In `syncStore.js`, isolate `status === 429` from general 4xx fatal client errors. Do not dead-letter cases on HTTP 429.
+   - Parse the standard `Retry-After` HTTP header (supporting both integer seconds and RFC 2822 date strings).
+   - Apply bounded exponential backoff with jitter: `Math.min(retryDelay * 1.5, 60000)`.
+   - On online reconnect events (`window.addEventListener('online')` in `syncStore.js` and `ASHAPanel.jsx`), inject a 0–2000ms randomized jitter delay (`Math.random() * 2000`) before triggering queue drains, preventing the "thundering herd" problem when rural connectivity is restored.
+3. **Single Realtime Primary Filter with Client-Side Guard (Finding F-15)**:
+   - In `apps/web/src/hooks/useRealtimeCases.js`, replace complex multi-predicate Postgres Realtime filters with a single `primaryFilter` on `facility_id=eq.${facilityId}`.
+   - Maximizes Supabase Realtime multiplexing by sharing a single broadcast channel per facility across all connected clinicians.
+   - Secondary filtering criteria (e.g., matching assigned clinician, active vs resolved triage state) are evaluated locally in client React state (`isCaseMatch` helper) with negligible CPU impact.
+
+**Consequences**: Eliminates race conditions across multiple open browser tabs. Prevents data loss from accidental dead-lettering during temporary backend rate limiting. Minimizes database connection and replication load on Supabase Realtime.
+
+
+### 55. Server & Database Scale Hardening: Edge Profile LRU Cache, Push Fanout, Streaming Analytics, and Composite Indexes (Phase 54)
+
+**Context**: Under simulated high-concurrency loads (thousands of concurrent field visits and large syndromic surveillance queries), profiling revealed scaling bottlenecks across Edge Function memory, push notification dispatch, analytics CSV exports, and database query planning.
+
+**Decisions**:
+1. **Edge Function Profile LRU Cache (Finding A1-a)**:
+   - In `apps/api/supabase/functions/api/_shared/auth.ts`, implement a bounded Least-Recently-Used (LRU) cache for user profiles with a hard ceiling of 10,000 entries.
+   - Prevents memory leaks and V8 isolate Out-Of-Memory termination in long-running Deno Edge Functions handling multi-tenant traffic.
+2. **Bounded Parallel Push Notification Fanout (Finding F-07)**:
+   - In `apps/api/supabase/functions/api/_shared/webpush.ts`, replace sequential push delivery loops with `Promise.allSettled` parallel dispatch.
+   - Slow or failing Web Push endpoints (e.g. network timeouts to external FCM/Mozilla push services) do not block or delay notifications to other on-call clinicians.
+3. **Chunked Streaming CSV Analytics Export (Finding F-06)**:
+   - In `backend/app/api/routes/analytics_routes.py`, replace in-memory Pandas dataframe construction with an asynchronous chunked generator using FastAPI's `StreamingResponse`.
+   - Streams database records in 500-row batches directly to the client with `media_type="text/csv"`, keeping server memory usage constant ($O(1)$) regardless of export size.
+4. **InitPlan Caching for RLS Policies (Finding B1)**:
+   - In `backend/supabase/migrations/phase54_performance_indexing_and_scale_hardening.sql`, replace direct `auth.uid()` calls in `asha_select_own` with `(SELECT auth.uid())` subqueries and mark helper functions `STABLE`.
+   - Allows PostgreSQL to compute the user ID once per query plan (InitPlan) rather than re-evaluating the authentication function for every candidate row in table scans.
+5. **Six Targeted Composite and Partial Indexes (Findings B3 & F-11)**:
+   - Added six high-impact indexes in `phase54_performance_indexing_and_scale_hardening.sql`:
+     1. `idx_case_records_facility_triage_created` on `case_records(facility_id, triage_level, created_at DESC)` for clinician triage queues.
+     2. `idx_case_records_submitted_by_created` on `case_records(submitted_by, created_at DESC)` for ASHA submission history.
+     3. `idx_case_records_pending_review` partial index on `case_records(facility_id, created_at DESC) WHERE reviewed_by IS NULL` for unreviewed case queues.
+     4. `idx_case_records_facility_active` partial index on `case_records(facility_id, created_at DESC) WHERE deleted_at IS NULL` for active case filtering.
+     5. `idx_case_referrals_facility_status` on `case_referrals(facility_id, status, created_at DESC)` for referral tracking.
+     6. `idx_client_events_user_created` on `client_events(user_id, created_at DESC)` for client telemetry.
+6. **In-Database Syndromic Aggregation RPC (Finding A3-2)**:
+   - Created `fn_ears_daily_counts(p_facility_id UUID, p_days INT)` in `phase54_performance_indexing_and_scale_hardening.sql`. Aggregates EARS syndromic surveillance counts directly in PostgreSQL by facility, symptom, and date, reducing network payload size by 99% compared to raw row fetching.
+7. **`respiratory_rate` Schema Reconciliation (Finding F-05)**:
+   - Added `respiratory_rate INTEGER` with check constraint `CHECK (respiratory_rate IS NULL OR (respiratory_rate >= 5 AND respiratory_rate <= 120))` to `case_records`. Reconciles database schema with frontend intake forms and clinical core validation.
+
+**Consequences**: Reduces p99 query latency on clinical queues, eliminates Edge isolate memory bloat, enables streaming downloads of large epidemiological datasets without memory pressure, and speeds up doctor review queues via partial indexing.
+

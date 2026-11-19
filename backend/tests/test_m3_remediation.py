@@ -222,7 +222,8 @@ def test_analytics_export_chunked_pagination():
                 user=user_context,
             )
 
-            assert ranges_called == [(0, 999), (1000, 1999), (2000, 2999)]
+            # Proves lazy asynchronous streaming: before body_iterator is consumed, 0 DB queries have run
+            assert ranges_called == []
 
             # Read streaming response body from body_iterator
             chunks = []
@@ -232,6 +233,9 @@ def test_analytics_export_chunked_pagination():
             lines = body.strip().split("\r\n")
             # 1 header line + 2350 records = 2351 lines
             assert len(lines) == 2351
+
+            # Proves all chunk ranges were evaluated during streaming
+            assert ranges_called == [(0, 999), (1000, 1999), (2000, 2999)]
 
     asyncio.run(_run())
 
