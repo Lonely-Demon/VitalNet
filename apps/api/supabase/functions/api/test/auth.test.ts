@@ -8,12 +8,12 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { SignJWT } from "jose";
 import {
-  verifyToken,
-  PROFILE_CACHE_MAX_ENTRIES,
-  _resetProfileCacheForTest,
   _getProfileCacheSizeForTest,
-  _setProfileCacheForTest,
   _hasProfileCacheKeyForTest,
+  _resetProfileCacheForTest,
+  _setProfileCacheForTest,
+  PROFILE_CACHE_MAX_ENTRIES,
+  verifyToken,
 } from "../_shared/auth.ts";
 import { _setConfigForTest, type Config } from "../_shared/config.ts";
 import { HttpError } from "../_shared/database.ts";

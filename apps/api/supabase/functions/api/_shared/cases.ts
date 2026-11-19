@@ -99,8 +99,14 @@ export function authorizeCaseRowAccess(user: AuthedUser, row: CaseRowAuth): void
   const userId = typeof user.sub === "string" ? user.sub : undefined;
   const facilityId = user.resolvedFacilityId;
 
-  if (role === "admin") return;
-  if (role === "doctor" && facilityId && facilityId === row.facility_id) return;
+  if (role === "super_admin") return;
+  if (
+    (role === "admin" || role === "facility_admin" || role === "doctor") &&
+    facilityId &&
+    facilityId === row.facility_id
+  ) {
+    return;
+  }
   if (role === "asha_worker" && row.submitted_by === userId) return;
   throw new HttpError(403, "Not authorized for this case");
 }

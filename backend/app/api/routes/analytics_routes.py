@@ -409,41 +409,40 @@ async def export_cases(
 
     role, facility_id, scoped = _resolve_scope(user)
 
+    async def _fetch_chunk(start: int, end: int) -> list[dict]:
+        def build_chunk_query():
+            q = (
+                db.table("case_records")
+                .select(",".join(EXPORT_COLUMNS))
+                .is_("deleted_at", "null")
+                .gte("created_at", parsed_from.isoformat())
+                .lte("created_at", parsed_to.isoformat())
+                .order("created_at", desc=False)
+                .order("id", desc=False)
+                .range(start, end)
+            )
+            return (q.eq("facility_id", facility_id) if scoped else q).execute()
+
+        failures: list[str] = []
+        res = await _run_query(build_chunk_query, "export", failures)
+        if failures or res is None:
+            raise HTTPException(status_code=502, detail="Export query failed — try a narrower date range")
+        return res.data or []
+
+    # Fetch first chunk before opening the stream so initial DB failures return HTTP 502.
+    first_chunk = await _fetch_chunk(0, CHUNK_SIZE - 1)
+
     async def csv_stream():
         total_rows = 0
         try:
-            # Yield CSV header
             header_buffer = io.StringIO()
             writer = csv.DictWriter(header_buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
             writer.writeheader()
             yield header_buffer.getvalue()
 
-            offset = 0
-            while True:
-                current_start = offset
-                current_end = offset + CHUNK_SIZE - 1
-
-                def build_chunk_query(start=current_start, end=current_end):
-                    q = (
-                        db.table("case_records")
-                        .select(",".join(EXPORT_COLUMNS))
-                        .is_("deleted_at", "null")
-                        .gte("created_at", parsed_from.isoformat())
-                        .lte("created_at", parsed_to.isoformat())
-                        .order("created_at", desc=False)
-                        .order("id", desc=False)
-                        .range(start, end)
-                    )
-                    return (q.eq("facility_id", facility_id) if scoped else q).execute()
-
-                failures: list[str] = []
-                res = await _run_query(build_chunk_query, "export", failures)
-                if failures or res is None:
-                    break
-                chunk = res.data or []
-                if not chunk:
-                    break
-
+            chunk = first_chunk
+            offset = CHUNK_SIZE
+            while chunk:
                 total_rows += len(chunk)
                 row_buffer = io.StringIO()
                 chunk_writer = csv.DictWriter(row_buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
@@ -452,6 +451,11 @@ async def export_cases(
                 yield row_buffer.getvalue()
 
                 if len(chunk) < CHUNK_SIZE:
+                    break
+
+                try:
+                    chunk = await _fetch_chunk(offset, offset + CHUNK_SIZE - 1)
+                except HTTPException:
                     break
                 offset += CHUNK_SIZE
         finally:

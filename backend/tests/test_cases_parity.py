@@ -72,7 +72,8 @@ def test_sms_gateway_populates_all_not_null_stub_columns_and_priority():
 
         with patch("app.api.routes.cases.get_supabase_for_user", return_value=mock_db), \
              patch("app.api.routes.cases.extract_bearer_token", return_value="token-123"), \
-             patch("app.api.routes.cases._verify_token", return_value={"sub": SYSTEM_SUBMITTER_UUID}):
+             patch("app.api.routes.cases._verify_token", return_value={"sub": SYSTEM_SUBMITTER_UUID}), \
+             patch("app.api.routes.cases._resolve_profile", return_value=(True, "asha_worker", "00000000-0000-0000-0000-000000000001")):
 
             res = await cases.ingest_sms_gateway(
                 request=req,
@@ -137,6 +138,7 @@ def test_sms_gateway_vn1_frame_emergency_priority_mapping():
         with patch("app.api.routes.cases.get_supabase_for_user", return_value=mock_db), \
              patch("app.api.routes.cases.extract_bearer_token", return_value="token-123"), \
              patch("app.api.routes.cases._verify_token", return_value={"sub": SYSTEM_SUBMITTER_UUID}), \
+             patch("app.api.routes.cases._resolve_profile", return_value=(True, "asha_worker", "00000000-0000-0000-0000-000000000001")), \
              patch("app.services.sms.decode_emergency_sms", return_value=mock_decoded):
 
             res = await cases.ingest_sms_gateway(

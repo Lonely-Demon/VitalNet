@@ -498,7 +498,8 @@ cases.post("/api/cases/sms-gateway", rateLimit(60, 60), async (c) => {
   }
 
   const rawAuth = c.req.header("authorization");
-  const webhookToken = c.req.header("x-sms-webhook-token") ?? c.req.header("x-webhook-token") ?? c.req.header("x-internal-scheduler-token");
+  const webhookToken = c.req.header("x-sms-webhook-token") ?? c.req.header("x-webhook-token") ??
+    c.req.header("x-internal-scheduler-token");
   const config = getConfig();
 
   let user: AuthedUser | null = null;
@@ -596,14 +597,18 @@ cases.post("/api/cases/sms-gateway", rateLimit(60, 60), async (c) => {
   const triageLevel = decoded.triage_level ?? decoded.tier ?? "ROUTINE";
   const triagePriority = triageLevel === "EMERGENCY" ? 0 : triageLevel === "URGENT" ? 1 : 2;
 
+  if (user && user.resolvedRole !== "super_admin" && !user.resolvedFacilityId) {
+    throw new HttpError(403, "Account has no facility assigned");
+  }
+
   const stubRecord = {
     client_id: clientId,
     is_sms_stub: true,
     submitted_by: user?.sub ?? "00000000-0000-0000-0000-000000000000",
     facility_id: user
       ? (user.resolvedRole === "super_admin"
-          ? (facilityId ?? user.resolvedFacilityId ?? "00000000-0000-0000-0000-000000000001")
-          : (user.resolvedFacilityId ?? "00000000-0000-0000-0000-000000000001"))
+        ? (facilityId ?? user.resolvedFacilityId ?? "00000000-0000-0000-0000-000000000001")
+        : user.resolvedFacilityId!)
       : (facilityId ?? "00000000-0000-0000-0000-000000000001"),
     patient_name: "Emergency Patient (SMS)",
     patient_location: "Community (SMS Intake)",

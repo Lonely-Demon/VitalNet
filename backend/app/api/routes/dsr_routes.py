@@ -230,10 +230,12 @@ async def purge_expired_cases(
         .neq("patient_name", REDACTED)
     )
 
-    # Scoped to facility if PHC admin
+    # Scoped to facility if PHC admin; fail closed if facility_id is unassigned (VN-53-05)
     user_role = user.get("resolved_role", "")
     facility_id = user.get("resolved_facility_id")
-    if user_role != "super_admin" and facility_id:
+    if user_role != "super_admin":
+        if not facility_id:
+            return {"enabled": True, "checked": 0, "purged": 0}
         query = query.eq("facility_id", facility_id)
 
     candidates = query.execute().data or []

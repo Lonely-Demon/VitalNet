@@ -1212,24 +1212,18 @@ async def ingest_sms_gateway(
         or request.headers.get("x-webhook-token")
     )
     user = None
-    is_webhook = False
-
     if raw_token:
         try:
             user = _verify_token(raw_token)
             if not user or not user.get("sub"):
                 raise HTTPException(status_code=401, detail="Invalid token")
-            u_active, u_role, u_fac = False, "", None
-            try:
-                u_active, u_role, u_fac = _resolve_profile(user["sub"], raw_token)
-            except Exception:
-                pass
-            u_role = u_role or user.get("role") or user.get("resolved_role")
-            if not u_role and user.get("sub") == SYSTEM_SUBMITTER_UUID:
-                u_role = "admin"
-            allowed_roles = {"asha_worker", "doctor", "admin", "super_admin"}
-            if not u_role or u_role not in allowed_roles:
+
+            u_active, u_role, u_fac = _resolve_profile(user["sub"], raw_token)
+
+            allowed_roles = {"asha_worker", "doctor", "facility_admin", "admin", "super_admin"}
+            if not u_active or not u_role or u_role not in allowed_roles:
                 raise HTTPException(status_code=403, detail=f"Role '{u_role}' is not permitted for SMS gateway")
+
             user["resolved_role"] = u_role
             if u_fac:
                 user["resolved_facility_id"] = u_fac
@@ -1242,7 +1236,7 @@ async def ingest_sms_gateway(
         and settings.internal_scheduler_token
         and secrets.compare_digest(webhook_token, settings.internal_scheduler_token)
     ):
-        is_webhook = True
+        pass
     else:
         raise HTTPException(
             status_code=401,
@@ -1287,7 +1281,9 @@ async def ingest_sms_gateway(
                 or SYSTEM_FACILITY_UUID
             )
         else:
-            resolved_facility_id = user.get("resolved_facility_id") or SYSTEM_FACILITY_UUID
+            resolved_facility_id = user.get("resolved_facility_id")
+            if not resolved_facility_id:
+                raise HTTPException(status_code=403, detail="Account has no facility assigned")
     else:
         resolved_facility_id = (
             facility_id

@@ -39,7 +39,7 @@ STABLE
 SECURITY DEFINER
 SET search_path TO 'public'
 AS $function$
-  SELECT role FROM public.profiles WHERE id = user_id;
+  SELECT role FROM public.profiles WHERE id = user_id AND is_active = true;
 $function$;
 
 CREATE OR REPLACE FUNCTION public.get_user_facility(user_id uuid)
@@ -49,7 +49,7 @@ STABLE
 SECURITY DEFINER
 SET search_path TO 'public'
 AS $function$
-  SELECT facility_id FROM public.profiles WHERE id = user_id;
+  SELECT facility_id FROM public.profiles WHERE id = user_id AND is_active = true;
 $function$;
 
 CREATE OR REPLACE FUNCTION public.get_current_user_role()
@@ -264,8 +264,8 @@ BEGIN
     RAISE EXCEPTION 'insufficient_privilege' USING ERRCODE = '42501';
   END IF;
 
-  -- Non-global roles are pinned to their own facility
-  IF v_role NOT IN ('admin', 'super_admin', 'supervisor') THEN
+  -- Non-global roles (doctor, facility_admin, admin) are pinned to their own facility
+  IF v_role NOT IN ('super_admin', 'supervisor') THEN
     IF v_own_facility IS NULL THEN
       RAISE EXCEPTION 'account has no facility assigned' USING ERRCODE = '22023';
     END IF;

@@ -496,6 +496,7 @@ def test_sms_gateway_inbound_stub_creation():
         with patch("app.api.routes.cases.get_supabase_for_user", return_value=mock_db), \
              patch("app.api.routes.cases.extract_bearer_token", return_value="token-123"), \
              patch("app.api.routes.cases._verify_token", return_value={"sub": SYSTEM_SUBMITTER_UUID, "role": "super_admin"}), \
+             patch("app.api.routes.cases._resolve_profile", return_value=(True, "super_admin", "fac-1")), \
              patch("app.api.routes.cases.log_phi_access"):
 
             res = await cases.ingest_sms_gateway(
@@ -551,6 +552,7 @@ def test_revoke_case_consent_invokes_fn_erase_case_pii_rpc():
         with patch("app.api.routes.cases.get_supabase_for_user", return_value=mock_db), \
              patch("app.api.routes.cases.extract_bearer_token", return_value="token-123"), \
              patch("app.api.routes.cases._verify_token", return_value={"sub": SYSTEM_SUBMITTER_UUID, "role": "super_admin"}), \
+             patch("app.api.routes.cases._resolve_profile", return_value=(True, "super_admin", "fac-1")), \
              patch("app.api.routes.cases.log_phi_access"):
 
             res = await cases.revoke_case_consent(

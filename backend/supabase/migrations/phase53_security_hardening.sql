@@ -268,9 +268,9 @@ BEGIN
     RAISE EXCEPTION 'insufficient_privilege' USING ERRCODE = '42501';
   END IF;
 
-  -- Only super_admin may query system-wide without a facility.
-  -- All other roles require an assigned facility and are strictly pinned to it.
-  IF v_role <> 'super_admin' THEN
+  -- Only global aggregate roles (super_admin, supervisor) may query system-wide without a facility.
+  -- Facility-scoped roles (admin, facility_admin) require an assigned facility and are strictly pinned to it.
+  IF v_role NOT IN ('super_admin', 'supervisor') THEN
     IF v_own_facility IS NULL THEN
       RAISE EXCEPTION 'account has no facility assigned' USING ERRCODE = '22023';
     END IF;
@@ -315,9 +315,9 @@ BEGIN
     RAISE EXCEPTION 'insufficient_privilege' USING ERRCODE = '42501';
   END IF;
 
-  -- Only super_admin may query across all facilities.
-  -- All other roles require an assigned facility and are strictly pinned to it.
-  IF v_role <> 'super_admin' THEN
+  -- Only global aggregate roles (super_admin, supervisor) may query across all facilities.
+  -- Facility-scoped roles (doctor, admin, facility_admin) require an assigned facility and are strictly pinned to it.
+  IF v_role NOT IN ('super_admin', 'supervisor') THEN
     IF v_own_facility IS NULL THEN
       RAISE EXCEPTION 'account has no facility assigned' USING ERRCODE = '22023';
     END IF;

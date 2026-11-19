@@ -222,8 +222,8 @@ def test_analytics_export_chunked_pagination():
                 user=user_context,
             )
 
-            # Proves lazy asynchronous streaming: before body_iterator is consumed, 0 DB queries have run
-            assert ranges_called == []
+            # Proves first chunk is fetched before streaming so initial DB failure yields HTTP 502
+            assert ranges_called == [(0, 999)]
 
             # Read streaming response body from body_iterator
             chunks = []

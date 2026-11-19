@@ -18,7 +18,6 @@ Covers:
 import asyncio
 from pathlib import Path
 import re
-import secrets
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,10 +28,8 @@ except ImportError:
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.api.routes import cases, dsr_routes, push_routes
-from app.api.routes.cases import SYSTEM_FACILITY_UUID, SYSTEM_SUBMITTER_UUID
+from app.api.routes import cases, push_routes
 from app.api.routes.dsr_routes import _authorize_dsr_access
-from app.core.scoping import resolve_facility_scope
 
 MIGRATION_PATH = (
     Path(__file__).resolve().parent.parent
@@ -292,7 +289,6 @@ def test_vn53_06_case_records_update_policy_no_reviewed_by_null_bypass(phase53_s
         re.DOTALL,
     )
     assert match is not None, "case_records_update_policy must be defined with USING and WITH CHECK"
-    using_clause = match.group(1)
     with_check_clause = match.group(2)
 
     assert "reviewed_by IS NULL" not in with_check_clause, (
@@ -338,8 +334,8 @@ def test_vn53_08_fn_deterioration_count_guards(phase53_sql):
 
 def test_vn53_09_metrics_rpcs_two_tier_and_null_facility_guards(phase53_sql):
     """Ensure fn_team_metrics, fn_outbreak_signal_counts, and fn_triage_metrics enforce two-tier guards."""
-    # fn_team_metrics: non-super_admin requires v_own_facility
-    assert "IF v_role <> 'super_admin' THEN" in phase53_sql
+    # fn_team_metrics & fn_outbreak_signal_counts: non-global roles require v_own_facility while preserving supervisor global aggregate scope
+    assert "IF v_role NOT IN ('super_admin', 'supervisor') THEN" in phase53_sql
     assert "account has no facility assigned" in phase53_sql
 
     # fn_triage_metrics: admin requires non-null facility

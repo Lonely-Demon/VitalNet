@@ -213,7 +213,12 @@ dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin"
     .lt("created_at", threshold)
     .neq("patient_name", REDACTED);
 
-  if (user.resolvedRole === "admin" && user.resolvedFacilityId) {
+  // VN-53-05: Only super_admin scans globally; facility-scoped admin sweeps own
+  // facility; a facility-less admin fails closed with zero candidates.
+  if (user.resolvedRole !== "super_admin") {
+    if (!user.resolvedFacilityId) {
+      return c.json({ enabled: true, checked: 0, purged: 0 });
+    }
     query = query.eq("facility_id", user.resolvedFacilityId);
   }
 

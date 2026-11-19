@@ -4,7 +4,7 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { authorizeDsrAccess, type CaseRecord } from "../routes/dsr.ts";
 import { constantTimeEqual, verifySchedulerToken } from "../routes/push.ts";
-import { resolveFacilityScope, GLOBAL_SCOPE_ROLES } from "../_shared/scoping.ts";
+import { GLOBAL_SCOPE_ROLES, resolveFacilityScope } from "../_shared/scoping.ts";
 import { HttpError } from "../_shared/database.ts";
 import { _setConfigForTest, type Config } from "../_shared/config.ts";
 import type { AuthedUser } from "../_shared/types.ts";
@@ -107,12 +107,16 @@ Deno.test("VN-53-05: verifySchedulerToken rejects missing or invalid token with 
   assertEquals(err1.status, 403);
 
   // Mismatched token
-  const reqWrong = { req: { header: (h: string) => h.toLowerCase() === "x-internal-scheduler-token" ? "wrong-val" : undefined } };
+  const reqWrong = {
+    req: { header: (h: string) => h.toLowerCase() === "x-internal-scheduler-token" ? "wrong-val" : undefined },
+  };
   const err2 = assertThrows(() => verifySchedulerToken(reqWrong), HttpError);
   assertEquals(err2.status, 403);
 
   // Valid token
-  const reqValid = { req: { header: (h: string) => h.toLowerCase() === "x-internal-scheduler-token" ? "secret-token-xyz" : undefined } };
+  const reqValid = {
+    req: { header: (h: string) => h.toLowerCase() === "x-internal-scheduler-token" ? "secret-token-xyz" : undefined },
+  };
   verifySchedulerToken(reqValid);
 });
 

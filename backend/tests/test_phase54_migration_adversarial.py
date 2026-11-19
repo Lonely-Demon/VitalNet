@@ -761,7 +761,7 @@ def simulate_fn_ears_daily_counts(
         raise PermissionError("42501: insufficient_privilege")
 
     target_facility = p_facility_id
-    if caller_role not in ("admin", "super_admin", "supervisor"):
+    if caller_role not in ("super_admin", "supervisor"):
         if caller_facility_id is None:
             raise ValueError("22023: account has no facility assigned")
         target_facility = caller_facility_id
@@ -872,14 +872,14 @@ def test_a3_2_fn_ears_daily_counts_pins_clinician_facility():
 
 
 def test_a3_2_fn_ears_daily_counts_global_roles_unpinned():
-    """A3-2: Supervisor, admin, super_admin can query cross-facility or aggregate all facilities."""
+    """A3-2: Only supervisor and super_admin can query cross-facility or aggregate all facilities."""
     dt_utc = datetime(2026, 11, 19, 10, 0, tzinfo=timezone.utc)
     cases = [
         {"facility_id": "fac-1", "created_at": dt_utc, "deleted_at": None, "symptoms": ["fever"]},
         {"facility_id": "fac-2", "created_at": dt_utc, "deleted_at": None, "symptoms": ["fever"]},
     ]
 
-    for role in ("supervisor", "admin", "super_admin"):
+    for role in ("supervisor", "super_admin"):
         # Querying all facilities (p_facility_id = None)
         res = simulate_fn_ears_daily_counts(
             caller_auth_uid="super-1",
