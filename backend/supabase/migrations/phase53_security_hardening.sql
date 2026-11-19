@@ -40,7 +40,7 @@ CREATE POLICY case_records_update_policy ON public.case_records
           AND p.is_active = true
           AND (
             p.role = 'super_admin'::text
-            OR p.facility_id = case_records.facility_id
+            OR (p.role = ANY (ARRAY['doctor'::text, 'facility_admin'::text, 'admin'::text]) AND p.facility_id = case_records.facility_id)
             OR (case_records.submitted_by = auth.uid() AND (p.facility_id IS NULL OR p.facility_id = case_records.facility_id))
           )
       )
@@ -418,8 +418,14 @@ BEGIN
   IF p_key IS NULL OR length(p_key) = 0 THEN
     RAISE EXCEPTION 'fn_rate_limit: key must not be empty';
   END IF;
-  IF p_max IS NULL OR p_max < 1 OR p_window_s IS NULL OR p_window_s < 1 THEN
-    RAISE EXCEPTION 'fn_rate_limit: max and window_s must be positive';
+  IF length(p_key) > 200 THEN
+    RAISE EXCEPTION 'fn_rate_limit: key too long';
+  END IF;
+  IF p_max IS NULL OR p_max < 1 OR p_max > 1000000 THEN
+    RAISE EXCEPTION 'fn_rate_limit: max must be between 1 and 1000000';
+  END IF;
+  IF p_window_s IS NULL OR p_window_s < 1 OR p_window_s > 3600 THEN
+    RAISE EXCEPTION 'fn_rate_limit: window_s must be between 1 and 3600';
   END IF;
 
   v_window_start := to_timestamp(floor(extract(epoch FROM now()) / p_window_s) * p_window_s);
@@ -429,10 +435,15 @@ BEGIN
   ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limit_counters.count + 1
   RETURNING count INTO v_count;
 
-  -- Opportunistic cleanup of stale windows on ~1% of calls (fixed 4-hour horizon)
+  -- Opportunistic cleanup of stale windows on ~1% of calls (fixed 4-hour horizon, bounded to 500 rows)
   IF random() < 0.01 THEN
     DELETE FROM public.rate_limit_counters
-    WHERE window_start < now() - interval '4 hours';
+    WHERE ctid IN (
+      SELECT ctid FROM public.rate_limit_counters
+      WHERE window_start < now() - interval '4 hours'
+      ORDER BY window_start
+      LIMIT 500
+    );
   END IF;
 
   RETURN v_count <= p_max;
@@ -614,5 +625,12 @@ CREATE POLICY phi_audit_log_insert_authenticated ON public.phi_audit_log
     auth.uid() IS NOT NULL
     AND user_id = auth.uid()
   );
+
+-- 7.7 push_subscriptions (required for upsert on_conflict="endpoint" in push_routes.py:50)
+DROP POLICY IF EXISTS push_subscriptions_update_own ON public.push_subscriptions;
+CREATE POLICY push_subscriptions_update_own ON public.push_subscriptions
+  FOR UPDATE TO authenticated
+  USING (auth.uid() IS NOT NULL AND user_id = auth.uid())
+  WITH CHECK (auth.uid() IS NOT NULL AND user_id = auth.uid());
 
 COMMIT;

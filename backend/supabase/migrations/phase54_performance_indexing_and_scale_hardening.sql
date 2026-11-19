@@ -87,10 +87,10 @@ CREATE POLICY asha_select_own ON public.case_records
     AND (
       submitted_by = (SELECT auth.uid())
       OR (
-        public.get_current_user_role() = 'super_admin'
+        (SELECT public.get_current_user_role()) = 'super_admin'
         OR (
-          public.get_current_user_role() = ANY (ARRAY['doctor'::text, 'facility_admin'::text, 'admin'::text])
-          AND public.get_current_user_facility() = case_records.facility_id
+          (SELECT public.get_current_user_role()) = ANY (ARRAY['doctor'::text, 'facility_admin'::text, 'admin'::text])
+          AND (SELECT public.get_current_user_facility()) = case_records.facility_id
         )
       )
     )
@@ -150,6 +150,8 @@ DECLARE
     'deterioration_alert',
     'deterioration_visit_count',
     'briefing',
+    'consent_captured',
+    'consent_captured_at',
     'consent_given',
     'consent_timestamp',
     'created_offline',

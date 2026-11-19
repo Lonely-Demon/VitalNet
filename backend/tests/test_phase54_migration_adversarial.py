@@ -296,6 +296,8 @@ PHASE52_ALLOWED_SMS_PROMOTION_COLS = {
     "deterioration_alert",
     "deterioration_visit_count",
     "briefing",
+    "consent_captured",
+    "consent_captured_at",
     "consent_given",
     "consent_timestamp",
     "created_offline",

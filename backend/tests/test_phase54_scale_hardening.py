@@ -69,8 +69,8 @@ def test_b1_stable_rls_helpers_and_asha_select_own(phase54_sql: str):
     body = policy_match.group(1)
     assert "(SELECT auth.uid()) IS NOT NULL" in body
     assert "submitted_by = (SELECT auth.uid())" in body
-    assert "public.get_current_user_role() = 'super_admin'" in body
-    assert "public.get_current_user_facility() = case_records.facility_id" in body
+    assert "(SELECT public.get_current_user_role()) = 'super_admin'" in body
+    assert "(SELECT public.get_current_user_facility()) = case_records.facility_id" in body
 
 
 def test_b2_fast_path_short_circuit_with_preserved_allowlist(phase54_sql: str):
