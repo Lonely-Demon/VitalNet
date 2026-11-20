@@ -72,6 +72,7 @@ CREATE TABLE public.case_records (
   bp_diastolic integer,
   spo2 integer,
   heart_rate integer,
+  respiratory_rate integer,
   temperature numeric(4,1),
   chief_complaint text NOT NULL,
   complaint_duration text,

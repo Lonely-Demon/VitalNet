@@ -22,6 +22,13 @@ export function useRealtimeCases({ onInsert, onUpdate, facilityId, userId, globa
     // Build a unique channel name to avoid collisions across hook instances
     const channelName = `case_records_${facilityId ?? 'all'}_${userId ?? 'all'}_${Date.now()}`
 
+    // F-15: Supabase Realtime supports only a single filter string per channel.
+    // Use facility_id as primary filter when available, falling back to submitted_by.
+    // Secondary criteria (e.g. user filter within facility) is enforced client-side.
+    const primaryFilter = facilityId
+      ? 'facility_id=eq.' + facilityId
+      : (userId ? 'submitted_by=eq.' + userId : undefined)
+
     const channel = supabase
       .channel(channelName)
       .on(
@@ -30,11 +37,13 @@ export function useRealtimeCases({ onInsert, onUpdate, facilityId, userId, globa
           event: 'INSERT',
           schema: 'public',
           table: 'case_records',
-          // Supabase Realtime filter syntax: "column=eq.value"
-          ...(facilityId ? { filter: `facility_id=eq.${facilityId}` } : {}),
-          ...(userId ? { filter: `submitted_by=eq.${userId}` } : {}),
+          ...(primaryFilter ? { filter: primaryFilter } : {}),
         },
         (payload) => {
+          // Client-side secondary filter when both facilityId and userId are active
+          if (facilityId && userId && payload.new?.submitted_by !== userId) {
+            return
+          }
           onInsert?.(payload.new)
         }
       )
@@ -44,10 +53,13 @@ export function useRealtimeCases({ onInsert, onUpdate, facilityId, userId, globa
           event: 'UPDATE',
           schema: 'public',
           table: 'case_records',
-          ...(facilityId ? { filter: `facility_id=eq.${facilityId}` } : {}),
-          ...(userId ? { filter: `submitted_by=eq.${userId}` } : {}),
+          ...(primaryFilter ? { filter: primaryFilter } : {}),
         },
         (payload) => {
+          // Client-side secondary filter when both facilityId and userId are active
+          if (facilityId && userId && payload.new?.submitted_by !== userId) {
+            return
+          }
           onUpdate?.(payload.new)
         }
       )

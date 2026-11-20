@@ -99,14 +99,45 @@ interface ProfileCacheEntry {
   facilityId: string | null;
 }
 
+export const PROFILE_CACHE_MAX_ENTRIES = 10000;
+
 // Per-isolate cache — an edge isolate roughly corresponds to one FastAPI
 // worker process for this purpose; each maintains its own cache and
 // re-checks within the TTL, same bound as the Python original.
+// Enforces a strict 10,000-entry LRU upper bound (A1-a).
 const profileCache = new Map<string, ProfileCacheEntry>();
+
+function setProfileCacheEntry(userId: string, entry: ProfileCacheEntry): void {
+  if (profileCache.has(userId)) {
+    profileCache.delete(userId);
+  } else if (profileCache.size >= PROFILE_CACHE_MAX_ENTRIES) {
+    // Evict oldest entry in LRU Map insertion order
+    const oldestKey = profileCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      profileCache.delete(oldestKey);
+    }
+  }
+  profileCache.set(userId, entry);
+}
 
 /** Test-only: clear the cache between tests. */
 export function _resetProfileCacheForTest(): void {
   profileCache.clear();
+}
+
+/** Test-only: get the current cache size. */
+export function _getProfileCacheSizeForTest(): number {
+  return profileCache.size;
+}
+
+/** Test-only: populate cache entry directly to test eviction policy and capacity bounds. */
+export function _setProfileCacheForTest(userId: string, entry: ProfileCacheEntry): void {
+  setProfileCacheEntry(userId, entry);
+}
+
+/** Test-only: check whether a key exists in profileCache. */
+export function _hasProfileCacheKeyForTest(userId: string): boolean {
+  return profileCache.has(userId);
 }
 
 export async function resolveProfile(
@@ -117,6 +148,9 @@ export async function resolveProfile(
   const now = Date.now() / 1000;
   const cached = profileCache.get(userId);
   if (cached && now - cached.checkedAt < config.revocationRecheckSeconds) {
+    // Refresh insertion order on cache hit (LRU)
+    profileCache.delete(userId);
+    profileCache.set(userId, cached);
     return cached;
   }
 
@@ -132,7 +166,7 @@ export async function resolveProfile(
     if (!data) {
       // Confirmed: no profile row for this authenticated user. Fail closed.
       const entry: ProfileCacheEntry = { checkedAt: now, isActive: false, role: "", facilityId: null };
-      profileCache.set(userId, entry);
+      setProfileCacheEntry(userId, entry);
       return entry;
     }
 
@@ -142,7 +176,7 @@ export async function resolveProfile(
       role: data.role ?? "",
       facilityId: data.facility_id ?? null,
     };
-    profileCache.set(userId, entry);
+    setProfileCacheEntry(userId, entry);
     return entry;
   } catch {
     // Transient failure — do not cache; fall back to last known state if available,

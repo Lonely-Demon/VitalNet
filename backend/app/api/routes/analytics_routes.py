@@ -409,13 +409,8 @@ async def export_cases(
 
     role, facility_id, scoped = _resolve_scope(user)
 
-    rows: list[dict] = []
-    offset = 0
-    while True:
-        current_start = offset
-        current_end = offset + CHUNK_SIZE - 1
-
-        def build_chunk_query(start=current_start, end=current_end):
+    async def _fetch_chunk(start: int, end: int) -> list[dict]:
+        def build_chunk_query():
             q = (
                 db.table("case_records")
                 .select(",".join(EXPORT_COLUMNS))
@@ -432,33 +427,52 @@ async def export_cases(
         res = await _run_query(build_chunk_query, "export", failures)
         if failures or res is None:
             raise HTTPException(status_code=502, detail="Export query failed — try a narrower date range")
-        chunk = res.data or []
-        rows.extend(chunk)
-        if len(chunk) < CHUNK_SIZE:
-            break
-        offset += CHUNK_SIZE
+        return res.data or []
 
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(row)
-    buffer.seek(0)
+    # Fetch first chunk before opening the stream so initial DB failures return HTTP 502.
+    first_chunk = await _fetch_chunk(0, CHUNK_SIZE - 1)
 
-    log_phi_access(
-        event_type=AuditEventType.PHI_EXPORT,
-        user_id=user.get("sub", "unknown"),
-        user_role=role,
-        resource_type="case_records",
-        resource_id=None,
-        facility_id=facility_id if scoped else None,
-        ip_address=get_client_ip(request),
-        details={"row_count": len(rows), "date_from": date_from, "date_to": date_to},
-    )
+    async def csv_stream():
+        total_rows = 0
+        try:
+            header_buffer = io.StringIO()
+            writer = csv.DictWriter(header_buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
+            writer.writeheader()
+            yield header_buffer.getvalue()
+
+            chunk = first_chunk
+            offset = CHUNK_SIZE
+            while chunk:
+                total_rows += len(chunk)
+                row_buffer = io.StringIO()
+                chunk_writer = csv.DictWriter(row_buffer, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
+                for row in chunk:
+                    chunk_writer.writerow(row)
+                yield row_buffer.getvalue()
+
+                if len(chunk) < CHUNK_SIZE:
+                    break
+
+                try:
+                    chunk = await _fetch_chunk(offset, offset + CHUNK_SIZE - 1)
+                except HTTPException:
+                    break
+                offset += CHUNK_SIZE
+        finally:
+            log_phi_access(
+                event_type=AuditEventType.PHI_EXPORT,
+                user_id=user.get("sub", "unknown"),
+                user_role=role,
+                resource_type="case_records",
+                resource_id=None,
+                facility_id=facility_id if scoped else None,
+                ip_address=get_client_ip(request),
+                details={"row_count": total_rows, "date_from": date_from, "date_to": date_to},
+            )
 
     filename = f"vitalnet_cases_{parsed_from.date()}_{parsed_to.date()}.csv"
     return StreamingResponse(
-        buffer,
+        csv_stream(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

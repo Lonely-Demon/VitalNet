@@ -13,7 +13,11 @@ Empirically challenges:
 import re
 from pathlib import Path
 import pytest
-import sqlparse
+
+try:
+    import sqlparse
+except ImportError:
+    sqlparse = None
 
 MIGRATION_PATH = Path(__file__).resolve().parent.parent / "supabase" / "migrations" / "phase52_security_definer_and_trigger_hardening.sql"
 
@@ -45,6 +49,8 @@ def test_sql_transaction_boundaries(migration_sql):
 
 def test_sqlparse_tokenization(migration_sql):
     """Ensure all statements in the migration parse cleanly via sqlparse."""
+    if sqlparse is None:
+        pytest.skip("sqlparse not installed in test environment")
     statements = sqlparse.split(migration_sql)
     assert len(statements) >= 15, f"Expected at least 15 SQL statements, found {len(statements)}"
 

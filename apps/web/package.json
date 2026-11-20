@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "node --import \"data:text/javascript,import path from 'node:path'; if (process.cwd().endsWith(path.join('apps', 'web'))) process.chdir('../..');\" --test tests/m5_remediation.test.mjs tests/challenger_m5_adversarial.test.mjs tests/challenger_m5_stress.test.mjs tests/phase54_scale_hardening.test.mjs src/utils/vitalTrend.test.mjs && node --import \"data:text/javascript,import path from 'node:path'; if (process.cwd().endsWith(path.join('apps', 'web'))) process.chdir('../..');\" tests/challenger_m4_node.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.2",

@@ -55,7 +55,11 @@ export default function ASHAPanel() {
     processQueue().then(notifySyncResult)
 
     function handleOnline() {
-      processQueue().then(notifySyncResult)
+      // Randomized reconnect jitter (0-2000ms) to avoid thundering-herd on backend
+      const jitterMs = Math.floor(Math.random() * 2000)
+      setTimeout(() => {
+        processQueue().then(notifySyncResult)
+      }, jitterMs)
     }
 
     window.addEventListener('online', handleOnline)

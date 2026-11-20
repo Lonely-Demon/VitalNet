@@ -35,16 +35,16 @@ const ERASABLE_CASE_FIELDS = [
   "human_review_reason",
 ] as const;
 
-interface CaseRecord {
+export interface CaseRecord {
   id: string;
   facility_id: string | null;
   deleted_at: string | null;
   [key: string]: unknown;
 }
 
-function authorizeDsrAccess(user: AuthedUser, caseRecord: CaseRecord): void {
-  // Super-admin or cross-facility supervisor can access any facility's case
-  if (user.resolvedRole === "super_admin" || user.resolvedRole === "supervisor") {
+export function authorizeDsrAccess(user: AuthedUser, caseRecord: CaseRecord): void {
+  // Super-admin can access any facility's case
+  if (user.resolvedRole === "super_admin") {
     return;
   }
   // PHC admin can ONLY access cases belonging to their own facility (VN-2026-08-VER-01)
@@ -68,7 +68,7 @@ async function fetchCaseOr404(caseUuid: string): Promise<CaseRecord> {
   return data as CaseRecord;
 }
 
-dsr.get("/api/admin/cases/:case_id/export", rateLimit(10, 60), requireRole("admin"), async (c) => {
+dsr.get("/api/admin/cases/:case_id/export", rateLimit(10, 60), requireRole("admin", "super_admin"), async (c) => {
   const user = c.get("user");
   const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
   const admin = getSupabaseAdmin();
@@ -174,7 +174,7 @@ async function eraseCaseRow(
   }
 }
 
-dsr.post("/api/admin/cases/:case_id/erase", rateLimit(10, 60), requireRole("admin"), async (c) => {
+dsr.post("/api/admin/cases/:case_id/erase", rateLimit(10, 60), requireRole("admin", "super_admin"), async (c) => {
   const user = c.get("user");
   const caseUuid = parseUuid(c.req.param("case_id")!, "case_id");
 
@@ -197,7 +197,7 @@ dsr.post("/api/admin/cases/:case_id/erase", rateLimit(10, 60), requireRole("admi
   return c.json({ status: "erased", case_id: caseUuid, redacted_fields: ERASABLE_CASE_FIELDS });
 });
 
-dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin"), async (c) => {
+dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin", "super_admin"), async (c) => {
   const user = c.get("user");
   const config = getConfig();
 
@@ -213,7 +213,12 @@ dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin"
     .lt("created_at", threshold)
     .neq("patient_name", REDACTED);
 
-  if (user.resolvedRole === "admin" && user.resolvedFacilityId) {
+  // VN-53-05: Only super_admin scans globally; facility-scoped admin sweeps own
+  // facility; a facility-less admin fails closed with zero candidates.
+  if (user.resolvedRole !== "super_admin") {
+    if (!user.resolvedFacilityId) {
+      return c.json({ enabled: true, checked: 0, purged: 0 });
+    }
     query = query.eq("facility_id", user.resolvedFacilityId);
   }
 
@@ -245,7 +250,7 @@ dsr.post("/api/admin/cases/purge-expired", rateLimit(6, 60), requireRole("admin"
 dsr.post(
   "/api/security/cases/:client_id/revoke-consent",
   rateLimit(30, 60),
-  requireRole("admin", "doctor", "asha_worker"),
+  requireRole("admin", "doctor", "asha_worker", "super_admin"),
   async (c) => {
     const user = c.get("user");
     const clientId = c.req.param("client_id")!;

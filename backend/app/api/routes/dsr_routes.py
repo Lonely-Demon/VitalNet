@@ -60,8 +60,14 @@ def _fetch_case_or_404(case_id: str) -> dict:
 
 def _authorize_dsr_access(user: dict, case: dict) -> None:
     """Enforce facility boundary: PHC admins can only export/erase cases in their own facility (VN-2026-08-VER-01)."""
-    if user.get("resolved_role") == "supervisor":
+    user_role = user.get("resolved_role")
+    if user_role == "super_admin":
         return
+    if user_role == "supervisor":
+        raise HTTPException(
+            status_code=403,
+            detail="Supervisors are not permitted to perform DSR operations on patient-level cases",
+        )
     user_facility = user.get("resolved_facility_id")
     case_facility = case.get("facility_id")
     if not user_facility or str(user_facility) != str(case_facility):
@@ -77,7 +83,7 @@ async def export_case_data(
     request: Request,
     case_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("admin")),
+    user: dict = Depends(require_role("admin", "super_admin")),
 ):
     """
     Right to access (docs/COMPLIANCE_DPDP.md): every row across every table
@@ -171,7 +177,7 @@ async def erase_case_data(
     request: Request,
     case_id: str,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("admin")),
+    user: dict = Depends(require_role("admin", "super_admin")),
 ):
     """Right to erasure (docs/COMPLIANCE_DPDP.md) for a single case."""
     case_uuid = _parse_uuid(case_id, "case_id")
@@ -201,7 +207,7 @@ async def erase_case_data(
 async def purge_expired_cases(
     request: Request,
     authorization: str = Header(None),
-    user: dict = Depends(require_role("admin")),
+    user: dict = Depends(require_role("admin", "super_admin")),
 ):
     """
     Retention-policy sweep (docs/COMPLIANCE_DPDP.md) — meant to be called on
@@ -224,10 +230,12 @@ async def purge_expired_cases(
         .neq("patient_name", REDACTED)
     )
 
-    # Scoped to facility if PHC admin
+    # Scoped to facility if PHC admin; fail closed if facility_id is unassigned (VN-53-05)
     user_role = user.get("resolved_role", "")
     facility_id = user.get("resolved_facility_id")
-    if user_role != "supervisor" and facility_id:
+    if user_role != "super_admin":
+        if not facility_id:
+            return {"enabled": True, "checked": 0, "purged": 0}
         query = query.eq("facility_id", facility_id)
 
     candidates = query.execute().data or []

@@ -246,6 +246,62 @@ export async function dequeue(eventId) {
 }
 
 /**
+ * Pending event metadata owned by `ownerId`, oldest first (F-14).
+ * Enumerates outbox items WITHOUT decrypting AES-256-GCM payload bytes,
+ * deferring expensive WebCrypto operations until the item is drained.
+ */
+export async function getPendingEventMetas(ownerId) {
+  if (!ownerId) return []
+  const db = await getOfflineDB()
+  const all = await db.getAllFromIndex(STORE_NAME, 'created_at')
+  return all
+    .filter((e) => e.status === 'pending' && e.owner_id === ownerId)
+    .map((item) => ({
+      event_id: item.event_id,
+      owner_id: item.owner_id,
+      type: item.type,
+      created_at: item.created_at,
+      attempts: item.attempts,
+      status: item.status,
+      last_error: item.last_error,
+      intake_monotonic_ms: item.intake_monotonic_ms,
+      enqueued_time_origin: item.enqueued_time_origin,
+    }))
+}
+
+/**
+ * Decrypts a specific event payload on-demand when actively submitting (F-14).
+ * Handles quarantine self-healing if key is lost.
+ */
+export async function getEventPayload(eventId, ownerId) {
+  if (!eventId) return null
+  const db = await getOfflineDB()
+  const item = await db.get(STORE_NAME, eventId)
+  if (!item || item.status !== 'pending' || (ownerId && item.owner_id !== ownerId)) {
+    return null
+  }
+  const plain = await decryptOutboxPayload(item.payload, item.owner_id, item.event_id)
+  if (plain) {
+    return plain
+  }
+  if (item.payload && item.payload._encrypted) {
+    // Quarantine self-healing (ADR §47)
+    console.warn(`[VitalNet] Quarantining unrecoverable event ${item.event_id} due to key loss.`)
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const row = await tx.store.get(item.event_id)
+    if (row && row.status === 'pending') {
+      row.status = RECOVERY_STATUS
+      row.recovery_reason = CORRUPT_KEY_REASON
+      row.last_error = 'Encrypted under a lost legacy session key; requires device cleanup.'
+      await tx.store.put(row)
+    }
+    await tx.done
+    notifyOutboxChange()
+  }
+  return null
+}
+
+/**
  * Pending events owned by `ownerId`, oldest first — the FIFO drain order
  * processQueue() uses. Scoped by owner so a worker never drains a case another
  * worker queued on the same device.

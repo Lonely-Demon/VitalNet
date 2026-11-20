@@ -22,7 +22,14 @@
  * never re-runs triage/the LLM briefing call for a case already recorded.
  */
 import { supabase } from '@/lib/supabase'
-import { enqueue, dequeue, getPendingEvents, markDead, incrementAttempts } from '@/lib/outbox'
+import {
+  enqueue,
+  dequeue,
+  getPendingEventMetas,
+  getEventPayload,
+  markDead,
+  incrementAttempts,
+} from '@/lib/outbox'
 import { isServerReachable } from '@/lib/connectivity'
 import { buildAuthHeaders } from '@/api/auth'
 import { apiBase } from '@/api/base'
@@ -137,8 +144,18 @@ async function drainCaseSubmit(item, token) {
     await dequeue(item.event_id)
     return 'synced'
   }
+  if (res.status === 429) {
+    // F-02: Rate limit backoff — do NOT dead-letter 429 errors!
+    const retryAfterHeader = res.headers?.get ? res.headers.get('Retry-After') : null
+    const retryAfterSec = parseInt(retryAfterHeader, 10)
+    const backoffMs = Math.min(Math.max(Number.isFinite(retryAfterSec) ? retryAfterSec : 5, 1), 60) * 1000
+    console.warn(`[VitalNet] HTTP 429 rate limited on case submit. Backing off for ${backoffMs}ms before next retry.`, item.event_id)
+    await incrementAttempts(item.event_id)
+    await new Promise((resolve) => setTimeout(resolve, backoffMs))
+    return 'rate_limited'
+  }
   if (res.status >= 400 && res.status < 500) {
-    // Any 4xx = permanent client error — this payload will NEVER succeed as-is.
+    // Any other 4xx = permanent client error — this payload will NEVER succeed as-is.
     const detail = await res.text()
     console.warn(
       '[VitalNet] Permanent error — dead-lettering to prevent head-of-line blocking.',
@@ -165,6 +182,16 @@ async function drainConsentRevoke(item, token) {
     await dequeue(item.event_id)
     return 'synced'
   }
+  if (res.status === 429) {
+    // F-02: Rate limit backoff — do NOT dead-letter 429 errors!
+    const retryAfterHeader = res.headers?.get ? res.headers.get('Retry-After') : null
+    const retryAfterSec = parseInt(retryAfterHeader, 10)
+    const backoffMs = Math.min(Math.max(Number.isFinite(retryAfterSec) ? retryAfterSec : 5, 1), 60) * 1000
+    console.warn(`[VitalNet] HTTP 429 rate limited on consent revocation. Backing off for ${backoffMs}ms.`, item.event_id)
+    await incrementAttempts(item.event_id)
+    await new Promise((resolve) => setTimeout(resolve, backoffMs))
+    return 'rate_limited'
+  }
   // BUG-08: Do not drop revocation immediately on 404 (e.g. if case.submit hasn't synced yet)
   if (res.status === 404) {
     if ((item.attempts || 0) < 3) {
@@ -187,7 +214,73 @@ async function drainConsentRevoke(item, token) {
 }
 
 /**
+ * Core outbox drain routine executing under concurrency lock.
+ * Uses getPendingEventMetas to enumerate outbox without bulk decryption (F-14),
+ * decrypting payload lazily only for the event actively being submitted.
+ */
+async function _drainOutboxCore() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
+      return { synced: 0, failed: 0, dead: 0, requiresLogin: true }
+    }
+    const freshToken = session.access_token
+    const ownerId = session.user.id
+
+    // F-14: Enumerate metadata without decrypting all payloads upfront
+    const pendingMetas = await getPendingEventMetas(ownerId)
+    if (pendingMetas.length === 0) return { synced: 0, failed: 0, dead: 0 }
+
+    let synced = 0
+    let failed = 0
+    let dead = 0
+
+    for (const meta of pendingMetas) {
+      try {
+        // F-14: Lazy decryption — decrypt AES-256-GCM payload on-demand right before submission
+        const payload = await getEventPayload(meta.event_id, ownerId)
+        if (!payload) {
+          failed++
+          continue
+        }
+        const item = { ...meta, payload }
+
+        let outcome
+        switch (item.type) {
+          case 'case.submit':
+            outcome = await drainCaseSubmit(item, freshToken)
+            break
+          case 'case.revoke_consent':
+            outcome = await drainConsentRevoke(item, freshToken)
+            break
+          default:
+            console.warn(`[VitalNet] Unknown outbox event type "${item.type}" — dead-lettering.`, item.event_id)
+            await markDead(item.event_id, `Unknown event type: ${item.type}`)
+            outcome = 'dead'
+        }
+
+        if (outcome === 'synced') synced++
+        else if (outcome === 'dead') dead++
+        else if (outcome === 'rate_limited') {
+          // F-02: HTTP 429 rate limit reached — stop draining queue without marking item dead
+          break
+        } else failed++
+      } catch {
+        await incrementAttempts(meta.event_id)
+        failed++
+      }
+      await new Promise(resolve => setTimeout(resolve, QUEUE_ITEM_DELAY_MS))
+    }
+
+    return { synced, failed, dead }
+  } finally {
+    _activeDrainPromise = null
+  }
+}
+
+/**
  * processQueue — called on every 'online' event and on app load.
+ * Protected by Web Locks API with fallback for cross-tab concurrency (F-01).
  * Gets a fresh token from supabase.auth.getSession() at run time.
  * Returns { synced: number, failed: number, dead: number, requiresLogin?: boolean }
  */
@@ -196,52 +289,36 @@ export async function processQueue() {
     return _activeDrainPromise
   }
 
-  _activeDrainPromise = (async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) {
-        return { synced: 0, failed: 0, dead: 0, requiresLogin: true }
-      }
-      const freshToken = session.access_token
-      const ownerId = session.user.id
-
-      const pending = await getPendingEvents(ownerId)
-      if (pending.length === 0) return { synced: 0, failed: 0, dead: 0 }
-
-      let synced = 0
-      let failed = 0
-      let dead = 0
-
-      for (const item of pending) {
-        try {
-          let outcome
-          switch (item.type) {
-            case 'case.submit':
-              outcome = await drainCaseSubmit(item, freshToken)
-              break
-            case 'case.revoke_consent':
-              outcome = await drainConsentRevoke(item, freshToken)
-              break
-            default:
-              console.warn(`[VitalNet] Unknown outbox event type "${item.type}" — dead-lettering.`, item.event_id)
-              await markDead(item.event_id, `Unknown event type: ${item.type}`)
-              outcome = 'dead'
-          }
-          if (outcome === 'synced') synced++
-          else if (outcome === 'dead') dead++
-          else failed++
-        } catch {
-          await incrementAttempts(item.event_id)
-          failed++
+  // F-01: Web Locks cross-tab / cross-context mutual exclusion guard
+  if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function') {
+    _activeDrainPromise = navigator.locks.request(
+      'vitalnet_outbox_drain',
+      { ifAvailable: true },
+      async (lock) => {
+        if (!lock) {
+          // Another tab is actively draining the outbox
+          return { synced: 0, failed: 0, dead: 0, locked: true }
         }
-        await new Promise(resolve => setTimeout(resolve, QUEUE_ITEM_DELAY_MS))
+        return await _drainOutboxCore()
       }
-
-      return { synced, failed, dead }
-    } finally {
+    ).finally(() => {
       _activeDrainPromise = null
-    }
-  })()
+    })
+  } else {
+    _activeDrainPromise = _drainOutboxCore().finally(() => {
+      _activeDrainPromise = null
+    })
+  }
 
   return _activeDrainPromise
+}
+
+// Auto-drain with randomized jitter (0-2000ms) on reconnect to prevent backend thundering herd
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    const jitterMs = Math.floor(Math.random() * 2000)
+    setTimeout(() => {
+      processQueue().catch((err) => console.warn('[VitalNet] Reconnect auto-drain error:', err))
+    }, jitterMs)
+  })
 }

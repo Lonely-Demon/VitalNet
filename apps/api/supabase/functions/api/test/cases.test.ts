@@ -28,8 +28,15 @@ function user(overrides: Partial<AuthedUser> = {}): AuthedUser {
 
 // ── authorizeCaseRowAccess ──────────────────────────────────────────────────
 
-Deno.test("authorizeCaseRowAccess: admin is authorized for any case", () => {
-  authorizeCaseRowAccess(user({ resolvedRole: "admin" }), { facility_id: "f1", submitted_by: "someone-else" });
+Deno.test("authorizeCaseRowAccess: super_admin is authorized for any case", () => {
+  authorizeCaseRowAccess(user({ resolvedRole: "super_admin" }), { facility_id: "f1", submitted_by: "someone-else" });
+});
+
+Deno.test("authorizeCaseRowAccess: admin is authorized for own facility", () => {
+  authorizeCaseRowAccess(user({ resolvedRole: "admin", resolvedFacilityId: "f1" }), {
+    facility_id: "f1",
+    submitted_by: "someone-else",
+  });
 });
 
 Deno.test("authorizeCaseRowAccess: doctor is authorized for own facility", () => {

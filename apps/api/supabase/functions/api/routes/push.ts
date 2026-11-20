@@ -168,8 +168,12 @@ push.post(
       .is("deleted_at", null)
       .lt("created_at", threshold);
 
-    // Scope query by facility for facility-scoped admin; supervisors scan all facilities
-    if (!isGlobalScope(user.resolvedRole) && user.resolvedFacilityId) {
+    // Scope query by facility for facility-scoped admin; global roles scan all facilities.
+    // Non-global accounts with no assigned facility fail closed (P53-B4).
+    if (!isGlobalScope(user.resolvedRole)) {
+      if (!user.resolvedFacilityId) {
+        return c.json({ checked: 0, escalated: 0 });
+      }
       query = query.eq("facility_id", user.resolvedFacilityId);
     }
 
