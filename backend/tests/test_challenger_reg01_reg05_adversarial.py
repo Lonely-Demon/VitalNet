@@ -156,6 +156,15 @@ class TestSmsCodecByteSpaceAndBoundaries:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestCrossLanguageProtocolSymmetry:
+    @pytest.fixture(autouse=True)
+    def _check_node_and_dist(self):
+        dist_path = REPO_ROOT / "packages" / "clinical-core" / "dist" / "index.js"
+        if not dist_path.exists():
+            pytest.skip("packages/clinical-core/dist/index.js not built")
+        import shutil
+        if not shutil.which("node"):
+            pytest.skip("node runtime not found in environment")
+
     def _call_node_decoder(self, frame: str) -> dict:
         cmd = [
             "node",
