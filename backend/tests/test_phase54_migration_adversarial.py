@@ -16,7 +16,11 @@ import re
 from typing import Any, Dict, List, Optional
 import zoneinfo
 import pytest
-import sqlparse
+
+try:
+    import sqlparse
+except ImportError:
+    sqlparse = None
 
 MIGRATION_PATH = (
     Path(__file__).resolve().parent.parent
@@ -59,6 +63,8 @@ def test_sql_transaction_boundaries(migration_sql: str):
 
 def test_sqlparse_tokenization(migration_sql: str):
     """Ensure all statements in the migration parse cleanly via sqlparse."""
+    if sqlparse is None:
+        pytest.skip("sqlparse not installed in test environment")
     statements = sqlparse.split(migration_sql)
     assert len(statements) >= 10, f"Expected at least 10 SQL statements, found {len(statements)}"
 
