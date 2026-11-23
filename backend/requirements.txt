@@ -12,7 +12,7 @@ google-generativeai==0.8.6
 # this version, you MUST re-run scripts/train_classifier.py and commit the
 # regenerated triage_classifier.pkl + triage_classifier.onnx in the same
 # change, or the app will crash at startup (load_classifier() raises).
-scikit-learn==1.9.0
+scikit-learn==1.9.1
 # shap==0.51.0 — do not downgrade to 0.46.0 (source build fails on Windows+Python 3.13)
 # do not upgrade past 0.51.x without re-verifying SHAP round-trip on triage_classifier.pkl
 shap==0.51.0
